@@ -3,9 +3,7 @@ from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
 from qadata.graph.nodes import extract_sql, format_rows, make_nodes
 from qadata.types import QueryResult
-
-
-FAKE_DB = None  # 节点测试不碰真库；execute 走 fixture_db
+from tests.conftest import RecorderLLM
 
 
 def test_extract_sql_strips_fences():
@@ -21,7 +19,7 @@ def test_format_rows_pipe_table():
     assert "name" in t and "A" in t and "1.0" in t
 
 
-def test_nodes_happy_path(fixture_db, tmp_path):
+def test_nodes_happy_path(fixture_db):
     llm = FakeListChatModel(
         responses=["每个学生的平均成绩是多少", "SELECT name FROM students WHERE id = 1", "Alice 的成绩最好"]
     )
@@ -68,3 +66,28 @@ def test_nodes_sql_error_recorded(fixture_db):
     assert state["attempts"] and state["attempts"][-1].error  # 失败历史
     state.update(nodes["respond"](state))
     assert state["answer"].failed is True
+
+
+def test_respond_notes_truncation():
+    """截断提示：truncated=True 时 respond prompt 必须带截断说明，且预览行数为 PREVIEW_ROWS。"""
+    res = QueryResult(
+        columns=["name"],
+        rows=[(f"r{i}",) for i in range(12)],
+        row_count=12,
+        truncated=True,
+        elapsed_ms=1,
+    )
+    recorder = RecorderLLM(["结论"])
+    nodes = make_nodes(recorder)
+    state = {
+        "db_path": "unused",
+        "question": "q",
+        "current_sql": "SELECT name FROM students",
+        "result": res,
+        "last_error": None,
+    }
+    out = nodes["respond"](state)
+    assert out["answer"].failed is False
+    prompt = recorder.prompts[0]
+    assert "结果已截断" in prompt  # 提示模型如实措辞，勿把截断当全量
+    assert "前 10 行" in prompt  # n 由 PREVIEW_ROWS 派生

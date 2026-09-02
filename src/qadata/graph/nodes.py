@@ -10,6 +10,8 @@ from qadata.types import Answer, QueryResult, SqlAttempt
 
 _FENCE_RE = re.compile(r"```[a-zA-Z]*\n(.*?)```", re.DOTALL)
 
+PREVIEW_ROWS = 10  # 喂给 respond prompt 的结果预览行数（表格与 n= 均由此派生）
+
 
 def extract_sql(text: str) -> str:
     """剥掉 Markdown 围栏取 SQL；提取不到抛 ValueError。"""
@@ -18,14 +20,19 @@ def extract_sql(text: str) -> str:
     sql = raw.strip().strip(";").strip()
     if not sql or not sql.upper().startswith(("SELECT", "WITH")):
         raise ValueError(f"回复中未找到合法 SQL：{text[:80]!r}")
+    # 多语句串（如 "SELECT 1; DROP x"）此处不拆分：最终防线在执行器的 sqlite3
+    # 单语句 execute + mode=ro 只读连接双重闸（M1 分层设计，有意为之）。
     return sql
 
 
-def format_rows(result: QueryResult, limit: int = 10) -> str:
-    rows = result.rows[:limit]
-    head = " | ".join(result.columns)
+def _format_preview(columns: list[str], rows: list[tuple]) -> str:
+    head = " | ".join(columns)
     body = "\n".join(" | ".join(str(v) for v in r) for r in rows)
     return f"{head}\n{body}" if body else head
+
+
+def format_rows(result: QueryResult, limit: int = PREVIEW_ROWS) -> str:
+    return _format_preview(result.columns, result.rows[:limit])
 
 
 def make_nodes(llm, tracer=None):
@@ -85,14 +92,19 @@ def make_nodes(llm, tracer=None):
                     error_summary=last_error,
                 )
             }
+        preview = res.rows[:PREVIEW_ROWS]  # 预览行只算一次，表格与 n= 同源派生
+        rows_table = _format_preview(res.columns, preview)
+        if res.truncated:
+            # 截断提示：让模型如实措辞、勿把截断行当全量（仅影响 prompt 呈现，不参与判分）
+            rows_table += "\n（注意：结果已截断，实际行数可能更多）"
         text = timed_invoke(
             llm,
             respond_prompt(
                 question=state["question"],
                 sql=sql or "",
-                rows_table=format_rows(res),
+                rows_table=rows_table,
                 total=res.row_count,
-                n=len(res.rows[:10]),
+                n=len(preview),
             ),
             "respond",
             tracer,
