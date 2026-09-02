@@ -48,3 +48,11 @@ def test_build_schema_context_llm_garbage_falls_back(fixture_conn):
     assert fake.calls == 1
     # 解析失败 → 回退全量：两张表都在
     assert "CREATE TABLE students" in ctx and "CREATE TABLE scores" in ctx
+
+
+def test_llm_selection_result_is_used(fixture_conn):
+    """LLM 只选 students 时，scores 不得出现在上下文中——证明选表结果真正被使用。"""
+    fake = FakeLLM("students")
+    ctx = build_schema_context(fixture_conn, "任意问题", llm=fake, max_chars=10)
+    assert fake.calls == 1
+    assert "CREATE TABLE students" in ctx and "CREATE TABLE scores" not in ctx
