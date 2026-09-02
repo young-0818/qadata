@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# 环境与密钥
+.env
+.env.*
+*.key
+
+# 评测运行数据（大文件与缓存不入库）
+data/
+runs/
+*.sqlite
+*.db
+!tests/fixtures/*.db
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# 测试与工具缓存
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# 本地设计/规格文档（不上传仓库）
+docs/
+
+# 日志
+*.log
+logs/
