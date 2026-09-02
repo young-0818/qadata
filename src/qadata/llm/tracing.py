@@ -1,4 +1,4 @@
-"""节点级 tracing：JSONL 追加记录 token/费用/延迟（自建，不用 LangSmith）。"""
+"""节点级 tracing：JSONL 追加记录 token/延迟（自建，不用 LangSmith）。"""
 import json
 import time
 from datetime import datetime, timezone
@@ -17,12 +17,12 @@ class TraceLogger:
 
 
 def extract_usage(message) -> dict:
-    """从 AIMessage 提取 usage；缺失时全 0（fake/旧版模型无此字段）。"""
+    """从 AIMessage 提取 usage；缺失或字段为 null 时全 0（fake/旧版模型无此字段，供应商可能回 null）。"""
     u = getattr(message, "usage_metadata", None) or {}
     return {
-        "input_tokens": int(u.get("input_tokens", 0)),
-        "output_tokens": int(u.get("output_tokens", 0)),
-        "total_tokens": int(u.get("total_tokens", 0)),
+        "input_tokens": int(u.get("input_tokens") or 0),
+        "output_tokens": int(u.get("output_tokens") or 0),
+        "total_tokens": int(u.get("total_tokens") or 0),
     }
 
 

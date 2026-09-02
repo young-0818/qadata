@@ -25,7 +25,18 @@ def build_graph(llm, tracer=None):
 
 
 def run_question(db_path: str, question: str, evidence: str = "", llm=None, tracer=None) -> Answer:
-    llm = llm or build_llm()
-    graph = build_graph(llm, tracer)
-    final = graph.invoke({"db_path": db_path, "question": question, "evidence": evidence})
-    return final["answer"]
+    try:
+        llm = llm or build_llm()
+        graph = build_graph(llm, tracer)
+        final = graph.invoke({"db_path": db_path, "question": question, "evidence": evidence})
+        return final["answer"]
+    except Exception as e:
+        # 永不编造（面向 CLI 用户）：收敛图内未兜住的裸异常——坏库路径的 OperationalError、
+        # 缺密钥的 RuntimeError、供应商 4xx 等，一律转为诚实失败答案（重试/退避留待 M2）。
+        return Answer(
+            conclusion=f"未能完成查询：{e}",
+            sql=None,
+            result=None,
+            failed=True,
+            error_summary=str(e),
+        )

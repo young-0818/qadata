@@ -10,7 +10,7 @@ class Settings:
     api_key: str
     base_url: str
     model: str
-    max_rows: int = 50
+    max_rows: int = 50  # M1 未接线：nodes 固定 50；M2 接管
 
 
 def load_settings() -> Settings:
