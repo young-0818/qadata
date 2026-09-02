@@ -1,6 +1,19 @@
 import sqlite3
 
 import pytest
+from langchain_core.language_models.fake_chat_models import FakeListChatModel
+
+
+class RecorderLLM:
+    """录音式假模型：按序返回预设回复，同时完整捕获每次调用的 prompt（供链路断言）。"""
+
+    def __init__(self, responses):
+        self._model = FakeListChatModel(responses=list(responses))
+        self.prompts: list[str] = []
+
+    def invoke(self, prompt):
+        self.prompts.append(str(prompt))
+        return self._model.invoke(prompt)
 
 
 @pytest.fixture
