@@ -25,3 +25,9 @@ def test_order_insensitive_multiset():
 
 def test_duplicates_matter():
     assert results_match([(1,)], [(1,), (1,)]) is False
+
+
+def test_none_mixed_rows_are_comparable():
+    # 回归：裸 sorted() 对 None 与数值/字符串混排抛 TypeError，会被逐题隔离吞成假阴性
+    assert results_match([(None,), (3,)], [(3,), (None,)]) is True
+    assert results_match([(None,), (3,)], [(3,)]) is False
