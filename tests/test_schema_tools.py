@@ -1,15 +1,15 @@
-import sqlite3
-
 from qadata.tools.schema import build_schema_context, get_schema, list_tables, sample_rows
 
 
 class FakeLLM:
-    """只测接口约定：invoke(str) 返回带 .content 的对象。"""
+    """只测接口约定：invoke(str) 返回带 .content 的对象；记录调用次数以证实分支被执行。"""
 
     def __init__(self, content):
         self.content = content
+        self.calls = 0
 
     def invoke(self, _prompt):
+        self.calls += 1
         return self
 
 
@@ -34,15 +34,17 @@ def test_build_schema_context_small_db_full(fixture_conn):
     assert "CREATE TABLE students" in ctx and "CREATE TABLE scores" in ctx
 
 
-def test_build_schema_context_large_db_uses_llm(fixture_conn, monkeypatch):
-    monkeypatch.setattr("qadata.tools.schema.FULL_SCHEMA_LIMIT", 10)  # 强制走 LLM 分支
+def test_build_schema_context_large_db_uses_llm(fixture_conn):
+    # 显式传 max_chars 触发 LLM 分支（不 monkeypatch 常量：函数默认值在 def 时绑定，patch 不生效）
     fake = FakeLLM("students, scores")
-    ctx = build_schema_context(fixture_conn, "任意问题", llm=fake)
+    ctx = build_schema_context(fixture_conn, "任意问题", llm=fake, max_chars=10)
+    assert fake.calls == 1  # LLM 确实被调用
     assert "CREATE TABLE students" in ctx and "CREATE TABLE scores" in ctx
 
 
-def test_build_schema_context_llm_garbage_falls_back(fixture_conn, monkeypatch):
-    monkeypatch.setattr("qadata.tools.schema.FULL_SCHEMA_LIMIT", 10)
+def test_build_schema_context_llm_garbage_falls_back(fixture_conn):
     fake = FakeLLM("这些表不存在的回答")
-    ctx = build_schema_context(fixture_conn, "任意问题", llm=fake)
-    assert "CREATE TABLE" in ctx  # 解析失败 → 回退全量
+    ctx = build_schema_context(fixture_conn, "任意问题", llm=fake, max_chars=10)
+    assert fake.calls == 1
+    # 解析失败 → 回退全量：两张表都在
+    assert "CREATE TABLE students" in ctx and "CREATE TABLE scores" in ctx
