@@ -43,3 +43,9 @@ def test_timed_invoke_returns_content_and_logs(tmp_path):
     assert out == "hello"
     rec = json.loads((tmp_path / "t.jsonl").read_text(encoding="utf-8"))
     assert rec["node"] == "understand" and "latency_ms" in rec
+
+
+def test_timed_invoke_without_tracer_returns_content():
+    # tracer=None 分支是 Task 7 的契约之一：不记录但必须正常返回 content
+    out = timed_invoke(FakeLLM(FakeMsg("hi")), "prompt", "generate", None)
+    assert out == "hi"
