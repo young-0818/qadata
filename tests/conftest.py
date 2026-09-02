@@ -26,3 +26,21 @@ def fixture_conn(fixture_db):
     conn = sqlite3.connect(f"file:{fixture_db}?mode=ro", uri=True)
     yield conn
     conn.close()
+
+
+def make_fixture_db(path_dir):
+    """给评测测试用：在目录下建 school.sqlite，返回其路径字符串。"""
+    import sqlite3
+    from pathlib import Path
+
+    p = Path(path_dir) / "school.sqlite"
+    conn = sqlite3.connect(p)
+    conn.executescript(
+        """
+        CREATE TABLE students (id INTEGER PRIMARY KEY, name TEXT, grade INTEGER);
+        INSERT INTO students VALUES (1, 'Alice', 3), (2, 'Bob', 2);
+        """
+    )
+    conn.commit()
+    conn.close()
+    return str(p)
