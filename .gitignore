@@ -11,6 +11,7 @@ venv/
 # 环境与密钥
 .env
 .env.*
+!/.env.example
 *.key
 
 # 评测运行数据（大文件与缓存不入库）
@@ -35,6 +36,9 @@ htmlcov/
 
 # 本地设计/规格文档（不上传仓库）
 docs/
+
+# 本地 git 凭据辅助脚本（含环境变量引用，禁止入库）
+.git-cred-helper.sh
 
 # 日志
 *.log
