@@ -36,8 +36,9 @@ htmlcov/
 
 # 本地设计/规格文档（不上传仓库）
 docs/
+.superpowers/
 
-# 本地 git 凭据辅助脚本（含环境变量引用，禁止入库）
+## 本地 git 凭据辅助脚本（含环境变量引用，禁止入库）
 .git-cred-helper.sh
 
 # 日志
