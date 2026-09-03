@@ -1,0 +1,13 @@
+{
+  "date": "2026-09-03",
+  "commit": "c3679cb",
+  "question_ids_file": "tests/smoke_ids.json",
+  "accuracy": 0.5,
+  "by_difficulty": {
+    "moderate": 0.5,
+    "simple": 0.4,
+    "challenging": 1.0
+  },
+  "model": "deepseek-v4-flash-0731",
+  "note": "取自 50 题配对对比运行的冒烟子集（零额外成本）。qwen3.7-flash 免费配额耗尽后切换模型，基线与新模型绑定；换模型须重建基线。"
+}
