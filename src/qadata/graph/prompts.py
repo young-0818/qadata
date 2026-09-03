@@ -19,7 +19,7 @@ _SQL_TMPL = SYSTEM_RULES + """
 
 ## 用户问题
 {question}
-
+{history}
 输出一条 SQL："""
 
 _RESPOND_TMPL = """你是数据分析助手。请根据查询结果用中文给出一句话结论，并简述数据依据。若结果为空，请如实说明未查询到数据，禁止编造。
@@ -36,8 +36,35 @@ def understand_prompt(question: str) -> str:
     return _UNDERSTAND_TMPL.format(question=question)
 
 
-def sql_prompt(schema: str, evidence: str, question: str) -> str:
-    return _SQL_TMPL.format(schema=schema, evidence=evidence or "（无）", question=question)
+def sql_prompt(schema: str, evidence: str, question: str, history: str = "") -> str:
+    h = "\n" + history if history else ""
+    return _SQL_TMPL.format(schema=schema, evidence=evidence or "（无）", question=question, history=h)
+
+
+def format_failure_history(attempts: list, verify_note: str | None) -> str:
+    """失败历史摘要（自纠错上下文工程核心素材）：SQL＋错误首行；空列表返回空串。"""
+    if not attempts:
+        return ""
+    lines = ["## 之前的失败尝试"]
+    last = len(attempts) - 1
+    for i, a in enumerate(attempts):
+        head = f"尝试 {i + 1}：{a.sql}" if a.sql else f"尝试 {i + 1}：（未能提取出合法 SQL）"
+        if a.error:
+            lines.append(head + f"\n  错误：{a.error.splitlines()[0]}")
+        elif i == last and verify_note:
+            lines.append(head + f"\n  错误：上次执行成功但校验未通过——{verify_note}")
+        else:
+            lines.append(head + "\n  错误：未知")
+    return "\n".join(lines)
+
+
+def strip_conclusion_prefix(text: str) -> str:
+    """防御「结论：结论：」复读（respond 模板自带"结论："引导，模型可能照抄）。"""
+    t = text.strip()
+    for prefix in ("结论：", "结论:"):
+        if t.startswith(prefix):
+            return t[len(prefix):].strip()
+    return t
 
 
 def respond_prompt(question: str, sql: str, rows_table: str, total: int, n: int) -> str:
