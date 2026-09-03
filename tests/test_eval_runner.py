@@ -1,5 +1,6 @@
 import json
 
+import pytest
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
 from qadata.eval.bird import load_questions, run_eval
@@ -51,3 +52,31 @@ def test_run_eval_accuracy_with_fake_llm(tmp_path, monkeypatch):
     assert summary["accuracy"] == 0.5
     records = [json.loads(l) for l in (tmp_path / "runs" / "eval-last.jsonl").read_text(encoding="utf-8").strip().splitlines()]
     assert records[0]["correct"] is True and records[1]["correct"] is False
+
+
+def test_load_questions_by_ids_order(tmp_path):
+    """question_ids 按给定顺序返回，不随机。"""
+    data = [
+        {"question_id": i, "db_id": "school", "question": f"q{i}", "evidence": "", "SQL": "SELECT 1", "difficulty": "simple"}
+        for i in range(5)
+    ]
+    p = tmp_path / "dev.json"
+    p.write_text(json.dumps(data), encoding="utf-8")
+    qs = load_questions(str(p), question_ids=[3, 1])
+    assert [q["question_id"] for q in qs] == [3, 1]
+
+
+def test_load_questions_unknown_id_raises(tmp_path):
+    data = [{"question_id": 0, "db_id": "s", "question": "q", "evidence": "", "SQL": "SELECT 1", "difficulty": "simple"}]
+    p = tmp_path / "dev.json"
+    p.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(ValueError, match="99"):
+        load_questions(str(p), question_ids=[99])
+
+
+def test_load_questions_ids_and_sample_conflict(tmp_path):
+    data = [{"question_id": 0, "db_id": "s", "question": "q", "evidence": "", "SQL": "SELECT 1", "difficulty": "simple"}]
+    p = tmp_path / "dev.json"
+    p.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(ValueError, match="不能同时"):
+        load_questions(str(p), sample=1, question_ids=[0])

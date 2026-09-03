@@ -1,6 +1,8 @@
 """CLI 薄壳：ask 单问 / eval 评测。核心逻辑全部在包内。"""
 import argparse
+import json
 import sys
+from pathlib import Path
 
 from rich.console import Console
 from rich.table import Table
@@ -40,6 +42,7 @@ def main(argv: list[str] | None = None) -> int:
     p_eval.add_argument("--questions", required=True)
     p_eval.add_argument("--db-dir", required=True)
     p_eval.add_argument("--sample", type=int, default=None)
+    p_eval.add_argument("--ids", default=None, help="题号 JSON 文件（固定题集：冒烟/对比）")
 
     args = parser.parse_args(argv)
 
@@ -51,10 +54,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "eval":
         from qadata.eval.bird import run_eval  # Task 10 实现
 
+        question_ids = None
+        if args.ids:
+            question_ids = json.loads(Path(args.ids).read_text(encoding="utf-8"))
         run_eval(
             questions_path=args.questions,
             db_dir=args.db_dir,
             sample=args.sample,
+            question_ids=question_ids,
         )
         return 0
     return 1
