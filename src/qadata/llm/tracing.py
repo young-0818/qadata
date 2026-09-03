@@ -4,6 +4,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from qadata.llm.gateway import invoke_with_backoff
+
 
 class TraceLogger:
     def __init__(self, path: str | Path):
@@ -27,9 +29,9 @@ def extract_usage(message) -> dict:
 
 
 def timed_invoke(llm, prompt: str, node: str, tracer: TraceLogger | None) -> str:
-    """调用 LLM 并记录该节点的 token 与延迟。返回 response.content。"""
+    """调用 LLM（带指数退避）并记录该节点的 token 与延迟。返回 response.content。"""
     t0 = time.perf_counter()
-    resp = llm.invoke(prompt)
+    resp = invoke_with_backoff(llm, prompt)
     latency = int((time.perf_counter() - t0) * 1000)
     if tracer is not None:
         usage = extract_usage(resp)
