@@ -5,6 +5,7 @@ M2 将升级为完整四层沙箱（sqlglot 白名单/超时/资源限制），�
 import sqlite3
 import time
 
+from qadata.tools.db import open_readonly
 from qadata.types import QueryResult, SqlExecutionError
 
 
@@ -15,10 +16,7 @@ def execute_sql(db_path: str, sql: str, max_rows: int = 50) -> QueryResult:
         raise SqlExecutionError(f"只允许只读查询（SELECT/WITH），收到：{head or '空语句'}")
 
     t0 = time.perf_counter()
-    try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)  # 物理只读
-    except sqlite3.Error as e:  # 路径不存在/不可访问：同样收敛为可读错误，绝不漏裸异常
-        raise SqlExecutionError(f"无法打开数据库：{e}") from e
+    conn = open_readonly(db_path)  # 物理只读＋路径错误收敛（沙箱第①层）
     try:
         cur = conn.execute(stripped)
         columns = [d[0] for d in cur.description] if cur.description else []

@@ -1,8 +1,8 @@
 """图节点：understand → explore → generate → execute → respond（M1 线性，无自纠错）。"""
 import re
-import sqlite3
 
 from qadata.llm.tracing import timed_invoke
+from qadata.tools.db import open_readonly
 from qadata.tools.executor import execute_sql
 from qadata.tools.schema import build_schema_context
 from qadata.graph.prompts import respond_prompt, sql_prompt, understand_prompt
@@ -43,7 +43,7 @@ def make_nodes(llm, tracer=None):
         return {"question": str(q).strip()}
 
     def explore(state: dict) -> dict:
-        conn = sqlite3.connect(f"file:{state['db_path']}?mode=ro", uri=True)
+        conn = open_readonly(state["db_path"])
         try:
             ctx = build_schema_context(conn, state["question"], llm=llm)
         finally:
