@@ -31,7 +31,8 @@ def sample_rows(conn: sqlite3.Connection, table: str, n: int = 3) -> str:
 
 
 def build_schema_context(
-    conn: sqlite3.Connection, question: str, llm=None, max_chars: int = FULL_SCHEMA_LIMIT
+    conn: sqlite3.Connection, question: str, llm=None, max_chars: int = FULL_SCHEMA_LIMIT,
+    tracer=None,
 ) -> str:
     """构建给 LLM 的 schema 上下文：小库全量；大库让 LLM 先选相关表。"""
     tables = list_tables(conn)
@@ -39,14 +40,17 @@ def build_schema_context(
     full = "\n\n".join(ddls)
     if len(full) <= max_chars or llm is None:
         return full
-    picked = _pick_tables_with_llm(llm, tables, question)
+    picked = _pick_tables_with_llm(llm, tables, question, tracer)
     if picked is None:  # LLM 输出解析失败 → 回退全量（宁可多给不可编造）
         return full
     return "\n\n".join(get_schema(conn, t) for t in picked)
 
 
-def _pick_tables_with_llm(llm, tables: list[str], question: str) -> list[str] | None:
-    content = llm.invoke(_PICK_PROMPT.format(tables=", ".join(tables), question=question)).content
+def _pick_tables_with_llm(llm, tables: list[str], question: str, tracer=None) -> list[str] | None:
+    # 走 timed_invoke：选表调用也进 tracing（M1 观测盲区修复）
+    from qadata.llm.tracing import timed_invoke
+    content = timed_invoke(llm, _PICK_PROMPT.format(tables=", ".join(tables), question=question),
+                           "explore", tracer)
     names = [w.strip() for w in str(content).split(",")]
     valid = [n for n in names if n in tables]
     return valid if valid else None

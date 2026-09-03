@@ -49,3 +49,16 @@ def test_timed_invoke_without_tracer_returns_content():
     # tracer=None 分支是 Task 7 的契约之一：不记录但必须正常返回 content
     out = timed_invoke(FakeLLM(FakeMsg("hi")), "prompt", "generate", None)
     assert out == "hi"
+
+
+def test_trace_logger_run_id_auto_and_context(tmp_path):
+    log = TraceLogger(tmp_path / "t.jsonl")
+    assert len(log.run_id) == 12
+    log.set_context(question_id="42")
+    log.log("generate", latency_ms=5)
+    rec = json.loads((tmp_path / "t.jsonl").read_text(encoding="utf-8"))
+    assert rec["run_id"] == log.run_id and rec["question_id"] == "42"
+
+
+def test_trace_logger_explicit_run_id(tmp_path):
+    assert TraceLogger(tmp_path / "t.jsonl", run_id="fixed").run_id == "fixed"

@@ -46,6 +46,7 @@ def run_eval(questions_path: str, db_dir: str, sample: int | None = None,
     by_difficulty: dict[str, list[bool]] = {}
     with out_path.open("w", encoding="utf-8") as f:
         for q in questions:
+            tracer.set_context(question_id=str(q["question_id"]))
             rec = _run_one(q, db_dir, llm, max_rows, tracer)
             records.append(rec)
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")

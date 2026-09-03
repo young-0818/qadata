@@ -1,6 +1,7 @@
 """节点级 tracing：JSONL 追加记录 token/延迟（自建，不用 LangSmith）。"""
 import json
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -8,12 +9,19 @@ from qadata.llm.gateway import invoke_with_backoff
 
 
 class TraceLogger:
-    def __init__(self, path: str | Path):
+    def __init__(self, path: str | Path, run_id: str | None = None):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.run_id = run_id or uuid.uuid4().hex[:12]
+        self._context: dict = {}
+
+    def set_context(self, **kw) -> None:
+        """合并上下文（如 question_id）；其后所有记录自动携带。"""
+        self._context.update(kw)
 
     def log(self, node: str, **payload) -> None:
-        rec = {"ts": datetime.now(timezone.utc).isoformat(), "node": node, **payload}
+        rec = {"ts": datetime.now(timezone.utc).isoformat(), "run_id": self.run_id,
+               **self._context, "node": node, **payload}
         with self.path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 

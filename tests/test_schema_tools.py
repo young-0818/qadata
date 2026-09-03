@@ -1,3 +1,5 @@
+import json
+
 from qadata.tools.schema import build_schema_context, get_schema, list_tables, sample_rows
 
 
@@ -56,3 +58,15 @@ def test_llm_selection_result_is_used(fixture_conn):
     ctx = build_schema_context(fixture_conn, "任意问题", llm=fake, max_chars=10)
     assert fake.calls == 1
     assert "CREATE TABLE students" in ctx and "CREATE TABLE scores" not in ctx
+
+
+def test_llm_selection_call_traced(fixture_conn, tmp_path):
+    """M1 观测盲区修复：explore 的选表 LLM 调用必须进 tracing。"""
+    from qadata.llm.tracing import TraceLogger
+    from tests.fakes import ScriptedLLM
+
+    log = TraceLogger(tmp_path / "t.jsonl")
+    build_schema_context(fixture_conn, "任意问题", llm=ScriptedLLM(["students"]),
+                         max_chars=10, tracer=log)
+    rec = json.loads((tmp_path / "t.jsonl").read_text(encoding="utf-8"))
+    assert rec["node"] == "explore"
