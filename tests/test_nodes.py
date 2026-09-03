@@ -68,6 +68,28 @@ def test_nodes_sql_error_recorded(fixture_db):
     assert state["answer"].failed is True
 
 
+def test_understand_keeps_original_question():
+    from tests.fakes import ScriptedLLM
+    from qadata.graph.nodes import make_nodes
+
+    nodes = make_nodes(ScriptedLLM(["改写后的问题"]))
+    out = nodes["understand"]({"question": "原始问题"})
+    assert out == {"original_question": "原始问题", "question": "改写后的问题"}
+
+
+def test_generate_failure_records_attempt(fixture_db):
+    """§11.1：generate 提取失败也写 SqlAttempt——len(attempts) 才是完整的预算账本。"""
+    from tests.fakes import ScriptedLLM
+    from qadata.graph.nodes import make_nodes
+
+    nodes = make_nodes(ScriptedLLM(["对不起，我不会写 SQL"]))
+    state = {"db_path": fixture_db, "question": "q", "db_schema": "CREATE TABLE students (id INTEGER);"}
+    out = nodes["generate"](state)
+    assert out["current_sql"] is None
+    assert len(out["attempts"]) == 1 and out["attempts"][0].sql == ""
+    assert "未找到合法 SQL" in out["attempts"][0].error
+
+
 def test_respond_notes_truncation():
     """截断提示：truncated=True 时 respond prompt 必须带截断说明，且预览行数为 PREVIEW_ROWS。"""
     res = QueryResult(

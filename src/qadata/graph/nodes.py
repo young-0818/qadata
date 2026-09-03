@@ -40,7 +40,7 @@ def make_nodes(llm, tracer=None):
 
     def understand(state: dict) -> dict:
         q = timed_invoke(llm, understand_prompt(state["question"]), "understand", tracer)
-        return {"question": str(q).strip()}
+        return {"original_question": state["question"], "question": str(q).strip()}
 
     def explore(state: dict) -> dict:
         conn = open_readonly(state["db_path"])
@@ -60,7 +60,9 @@ def make_nodes(llm, tracer=None):
         try:
             sql = extract_sql(str(text))
         except ValueError as e:
-            return {"current_sql": None, "last_error": str(e)}
+            attempts = list(state.get("attempts", []))
+            attempts.append(SqlAttempt(sql="", error=str(e)))
+            return {"current_sql": None, "last_error": str(e), "attempts": attempts}
         return {"current_sql": sql, "last_error": None}
 
     def execute(state: dict) -> dict:

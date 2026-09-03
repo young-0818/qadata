@@ -15,6 +15,8 @@ def _isolate_env(monkeypatch):
     monkeypatch.delenv("QADATA_BASE_URL", raising=False)
     monkeypatch.delenv("QADATA_MODEL", raising=False)
     monkeypatch.delenv("QADATA_MAX_ROWS", raising=False)
+    monkeypatch.delenv("QADATA_RETRY_BUDGET", raising=False)
+    monkeypatch.delenv("QADATA_SQL_TIMEOUT_S", raising=False)
 
 
 def test_load_settings_reads_env(monkeypatch):
@@ -29,4 +31,24 @@ def test_load_settings_reads_env(monkeypatch):
 
 def test_load_settings_missing_key():
     with pytest.raises(RuntimeError, match="DEEPSEEK_API_KEY"):
+        load_settings()
+
+
+def test_load_settings_new_defaults(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    s = load_settings()
+    assert s.retry_budget == 3 and s.sql_timeout_s == 5.0 and s.max_rows == 50
+
+
+def test_bad_max_rows_readable_error(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setenv("QADATA_MAX_ROWS", "abc")
+    with pytest.raises(RuntimeError, match="QADATA_MAX_ROWS"):
+        load_settings()
+
+
+def test_bad_retry_budget_readable_error(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setenv("QADATA_RETRY_BUDGET", "-1")
+    with pytest.raises(RuntimeError, match="QADATA_RETRY_BUDGET"):
         load_settings()
