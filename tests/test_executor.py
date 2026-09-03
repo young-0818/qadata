@@ -83,3 +83,13 @@ def test_sqlguard_reject_before_execution(big_db):
 def test_hallucinated_table_rejected_before_execution(big_db):
     with pytest.raises(SqlExecutionError, match="不存在的表"):
         execute_sql(big_db, "SELECT * FROM no_such_table")
+
+
+def test_fetch_cap_count_timeout_degrades(fixture_db):
+    """终审建议回归：撞获取上限后的 COUNT(*) 真值探索若超时，降级为近似总数——
+    取数已成功的查询不得被"锦上添花"的精确总数打成失败（沙箱不误伤合法路径）。"""
+    sql = ("WITH RECURSIVE cnt(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM cnt "
+           "WHERE x < 5000000) SELECT x FROM cnt")
+    r = execute_sql(fixture_db, sql, max_rows=2, fetch_cap=2, timeout_s=0.3)
+    assert r.row_count == 3  # 降级：len(fetched) = fetch_cap + 1 的近似下界
+    assert r.truncated is True and len(r.rows) == 2

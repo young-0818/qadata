@@ -62,3 +62,14 @@ def test_empty_rejected():
 def test_garbage_syntax_rejected():
     with pytest.raises(SqlExecutionError, match="语法解析失败"):
         validate_sql("SELECT FROM WHERE", TABLES)
+
+
+def test_unknown_table_in_join_rejected():
+    """终审补强：JOIN 体内的未知表同样拒绝（find_all 全树扫描语义钉死）。"""
+    with pytest.raises(SqlExecutionError, match="hallucinated"):
+        validate_sql("SELECT s.name FROM students s JOIN hallucinated h ON s.id = h.id", TABLES)
+
+
+def test_unknown_table_in_subquery_rejected():
+    with pytest.raises(SqlExecutionError, match="hallucinated"):
+        validate_sql("SELECT * FROM (SELECT * FROM hallucinated)", TABLES)

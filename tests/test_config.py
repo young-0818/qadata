@@ -52,3 +52,18 @@ def test_bad_retry_budget_readable_error(monkeypatch):
     monkeypatch.setenv("QADATA_RETRY_BUDGET", "-1")
     with pytest.raises(RuntimeError, match="QADATA_RETRY_BUDGET"):
         load_settings()
+
+
+def test_bad_sql_timeout_readable_error(monkeypatch):
+    """终审建议：浮点坏值也走可读契约（与 _env_int 一致，含变量名）。"""
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setenv("QADATA_SQL_TIMEOUT_S", "abc")
+    with pytest.raises(RuntimeError, match="QADATA_SQL_TIMEOUT_S"):
+        load_settings()
+
+
+def test_zero_sql_timeout_rejected(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setenv("QADATA_SQL_TIMEOUT_S", "0")
+    with pytest.raises(RuntimeError, match="QADATA_SQL_TIMEOUT_S"):
+        load_settings()

@@ -1,10 +1,10 @@
 import json
 
 import pytest
-from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
 from qadata.eval.bird import load_questions, run_eval
 from tests.conftest import make_fixture_db
+from tests.fakes import ScriptedLLM
 
 
 def test_load_questions_sample_deterministic(tmp_path):
@@ -33,7 +33,10 @@ def test_run_eval_accuracy_with_fake_llm(tmp_path, monkeypatch):
     (tmp_path / "dev.json").write_text(json.dumps(data), encoding="utf-8")
     monkeypatch.chdir(tmp_path)  # runs/ 写到临时目录
 
-    # fake LLM：第一题答对，第二题答错（两次 run_question 各配独立假模型）
+    # fake LLM：第一题答对，第二题答错（两次 run_question 各配独立假模型）。
+    # 终审修复：FakeListChatModel 在 M2 自纠错下静默循环（第二题实际 4 次调用，
+    # 第 4 次靠循环供"q"恰好提取失败才维持结论）——换 ScriptedLLM 显式含重试行数，
+    # 调用次数一旦变化立即报错而非碰运气。
     calls = {"n": 0}
 
     from qadata.graph.build import run_question
@@ -41,9 +44,10 @@ def test_run_eval_accuracy_with_fake_llm(tmp_path, monkeypatch):
     def fake_run_question(db_path_, question_, evidence="", llm=None, tracer=None):
         calls["n"] += 1
         if calls["n"] == 1:
-            llm1 = FakeListChatModel(responses=["q", "SELECT name FROM students", "ok"])
+            llm1 = ScriptedLLM(["q", "SELECT name FROM students", "ok"])
             return run_question(db_path_, question_, llm=llm1)
-        llm2 = FakeListChatModel(responses=["q", "SELECT nope FROM students", "ok"])
+        # 坏 SQL → 执行失败重试：预算 3 次共 3 次 generate；respond 失败路径不调 LLM
+        llm2 = ScriptedLLM(["q"] + ["SELECT nope FROM students"] * 3)
         return run_question(db_path_, question_, llm=llm2)
 
     monkeypatch.setattr("qadata.eval.bird.run_question", fake_run_question)

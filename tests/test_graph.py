@@ -62,6 +62,7 @@ def test_verify_suspicious_exhausted_annotates(fixture_db):
     ans = run_question(fixture_db, "谁成绩最好", llm=llm, settings=_S)
     assert ans.failed is False  # 有真实结果（空集）
     assert "未通过自动校验" in ans.conclusion
+    assert llm.calls == 5  # understand + 3×generate + respond
 
 
 def test_generate_failure_also_consumes_budget(fixture_db):
@@ -69,6 +70,22 @@ def test_generate_failure_also_consumes_budget(fixture_db):
     llm = ScriptedLLM(["改写"] + ["我不会写 SQL"] * 3)
     ans = run_question(fixture_db, "q", llm=llm, settings=_S)
     assert ans.failed is True and "共尝试 3 次" in ans.conclusion
+
+
+def test_extraction_failure_after_success_does_not_reuse_stale_result(fixture_db):
+    """终审阻断回归：轮 1 成功但 verify 可疑 → 轮 2 起提取失败，不得复用陈旧 result 路由，
+    预算耗尽后必须是诚实失败（failed=True/sql=None/result=None），而非带陈旧数据的假成功。"""
+    llm = ScriptedLLM([
+        "改写",
+        "SELECT name FROM students WHERE id = 999",  # 轮 1：空结果 → verify 可疑 → 重试
+        "我不会写 SQL",                              # 轮 2：提取失败
+        "我还是不会",                                # 轮 3：提取失败，预算耗尽
+    ])
+    ans = run_question(fixture_db, "谁成绩最好", llm=llm, settings=_S)
+    assert ans.failed is True
+    assert ans.sql is None and ans.result is None
+    assert "共尝试 3 次" in ans.conclusion
+    assert llm.calls == 4  # understand + 3×generate（respond 失败路径不调 LLM）
 
 
 def test_failure_is_honest_no_fabrication(fixture_db):

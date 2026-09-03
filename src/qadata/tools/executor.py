@@ -34,11 +34,16 @@ def execute_sql(db_path: str, sql: str, *, max_rows: int = 50,
                 raise SqlExecutionError(f"查询超时（>{timeout_s} 秒），已被沙箱中断") from e
             raise
 
-        # row_count 真值：撞顶才花一条 COUNT(*) 小查询（设计 §3.2）
+        # row_count 真值：撞顶才花一条 COUNT(*) 小查询（设计 §3.2）。
+        # 探索失败（多为与取数共享超时预算被中断）则降级为近似总数——
+        # 取数已成功的合法查询不得被"锦上添花"的精确总数打成失败尝试
         if len(fetched) > fetch_cap:
-            total = conn.execute(
-                f"SELECT COUNT(*) FROM ({sql.strip().rstrip(';')})"
-            ).fetchone()[0]
+            try:
+                total = conn.execute(
+                    f"SELECT COUNT(*) FROM ({sql.strip().rstrip(';')})"
+                ).fetchone()[0]
+            except sqlite3.Error:
+                total = len(fetched)
         else:
             total = len(fetched)
         rows = [tuple(r) for r in fetched[:max_rows]]

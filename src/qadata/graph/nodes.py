@@ -79,7 +79,9 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None):
     def execute(state: dict) -> dict:
         sql = state.get("current_sql")
         if not sql:
-            return {}  # generate 阶段已失败，直接进入 respond 兜底
+            # generate 阶段已失败：显式清掉上一轮残留的 result（整值覆盖语义下
+            # "清除"必须显式返回），否则条件边①会拿陈旧 result 误走 verify 路径
+            return {"result": None}
         attempts = list(state.get("attempts", []))
         try:
             res = execute_sql(

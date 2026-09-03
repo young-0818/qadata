@@ -26,6 +26,17 @@ def _env_int(name: str, default: int, *, minimum: int | None = None) -> int:
     return v
 
 
+def _env_float(name: str, default: float, *, minimum: float | None = None) -> float:
+    raw = os.getenv(name, str(default))
+    try:
+        v = float(raw)
+    except ValueError:
+        raise RuntimeError(f"环境变量 {name} 需要数字，当前值：{raw!r}") from None
+    if minimum is not None and v < minimum:
+        raise RuntimeError(f"环境变量 {name} 需 ≥{minimum}（设 0 会让一切查询超时），当前值：{v}")
+    return v
+
+
 def load_settings() -> Settings:
     load_dotenv()
     api_key = os.getenv("DEEPSEEK_API_KEY")
@@ -37,7 +48,7 @@ def load_settings() -> Settings:
         model=os.getenv("QADATA_MODEL", "deepseek-chat"),
         max_rows=_env_int("QADATA_MAX_ROWS", 50, minimum=1),
         retry_budget=_env_int("QADATA_RETRY_BUDGET", 3, minimum=1),
-        sql_timeout_s=float(os.getenv("QADATA_SQL_TIMEOUT_S", "5.0")),
+        sql_timeout_s=_env_float("QADATA_SQL_TIMEOUT_S", 5.0, minimum=0.1),
     )
 
 
