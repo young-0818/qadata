@@ -37,6 +37,7 @@ def main(argv: list[str] | None = None) -> int:
     p_ask = sub.add_parser("ask", help="单次提问：qadata ask <db_path> <question>")
     p_ask.add_argument("db_path")
     p_ask.add_argument("question")
+    p_ask.add_argument("--evidence", default="", help="业务口径说明（BIRD evidence 等价物）")
 
     p_eval = sub.add_parser("eval", help="BIRD 评测（Task 10 接通）")
     p_eval.add_argument("--questions", required=True)
@@ -48,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "ask":
         tracer = TraceLogger("runs/traces.jsonl")
-        answer = run_question(args.db_path, args.question, tracer=tracer)
+        answer = run_question(args.db_path, args.question, evidence=args.evidence, tracer=tracer)
         _print_answer(answer)
         return 0
     if args.cmd == "eval":
