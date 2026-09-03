@@ -77,7 +77,7 @@ def _run_one(q: dict, db_dir: str, llm, max_rows: int, tracer) -> dict:
         gold_rows = _exec(str(db_path), q["SQL"], max_rows)
         return {**base, "pred_sql": answer.sql,
                 "correct": results_match(pred_rows, gold_rows), "error": None}
-    except Exception as e:  # 单题隔离
+    except Exception as e:  # noqa: BLE001 单题隔离：评测器最外层，单题任何失败不阻塞整批
         return {**base, "pred_sql": None, "correct": False, "error": str(e)}
 
 

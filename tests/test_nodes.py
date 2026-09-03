@@ -69,8 +69,8 @@ def test_nodes_sql_error_recorded(fixture_db):
 
 
 def test_understand_keeps_original_question():
-    from tests.fakes import ScriptedLLM
     from qadata.graph.nodes import make_nodes
+    from tests.fakes import ScriptedLLM
 
     nodes = make_nodes(ScriptedLLM(["改写后的问题"]))
     out = nodes["understand"]({"question": "原始问题"})
@@ -79,8 +79,8 @@ def test_understand_keeps_original_question():
 
 def test_generate_failure_records_attempt(fixture_db):
     """§11.1：generate 提取失败也写 SqlAttempt——len(attempts) 才是完整的预算账本。"""
-    from tests.fakes import ScriptedLLM
     from qadata.graph.nodes import make_nodes
+    from tests.fakes import ScriptedLLM
 
     nodes = make_nodes(ScriptedLLM(["对不起，我不会写 SQL"]))
     state = {"db_path": fixture_db, "question": "q", "db_schema": "CREATE TABLE students (id INTEGER);"}

@@ -1,6 +1,11 @@
 import json
 
-from qadata.tools.schema import build_schema_context, get_schema, list_tables, sample_rows
+from qadata.tools.schema import (
+    build_schema_context,
+    get_schema,
+    list_tables,
+    sample_rows,
+)
 
 
 class FakeLLM:

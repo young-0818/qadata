@@ -9,6 +9,7 @@ def _result(rows, columns=("v",), truncated=False):
 
 def test_empty_result_suspicious():
     v = verify_result("有多少人", "SELECT COUNT(*) FROM students", _result([]))
+    assert isinstance(v, Verdict)
     assert v.passed is False and "空" in v.reason
 
 

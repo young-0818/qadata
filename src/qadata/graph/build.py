@@ -55,7 +55,7 @@ def run_question(db_path: str, question: str, evidence: str = "", llm=None,
         graph = build_graph(llm, tracer, settings=settings)
         final = graph.invoke({"db_path": db_path, "question": question, "evidence": evidence})
         return final["answer"]
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 run_question 是最外层守护：有意收敛一切裸异常
         # 永不编造（面向 CLI 用户）：收敛图内未兜住的裸异常为诚实失败答案。
         return Answer(
             conclusion=f"未能完成查询：{e}",

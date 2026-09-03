@@ -2,10 +2,6 @@
 import re
 
 from qadata.config import FALLBACK_SETTINGS, Settings
-from qadata.llm.tracing import timed_invoke
-from qadata.tools.db import open_readonly
-from qadata.tools.executor import execute_sql
-from qadata.tools.schema import build_schema_context
 from qadata.graph.prompts import (
     format_failure_history,
     respond_prompt,
@@ -14,6 +10,10 @@ from qadata.graph.prompts import (
     understand_prompt,
 )
 from qadata.graph.verify import verify_result
+from qadata.llm.tracing import timed_invoke
+from qadata.tools.db import open_readonly
+from qadata.tools.executor import execute_sql
+from qadata.tools.schema import build_schema_context
 from qadata.types import Answer, QueryResult, SqlAttempt
 
 _FENCE_RE = re.compile(r"```[a-zA-Z]*\n(.*?)```", re.DOTALL)
@@ -86,7 +86,7 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None):
                 state["db_path"], sql,
                 max_rows=s.max_rows, timeout_s=s.sql_timeout_s,
             )
-        except Exception as e:  # 记录失败，由条件边①决定重试或兜底
+        except Exception as e:  # noqa: BLE001 自纠错账本：任何执行失败都要入账供重试
             msg = str(e)
             attempts.append(SqlAttempt(sql=sql, error=msg))
             return {"attempts": attempts, "result": None, "last_error": msg}

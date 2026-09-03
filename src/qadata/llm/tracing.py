@@ -2,7 +2,7 @@
 import json
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from qadata.llm.gateway import invoke_with_backoff
@@ -20,7 +20,7 @@ class TraceLogger:
         self._context.update(kw)
 
     def log(self, node: str, **payload) -> None:
-        rec = {"ts": datetime.now(timezone.utc).isoformat(), "run_id": self.run_id,
+        rec = {"ts": datetime.now(UTC).isoformat(), "run_id": self.run_id,
                **self._context, "node": node, **payload}
         with self.path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
