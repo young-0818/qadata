@@ -1,0 +1,64 @@
+import pytest
+
+from qadata.tools.sqlguard import validate_sql
+from qadata.types import SqlExecutionError
+
+TABLES = ["students", "scores"]
+
+
+@pytest.mark.parametrize("sql", [
+    "SELECT 1",
+    "SELECT name FROM students WHERE id = 1",
+    "WITH t AS (SELECT 1) SELECT * FROM t",
+    "SELECT 1 UNION SELECT 2",
+    "SELECT a.name FROM students a INTERSECT SELECT name FROM scores",
+    "SELECT * FROM Students",  # 大小写不敏感
+])
+def test_allowed_statements_pass(sql):
+    assert validate_sql(sql, TABLES).strip() == sql.strip()
+
+
+@pytest.mark.parametrize("sql", [
+    "INSERT INTO students VALUES (9, 'Eve', 1)",
+    "UPDATE students SET name = 'x'",
+    "DELETE FROM students",
+    "DROP TABLE students",
+    "CREATE TABLE evil (a int)",
+    "PRAGMA table_info(students)",
+    'ATTACH "other.sqlite" AS other',
+    "VACUUM",
+])
+def test_mutating_statements_rejected(sql):
+    with pytest.raises(SqlExecutionError, match="安全检查"):
+        validate_sql(sql, TABLES)
+
+
+def test_cte_wrapped_insert_rejected():
+    """M1 首单词法的洞：WITH 开头的变异语句。"""
+    with pytest.raises(SqlExecutionError, match="安全检查"):
+        validate_sql("WITH t AS (SELECT 1) INSERT INTO students SELECT * FROM t", TABLES)
+
+
+def test_multi_statement_rejected():
+    with pytest.raises(SqlExecutionError, match="单条语句"):
+        validate_sql("SELECT 1; DROP TABLE students", TABLES)
+
+
+def test_unknown_table_rejected():
+    with pytest.raises(SqlExecutionError, match="hallucinated"):
+        validate_sql("SELECT * FROM hallucinated", TABLES)
+
+
+def test_cte_alias_not_flagged_as_unknown():
+    """CTE 别名出现在 FROM 中，不得误判为未知表。"""
+    assert "WITH t AS" in validate_sql("WITH t AS (SELECT 1) SELECT * FROM t", TABLES)
+
+
+def test_empty_rejected():
+    with pytest.raises(SqlExecutionError, match="空语句"):
+        validate_sql("   ", TABLES)
+
+
+def test_garbage_syntax_rejected():
+    with pytest.raises(SqlExecutionError, match="语法解析失败"):
+        validate_sql("SELECT FROM WHERE", TABLES)

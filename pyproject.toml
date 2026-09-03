@@ -13,6 +13,7 @@ dependencies = [
     "langchain-openai>=0.2",
     "python-dotenv>=1.0",
     "rich>=13.0",
+    "sqlglot>=30",
 ]
 
 [project.optional-dependencies]
