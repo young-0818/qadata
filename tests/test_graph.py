@@ -1,41 +1,94 @@
-from langchain_core.language_models.fake_chat_models import FakeListChatModel
-
+"""图端到端组件测试（M2：自纠错闭环）。一律 ScriptedLLM＋calls 断言。"""
 from qadata import run_question
-from tests.conftest import RecorderLLM
+from qadata.config import Settings
+from tests.fakes import ScriptedLLM
+
+_S = Settings(api_key="", base_url="", model="", retry_budget=3)
 
 
-def test_run_question_end_to_end(fixture_db):
-    llm = FakeListChatModel(
-        responses=["改写", "SELECT name FROM students WHERE id = 2", "Bob 的数学 88 分"]
-    )
-    ans = run_question(fixture_db, "Bob 成绩如何", llm=llm)
+def test_happy_path(fixture_db):
+    llm = ScriptedLLM(["改写", "SELECT name FROM students WHERE id = 2", "Bob 的数学 88 分"])
+    ans = run_question(fixture_db, "Bob 成绩如何", llm=llm, settings=_S)
     assert ans.failed is False
     assert ans.conclusion == "Bob 的数学 88 分"
-    assert ans.result is not None and ans.result.rows == [("Bob",)]
+    assert ans.result.rows == [("Bob",)]
+    assert llm.calls == 3  # understand + generate + respond（explore/verify 不烧 token）
 
 
-def test_run_question_failure_is_honest(fixture_db):
-    llm = FakeListChatModel(responses=["改写", "我不会 SQL"])
-    ans = run_question(fixture_db, "任意", llm=llm)
-    assert ans.failed is True and "未能" in ans.conclusion
+def test_execute_error_then_retry_success(fixture_db):
+    """条件边①：首轮坏 SQL → 带失败历史重试 → 成功。"""
+    llm = ScriptedLLM([
+        "改写",
+        "SELECT nope FROM students",           # 轮 1：列不存在
+        "SELECT name FROM students WHERE id = 1",  # 轮 2：修正
+        "Alice 成绩最好",
+    ])
+    ans = run_question(fixture_db, "谁成绩最好", llm=llm, settings=_S)
+    assert ans.failed is False and ans.conclusion == "Alice 成绩最好"
+    assert llm.calls == 4
+    # 轮 2 的 generate prompt 必须带失败历史（上下文工程真正生效的证据）
+    assert "之前的失败尝试" in llm.prompts[2] and "no such column" in llm.prompts[2]
+
+
+def test_budget_exhausted_reports_all_attempts(fixture_db):
+    """预算耗尽：诚实兜底，汇报全部尝试。"""
+    llm = ScriptedLLM(["改写"] + ["SELECT nope FROM students"] * 3)
+    ans = run_question(fixture_db, "谁成绩最好", llm=llm, settings=_S)
+    assert ans.failed is True
+    assert "共尝试 3 次" in ans.conclusion
+    assert "no such column" in ans.conclusion
+    assert llm.calls == 4  # understand + 3 次 generate（respond 失败路径不调 LLM）
+
+
+def test_verify_suspicious_empty_then_retry(fixture_db):
+    """条件边②：空结果可疑 → 换思路重试 → 成功。"""
+    llm = ScriptedLLM([
+        "改写",
+        "SELECT name FROM students WHERE id = 999",  # 轮 1：空结果
+        "SELECT name FROM students WHERE id = 1",    # 轮 2：修正
+        "Alice",
+    ])
+    ans = run_question(fixture_db, "谁成绩最好", llm=llm, settings=_S)
+    assert ans.failed is False
+    assert llm.calls == 4
+    assert "校验未通过" in llm.prompts[2]  # 失败历史标注了校验原因
+
+
+def test_verify_suspicious_exhausted_annotates(fixture_db):
+    """可疑且预算耗尽：数据真实，作答但带校验标注（不是假失败）。"""
+    llm = ScriptedLLM(
+        ["改写"] + ["SELECT name FROM students WHERE id = 999"] * 3 + ["没有人"]
+    )
+    ans = run_question(fixture_db, "谁成绩最好", llm=llm, settings=_S)
+    assert ans.failed is False  # 有真实结果（空集）
+    assert "未通过自动校验" in ans.conclusion
+
+
+def test_generate_failure_also_consumes_budget(fixture_db):
+    """提取不出 SQL 也计入预算（attempts 账本完整性）。"""
+    llm = ScriptedLLM(["改写"] + ["我不会写 SQL"] * 3)
+    ans = run_question(fixture_db, "q", llm=llm, settings=_S)
+    assert ans.failed is True and "共尝试 3 次" in ans.conclusion
+
+
+def test_failure_is_honest_no_fabrication(fixture_db):
+    llm = ScriptedLLM(["改写", "对不起，我回答不了"])
+    ans = run_question(fixture_db, "任意", llm=llm, settings=_S)
+    assert ans.failed is True and "未能完成查询" in ans.conclusion
 
 
 def test_evidence_reaches_sql_prompt(fixture_db):
-    """证据链路：非空 evidence（业务口径）必须出现在 SQL 生成 prompt 里（prompts[1]）。
-
-    链路为 understand→explore→generate→execute→respond，小库不触发 explore 的 LLM 选表，
-    故 prompts[0]=understand、prompts[1]=generate。evidence 一旦从链路上消失，此测试必红。
-    """
-    recorder = RecorderLLM(["改写", "SELECT name FROM students WHERE id = 1", "结论"])
-    ans = run_question(fixture_db, "q", evidence="口径：人均", llm=recorder)
+    """证据链路（M1 钉死）：非空 evidence（业务口径）必须出现在 SQL 生成 prompt 里（prompts[1]）。"""
+    recorder = ScriptedLLM(["改写", "SELECT name FROM students WHERE id = 1", "结论"])
+    ans = run_question(fixture_db, "q", evidence="口径：人均", llm=recorder, settings=_S)
     assert ans.failed is False
     assert "口径：人均" in recorder.prompts[1]
 
 
 def test_run_question_absorbs_unhandled_errors():
-    """失败面收敛：坏库路径在图内抛裸 OperationalError，run_question 必须兜成诚实失败答案（永不编造）。"""
-    llm = FakeListChatModel(responses=["x", "SELECT 1", "y"])
-    ans = run_question("no_such/missing.sqlite", "q", llm=llm)
+    """失败面收敛（M1 钉死）：坏库路径的异常必须兜成诚实失败答案（永不编造）。"""
+    llm = ScriptedLLM(["x", "SELECT 1", "y"])
+    ans = run_question("no_such/missing.sqlite", "q", llm=llm, settings=_S)
     assert ans.failed is True
     assert ans.conclusion.startswith("未能完成查询")
     assert ans.sql is None and ans.result is None and ans.error_summary

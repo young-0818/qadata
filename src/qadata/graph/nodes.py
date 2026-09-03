@@ -1,11 +1,19 @@
-"""图节点：understand → explore → generate → execute → respond（M1 线性，无自纠错）。"""
+"""图节点：understand → explore → generate → execute → verify → respond（M2 自纠错）。"""
 import re
 
+from qadata.config import FALLBACK_SETTINGS, Settings
 from qadata.llm.tracing import timed_invoke
 from qadata.tools.db import open_readonly
 from qadata.tools.executor import execute_sql
 from qadata.tools.schema import build_schema_context
-from qadata.graph.prompts import respond_prompt, sql_prompt, understand_prompt
+from qadata.graph.prompts import (
+    format_failure_history,
+    respond_prompt,
+    sql_prompt,
+    strip_conclusion_prefix,
+    understand_prompt,
+)
+from qadata.graph.verify import verify_result
 from qadata.types import Answer, QueryResult, SqlAttempt
 
 _FENCE_RE = re.compile(r"```[a-zA-Z]*\n(.*?)```", re.DOTALL)
@@ -35,8 +43,9 @@ def format_rows(result: QueryResult, limit: int = PREVIEW_ROWS) -> str:
     return _format_preview(result.columns, result.rows[:limit])
 
 
-def make_nodes(llm, tracer=None):
-    """节点工厂：闭包注入 llm 与 tracer，便于测试时替换假模型。"""
+def make_nodes(llm, tracer=None, settings: Settings | None = None):
+    """节点工厂：闭包注入 llm/tracer/settings，便于测试时替换假模型与配置。"""
+    s = settings or FALLBACK_SETTINGS
 
     def understand(state: dict) -> dict:
         q = timed_invoke(llm, understand_prompt(state["question"]), "understand", tracer)
@@ -51,10 +60,12 @@ def make_nodes(llm, tracer=None):
         return {"db_schema": ctx}
 
     def generate(state: dict) -> dict:
+        history = format_failure_history(state.get("attempts", []), state.get("verify_note"))
         prompt = sql_prompt(
             schema=state.get("db_schema", ""),
             evidence=state.get("evidence", ""),
             question=state["question"],
+            history=history,
         )
         text = timed_invoke(llm, prompt, "generate", tracer)
         try:
@@ -71,27 +82,45 @@ def make_nodes(llm, tracer=None):
             return {}  # generate 阶段已失败，直接进入 respond 兜底
         attempts = list(state.get("attempts", []))
         try:
-            res = execute_sql(state["db_path"], sql, max_rows=50)
-        except Exception as e:  # M1：记录失败并兜底；M2 改为走自纠错条件边
+            res = execute_sql(
+                state["db_path"], sql,
+                max_rows=s.max_rows, timeout_s=s.sql_timeout_s,
+            )
+        except Exception as e:  # 记录失败，由条件边①决定重试或兜底
             msg = str(e)
             attempts.append(SqlAttempt(sql=sql, error=msg))
             return {"attempts": attempts, "result": None, "last_error": msg}
         attempts.append(SqlAttempt(sql=sql, row_count=res.row_count))
         return {"attempts": attempts, "result": res, "last_error": None}
 
+    def verify(state: dict) -> dict:
+        res = state.get("result")
+        if res is None:
+            return {"verify_note": None}  # 执行已失败：路由直接走兜底，无需校验
+        verdict = verify_result(state["question"], state.get("current_sql") or "", res)
+        return {"verify_note": None if verdict.passed else verdict.reason}
+
     def respond(state: dict) -> dict:
         res = state.get("result")
         sql = state.get("current_sql")
-        last_error = state.get("last_error")
+        attempts = state.get("attempts", [])
         if res is None:
-            # 永不编造：失败路径不调 LLM，规则化诚实说明
+            # 永不编造：失败路径不调 LLM；汇报全部尝试（比 M1 单错误版信息量更高）
+            if attempts:
+                lines = [f"未能完成查询（共尝试 {len(attempts)} 次）："]
+                for i, a in enumerate(attempts, 1):
+                    err = (a.error or "未知错误").splitlines()[0]
+                    lines.append(f"{i}. {a.sql or '（未提取到 SQL）'} → {err}")
+                conclusion = "\n".join(lines)
+            else:
+                conclusion = f"未能完成查询：{state.get('last_error') or '未知错误'}"
             return {
                 "answer": Answer(
-                    conclusion=f"未能完成查询：{last_error or '未知错误'}",
+                    conclusion=conclusion,
                     sql=sql,
                     result=None,
                     failed=True,
-                    error_summary=last_error,
+                    error_summary=state.get("last_error"),
                 )
             }
         preview = res.rows[:PREVIEW_ROWS]  # 预览行只算一次，表格与 n= 同源派生
@@ -111,12 +140,17 @@ def make_nodes(llm, tracer=None):
             "respond",
             tracer,
         )
-        return {"answer": Answer(conclusion=str(text).strip(), sql=sql, result=res, failed=False)}
+        conclusion = strip_conclusion_prefix(str(text))
+        note = state.get("verify_note")
+        if note:  # 可疑但预算耗尽：数据真实，如实呈现＋标注（不是假失败）
+            conclusion += f"\n（注意：该结果未通过自动校验：{note}）"
+        return {"answer": Answer(conclusion=conclusion, sql=sql, result=res, failed=False)}
 
     return {
         "understand": understand,
         "explore": explore,
         "generate": generate,
         "execute": execute,
+        "verify": verify,
         "respond": respond,
     }
