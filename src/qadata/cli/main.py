@@ -46,6 +46,7 @@ def main(argv: list[str] | None = None) -> int:
     p_eval.add_argument("--ids", default=None, help="题号 JSON 文件（固定题集：冒烟/对比）")
     p_eval.add_argument("--out", default="runs/eval-last.jsonl", help="输出 JSONL 路径")
     p_eval.add_argument("--resume", action="store_true", help="断点续跑：跳过已完成题号")
+    p_eval.add_argument("--variants", default=None, help="变体矩阵 YAML（M3 工具链，实验 M4 跑）")
 
     p_report = sub.add_parser("report", help="两轮评测对比：qadata report --baseline A --current B")
     p_report.add_argument("--baseline", required=True)
@@ -60,11 +61,17 @@ def main(argv: list[str] | None = None) -> int:
         _print_answer(answer)
         return 0
     if args.cmd == "eval":
-        from qadata.eval.bird import run_eval  # Task 10 实现
-
         question_ids = None
         if args.ids:
             question_ids = json.loads(Path(args.ids).read_text(encoding="utf-8"))
+        if args.variants:
+            from qadata.eval.variants import load_variants, run_variants
+
+            run_variants(args.questions, args.db_dir, load_variants(args.variants),
+                         question_ids=question_ids, sample=args.sample, resume=args.resume)
+            return 0
+        from qadata.eval.bird import run_eval  # Task 10 实现
+
         run_eval(
             questions_path=args.questions,
             db_dir=args.db_dir,
