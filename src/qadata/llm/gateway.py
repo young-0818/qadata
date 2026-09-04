@@ -17,6 +17,7 @@ def build_llm(settings: Settings | None = None) -> ChatOpenAI:
         api_key=s.api_key,
         base_url=s.base_url,
         temperature=0,
+        request_timeout=s.llm_timeout_s,
     )
 
 

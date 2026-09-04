@@ -13,6 +13,7 @@ class Settings:
     max_rows: int = 50        # 显示上限：喂给 respond/CLI 的行数（M2 接线）
     retry_budget: int = 3     # 自纠错总尝试次数（含首次）
     sql_timeout_s: float = 5.0  # 沙箱资源层：查询超时
+    llm_timeout_s: float = 120.0  # LLM 客户端超时（M2 实测单次 generate 188s 异常态兜底）
 
 
 def _env_int(name: str, default: int, *, minimum: int | None = None) -> int:
@@ -49,6 +50,7 @@ def load_settings() -> Settings:
         max_rows=_env_int("QADATA_MAX_ROWS", 50, minimum=1),
         retry_budget=_env_int("QADATA_RETRY_BUDGET", 3, minimum=1),
         sql_timeout_s=_env_float("QADATA_SQL_TIMEOUT_S", 5.0, minimum=0.1),
+        llm_timeout_s=_env_float("QADATA_LLM_TIMEOUT_S", 120.0, minimum=10),
     )
 
 

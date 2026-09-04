@@ -70,3 +70,15 @@ def test_connection_error_retried():
     llm = FlakyLLM(fail_times=1, exc=ConnectionError("网络抖动"))
     out = invoke_with_backoff(llm, "p", sleep=lambda _: None)
     assert out.content == "ok" and llm.calls == 2
+
+
+def test_build_llm_passes_timeout(monkeypatch):
+    captured = {}
+
+    class FakeChatOpenAI:
+        def __init__(self, **kw):
+            captured.update(kw)
+
+    monkeypatch.setattr("qadata.llm.gateway.ChatOpenAI", FakeChatOpenAI)
+    build_llm(Settings(api_key="k", base_url="b", model="m", llm_timeout_s=42))
+    assert captured["request_timeout"] == 42

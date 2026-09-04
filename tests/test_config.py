@@ -17,6 +17,7 @@ def _isolate_env(monkeypatch):
     monkeypatch.delenv("QADATA_MAX_ROWS", raising=False)
     monkeypatch.delenv("QADATA_RETRY_BUDGET", raising=False)
     monkeypatch.delenv("QADATA_SQL_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("QADATA_LLM_TIMEOUT_S", raising=False)
 
 
 def test_load_settings_reads_env(monkeypatch):
@@ -66,4 +67,16 @@ def test_zero_sql_timeout_rejected(monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
     monkeypatch.setenv("QADATA_SQL_TIMEOUT_S", "0")
     with pytest.raises(RuntimeError, match="QADATA_SQL_TIMEOUT_S"):
+        load_settings()
+
+
+def test_load_settings_llm_timeout_default(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    assert load_settings().llm_timeout_s == 120
+
+
+def test_bad_llm_timeout_readable_error(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setenv("QADATA_LLM_TIMEOUT_S", "abc")
+    with pytest.raises(RuntimeError, match="QADATA_LLM_TIMEOUT_S"):
         load_settings()
