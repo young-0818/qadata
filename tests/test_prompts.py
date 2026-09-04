@@ -21,6 +21,13 @@ def test_system_rules_forbids_formatting():
     assert "不格式化输出" in p and p.startswith(SYSTEM_RULES)
 
 
+def test_system_rules_forbids_extra_columns():
+    """M3 验证跑归因：5 道改坏题 4 道是「多选列」形态（多集匹配下多列即错）。"""
+    assert "只选问题需要的列" in SYSTEM_RULES
+    p = sql_prompt(schema="S", evidence="", question="Q")
+    assert "只选问题需要的列" in p and p.startswith(SYSTEM_RULES)
+
+
 def test_understand_prompt_contains_question():
     assert "原始问题" in understand_prompt("成绩最好的学生是谁")
 
