@@ -90,3 +90,41 @@ def test_list_tables_includes_views(fixture_db):
         assert "CREATE VIEW adults" in get_schema(conn, "adults")
     finally:
         conn.close()
+
+
+def test_database_description_in_context(fixture_conn, fixture_db):
+    import csv
+    from pathlib import Path
+
+    desc_dir = Path(fixture_db).parent / "database_description"
+    desc_dir.mkdir(exist_ok=True)
+    with (desc_dir / "students.csv").open("w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["column_name", "column_description", "data_format", "value_description"])
+        w.writerow(["name", "学生姓名", "", ""])
+        w.writerow(["grade", "年级", "", "1-6"])
+    ctx = build_schema_context(fixture_conn, "成绩最好的学生是谁", llm=None, db_path=fixture_db)
+    assert "表 students 列注释" in ctx
+    assert "学生姓名" in ctx and "1-6" in ctx
+
+
+def test_database_description_missing_silently_skipped(fixture_conn, fixture_db):
+    ctx = build_schema_context(fixture_conn, "q", llm=None, db_path=fixture_db)
+    assert "列注释" not in ctx
+
+
+def test_database_description_only_selected_tables(fixture_conn, fixture_db):
+    """选表路径：只进选中表的注释（token 纪律）。"""
+    import csv
+    from pathlib import Path
+
+    desc_dir = Path(fixture_db).parent / "database_description"
+    desc_dir.mkdir(exist_ok=True)
+    for table in ("students", "scores"):
+        with (desc_dir / f"{table}.csv").open("w", encoding="utf-8", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["column_name", "column_description", "data_format", "value_description"])
+            w.writerow(["name", f"{table} 的注释", "", ""])
+    fake = FakeLLM("students")
+    ctx = build_schema_context(fixture_conn, "任意问题", llm=fake, max_chars=10, db_path=fixture_db)
+    assert "students 的注释" in ctx and "scores 的注释" not in ctx
