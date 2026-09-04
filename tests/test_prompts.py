@@ -15,6 +15,12 @@ def test_system_rules_is_static_prefix_of_sql_prompt():
     assert "SCHEMA_TEXT" in p and "问题" in p
 
 
+def test_system_rules_forbids_formatting():
+    assert "不格式化输出" in SYSTEM_RULES
+    p = sql_prompt(schema="S", evidence="", question="Q")
+    assert "不格式化输出" in p and p.startswith(SYSTEM_RULES)
+
+
 def test_understand_prompt_contains_question():
     assert "原始问题" in understand_prompt("成绩最好的学生是谁")
 
