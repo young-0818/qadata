@@ -56,6 +56,9 @@ def test_run_eval_accuracy_with_fake_llm(tmp_path, monkeypatch):
     assert summary["accuracy"] == 0.5
     records = [json.loads(l) for l in (tmp_path / "runs" / "eval-last.jsonl").read_text(encoding="utf-8").strip().splitlines()]
     assert records[0]["correct"] is True and records[1]["correct"] is False
+    assert records[0]["error_class"] is None and records[0]["gold_sql"] == "SELECT name FROM students"
+    assert records[1]["error_class"] == "answer_failed"
+    assert summary["gold_failed"] == 0
 
 
 def test_load_questions_by_ids_order(tmp_path):
@@ -84,3 +87,41 @@ def test_load_questions_ids_and_sample_conflict(tmp_path):
     p.write_text(json.dumps(data), encoding="utf-8")
     with pytest.raises(ValueError, match="不能同时"):
         load_questions(str(p), sample=1, question_ids=[0])
+
+
+def test_run_one_gold_failed_flagged(tmp_path, monkeypatch):
+    """gold 执行失败与 pred 失败分标（M1 §11.1 遗留）。"""
+    from qadata.eval import bird
+    from qadata.types import Answer
+
+    # 目录约定：db_dir/{db_id}/{db_id}.sqlite
+    make_fixture_db(tmp_path)
+    import shutil
+    (tmp_path / "school").mkdir(exist_ok=True)
+    shutil.move(str(tmp_path / "school.sqlite"), str(tmp_path / "school" / "school.sqlite"))
+    monkeypatch.setattr(bird, "run_question",
+                        lambda *a, **k: Answer(conclusion="ok", sql="SELECT 1", failed=False))
+    q = {"question_id": 0, "db_id": "school", "question": "q", "evidence": "",
+         "SQL": "SELECT nope FROM students", "difficulty": "simple"}
+    rec = bird._run_one(q, str(tmp_path), None, 100, None)
+    assert rec["correct"] is False
+    assert rec["gold_failed"] is True and rec["error_class"] == "gold_failed"
+    assert "gold 执行失败" in rec["error"]
+
+
+def test_run_one_judge_mismatch_classified(tmp_path, monkeypatch):
+    from qadata.eval import bird
+    from qadata.types import Answer
+
+    make_fixture_db(tmp_path)
+    import shutil
+    (tmp_path / "school").mkdir(exist_ok=True)
+    shutil.move(str(tmp_path / "school.sqlite"), str(tmp_path / "school" / "school.sqlite"))
+    monkeypatch.setattr(bird, "run_question",
+                        lambda *a, **k: Answer(conclusion="ok",
+                                               sql="SELECT name FROM students WHERE id = 999", failed=False))
+    q = {"question_id": 0, "db_id": "school", "question": "q", "evidence": "",
+         "SQL": "SELECT name FROM students", "difficulty": "simple"}
+    rec = bird._run_one(q, str(tmp_path), None, 100, None)
+    assert rec["correct"] is False and rec["gold_failed"] is False
+    assert rec["error_class"] == "judge_mismatch"

@@ -58,27 +58,41 @@ def run_eval(questions_path: str, db_dir: str, sample: int | None = None,
         "correct": n_correct,
         "accuracy": round(n_correct / len(records), 4) if records else 0.0,
         "by_difficulty": {k: round(sum(v) / len(v), 4) for k, v in by_difficulty.items()},
+        "gold_failed": sum(1 for r in records if r.get("gold_failed")),
     }
     _print_summary(summary)
     return summary
 
 
 def _run_one(q: dict, db_dir: str, llm, max_rows: int, tracer) -> dict:
-    """单题评测：异常隔离，单题失败不阻塞整批。"""
+    """单题评测：异常隔离，单题失败不阻塞整批；错误分类进 error_class。"""
     db_path = Path(db_dir) / q["db_id"] / f"{q['db_id']}.sqlite"
     base = {"question_id": q["question_id"], "db_id": q["db_id"],
-            "difficulty": q.get("difficulty"), "question": q["question"]}
+            "difficulty": q.get("difficulty"), "question": q["question"],
+            "gold_sql": q["SQL"], "gold_failed": False}
     try:
-        answer = run_question(str(db_path), q["question"], evidence=q.get("evidence", ""), llm=llm, tracer=tracer)
-        if answer.failed or not answer.sql:
-            return {**base, "pred_sql": answer.sql, "correct": False,
-                    "error": answer.error_summary or "no sql"}
-        pred_rows = _exec(str(db_path), answer.sql, max_rows)
-        gold_rows = _exec(str(db_path), q["SQL"], max_rows)
-        return {**base, "pred_sql": answer.sql,
-                "correct": results_match(pred_rows, gold_rows), "error": None}
+        answer = run_question(str(db_path), q["question"], evidence=q.get("evidence", ""),
+                              llm=llm, tracer=tracer)
     except Exception as e:  # noqa: BLE001 单题隔离：评测器最外层，单题任何失败不阻塞整批
-        return {**base, "pred_sql": None, "correct": False, "error": str(e)}
+        return {**base, "pred_sql": None, "correct": False, "error": str(e),
+                "error_class": "answer_failed"}
+    if answer.failed or not answer.sql:
+        return {**base, "pred_sql": answer.sql, "correct": False,
+                "error": answer.error_summary or "no sql", "error_class": "answer_failed"}
+    try:
+        pred_rows = _exec(str(db_path), answer.sql, max_rows)
+    except Exception as e:  # noqa: BLE001 单题隔离
+        return {**base, "pred_sql": answer.sql, "correct": False, "error": str(e),
+                "error_class": "pred_exec_failed"}
+    try:
+        gold_rows = _exec(str(db_path), q["SQL"], max_rows)
+    except Exception as e:  # noqa: BLE001 gold 失败单独成类：与 pred 失败分标
+        return {**base, "pred_sql": answer.sql, "correct": False,
+                "error": f"gold 执行失败：{e}", "gold_failed": True,
+                "error_class": "gold_failed"}
+    correct = results_match(pred_rows, gold_rows)
+    return {**base, "pred_sql": answer.sql, "correct": correct, "error": None,
+            "error_class": None if correct else "judge_mismatch"}
 
 
 def _exec(db_path: str, sql: str, max_rows: int) -> list[tuple]:

@@ -126,7 +126,7 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None):
                                       max_rows=s.max_rows, timeout_s=s.sql_timeout_s)
                     sql = good_sql
                     fallback_note = "最终尝试失败，以下为最近一次成功执行的查询结果"
-                except Exception:  # noqa: BLE001 回退是锦上添花：炸了不得连累原诚实失败路径
+                except Exception:  # noqa: BLE001, S110 回退是锦上添花：炸了不得连累原诚实失败路径
                     pass
         if res is None:
             # 永不编造：失败路径不调 LLM；汇报全部尝试（比 M1 单错误版信息量更高）
