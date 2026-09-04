@@ -1,4 +1,5 @@
 """提示词。纪律：SYSTEM_RULES 永远位于 prompt 最前端（吃前缀缓存，见设计文档优化 #7）。"""
+from qadata.graph.error_hints import error_hint
 
 SYSTEM_RULES = """你是一个严谨的数据分析 SQL 专家。规则：
 1. 数据库是 SQLite 方言。
@@ -51,7 +52,11 @@ def format_failure_history(attempts: list, verify_note: str | None) -> str:
     for i, a in enumerate(attempts):
         head = f"尝试 {i + 1}：{a.sql}" if a.sql else f"尝试 {i + 1}：（未能提取出合法 SQL）"
         if a.error:
-            lines.append(head + f"\n  错误：{a.error.splitlines()[0]}")
+            line = head + f"\n  错误：{a.error.splitlines()[0]}"
+            hint = error_hint(a.error)
+            if hint:
+                line += f"\n  修复建议：{hint}"
+            lines.append(line)
         elif i == last and verify_note:
             lines.append(head + f"\n  错误：上次执行成功但校验未通过——{verify_note}")
         else:

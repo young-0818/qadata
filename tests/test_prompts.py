@@ -67,6 +67,12 @@ def test_failure_history_verify_note_on_last_success():
     assert "上次执行成功但校验未通过——结果为空" in h
 
 
+def test_failure_history_appends_repair_hint():
+    a = SqlAttempt(sql="SELECT nope FROM students", error="no such column: nope")
+    h = format_failure_history([a], None)
+    assert "修复建议：核对列名拼写" in h
+
+
 def test_strip_conclusion_prefix():
     assert strip_conclusion_prefix("结论：Alice 最好") == "Alice 最好"
     assert strip_conclusion_prefix("结论:Alice") == "Alice"
