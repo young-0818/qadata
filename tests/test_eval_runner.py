@@ -125,3 +125,64 @@ def test_run_one_judge_mismatch_classified(tmp_path, monkeypatch):
     rec = bird._run_one(q, str(tmp_path), None, 100, None)
     assert rec["correct"] is False and rec["gold_failed"] is False
     assert rec["error_class"] == "judge_mismatch"
+
+
+def test_run_eval_resume_skips_completed(tmp_path, monkeypatch):
+    """断点续跑：已有记录跳过，只补跑缺失题，文件顺序与总量一致。"""
+    make_fixture_db(tmp_path)
+    import shutil
+    (tmp_path / "school").mkdir(exist_ok=True)
+    shutil.move(str(tmp_path / "school.sqlite"), str(tmp_path / "school" / "school.sqlite"))
+    db_dir = str(tmp_path)
+    data = [
+        {"question_id": 0, "db_id": "school", "question": "q0", "evidence": "", "SQL": "SELECT 1", "difficulty": "simple"},
+        {"question_id": 1, "db_id": "school", "question": "q1", "evidence": "", "SQL": "SELECT 1", "difficulty": "simple"},
+    ]
+    (tmp_path / "dev.json").write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "runs").mkdir()
+    (tmp_path / "runs" / "eval-last.jsonl").write_text(
+        json.dumps({"question_id": 0, "db_id": "school", "question": "q0", "gold_sql": "SELECT 1",
+                    "gold_failed": False, "pred_sql": "SELECT 1", "correct": True,
+                    "error": None, "error_class": None}, ensure_ascii=False) + "\n",
+        encoding="utf-8")
+
+    seen = []
+    from qadata.types import Answer
+
+    def fake_run_question(db_path_, question_, evidence="", llm=None, tracer=None):
+        seen.append(question_)
+        return Answer(conclusion="ok", sql="SELECT 1", failed=False)
+
+    monkeypatch.setattr("qadata.eval.bird.run_question", fake_run_question)
+    summary = run_eval(str(tmp_path / "dev.json"), db_dir, resume=True)
+    assert seen == ["q1"]  # 只补跑缺失题
+    assert summary["total"] == 2 and summary["accuracy"] == 1.0
+    lines = (tmp_path / "runs" / "eval-last.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    assert [json.loads(l)["question_id"] for l in lines] == [0, 1]
+
+
+def test_run_eval_flush_makes_progress_visible(tmp_path, monkeypatch):
+    """逐题 flush：第 2 题开跑时第 1 题记录必须已落盘（M2 进度不可见痛点）。"""
+    make_fixture_db(tmp_path)
+    import shutil
+    (tmp_path / "school").mkdir(exist_ok=True)
+    shutil.move(str(tmp_path / "school.sqlite"), str(tmp_path / "school" / "school.sqlite"))
+    db_dir = str(tmp_path)
+    data = [
+        {"question_id": i, "db_id": "school", "question": f"q{i}", "evidence": "", "SQL": "SELECT 1", "difficulty": "simple"}
+        for i in range(2)
+    ]
+    (tmp_path / "dev.json").write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    from qadata.types import Answer
+
+    def fake_run_question(db_path_, question_, evidence="", llm=None, tracer=None):
+        if question_ == "q1":
+            lines = (tmp_path / "runs" / "eval-last.jsonl").read_text(encoding="utf-8").strip().splitlines()
+            assert len(lines) == 1  # q0 已 flush 落盘
+        return Answer(conclusion="ok", sql="SELECT 1", failed=False)
+
+    monkeypatch.setattr("qadata.eval.bird.run_question", fake_run_question)
+    run_eval(str(tmp_path / "dev.json"), db_dir)

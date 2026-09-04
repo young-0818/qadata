@@ -36,23 +36,33 @@ def load_questions(path: str, sample: int | None = None, seed: int = 42,
 
 def run_eval(questions_path: str, db_dir: str, sample: int | None = None,
              question_ids: list[int] | None = None,
-             llm=None, max_rows: int = 10000) -> dict:
+             llm=None, max_rows: int = 10000,
+             out_path: str = "runs/eval-last.jsonl", resume: bool = False) -> dict:
     questions = load_questions(questions_path, sample=sample, question_ids=question_ids)
-    out_path = Path("runs/eval-last.jsonl")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out = Path(out_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
     tracer = TraceLogger("runs/traces.jsonl")
 
-    records, n_correct = [], 0
-    by_difficulty: dict[str, list[bool]] = {}
-    with out_path.open("w", encoding="utf-8") as f:
-        for q in questions:
+    done_ids: set[int] = set()
+    if resume and out.exists():
+        for line in out.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                done_ids.add(json.loads(line)["question_id"])
+    todo = [q for q in questions if q["question_id"] not in done_ids]
+    mode = "a" if resume and done_ids else "w"
+
+    with out.open(mode, encoding="utf-8") as f:
+        for q in todo:
             tracer.set_context(question_id=str(q["question_id"]))
             rec = _run_one(q, db_dir, llm, max_rows, tracer)
-            records.append(rec)
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-            by_difficulty.setdefault(q.get("difficulty", "unknown"), []).append(rec["correct"])
-            n_correct += int(rec["correct"])
+            f.flush()  # 逐题落盘：运行中 tail 文件可见进度（M2 痛点）
 
+    records = [json.loads(l) for l in out.read_text(encoding="utf-8").splitlines() if l.strip()]
+    n_correct = sum(int(r["correct"]) for r in records)
+    by_difficulty: dict[str, list[bool]] = {}
+    for r in records:
+        by_difficulty.setdefault(r.get("difficulty", "unknown"), []).append(r["correct"])
     summary = {
         "total": len(records),
         "correct": n_correct,

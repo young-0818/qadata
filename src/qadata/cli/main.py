@@ -44,6 +44,8 @@ def main(argv: list[str] | None = None) -> int:
     p_eval.add_argument("--db-dir", required=True)
     p_eval.add_argument("--sample", type=int, default=None)
     p_eval.add_argument("--ids", default=None, help="题号 JSON 文件（固定题集：冒烟/对比）")
+    p_eval.add_argument("--out", default="runs/eval-last.jsonl", help="输出 JSONL 路径")
+    p_eval.add_argument("--resume", action="store_true", help="断点续跑：跳过已完成题号")
 
     args = parser.parse_args(argv)
 
@@ -63,6 +65,8 @@ def main(argv: list[str] | None = None) -> int:
             db_dir=args.db_dir,
             sample=args.sample,
             question_ids=question_ids,
+            out_path=args.out,
+            resume=args.resume,
         )
         return 0
     return 1
