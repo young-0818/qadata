@@ -47,6 +47,11 @@ def main(argv: list[str] | None = None) -> int:
     p_eval.add_argument("--out", default="runs/eval-last.jsonl", help="输出 JSONL 路径")
     p_eval.add_argument("--resume", action="store_true", help="断点续跑：跳过已完成题号")
 
+    p_report = sub.add_parser("report", help="两轮评测对比：qadata report --baseline A --current B")
+    p_report.add_argument("--baseline", required=True)
+    p_report.add_argument("--current", required=True)
+    p_report.add_argument("--out", default=None, help="报告 markdown 输出路径（默认打印）")
+
     args = parser.parse_args(argv)
 
     if args.cmd == "ask":
@@ -68,6 +73,16 @@ def main(argv: list[str] | None = None) -> int:
             out_path=args.out,
             resume=args.resume,
         )
+        return 0
+    if args.cmd == "report":
+        from qadata.eval.report import build_report, print_report_summary
+
+        print_report_summary(args.baseline, args.current)
+        md = build_report(args.baseline, args.current)
+        if args.out:
+            Path(args.out).write_text(md, encoding="utf-8")
+        else:
+            console.print(md)
         return 0
     return 1
 
