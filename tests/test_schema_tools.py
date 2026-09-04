@@ -113,6 +113,21 @@ def test_database_description_missing_silently_skipped(fixture_conn, fixture_db)
     assert "列注释" not in ctx
 
 
+def test_database_description_non_utf8_does_not_crash(fixture_conn, fixture_db):
+    """M3 回归：BIRD 部分 CSV 非 UTF-8（如 formula_1 的 0x96）。
+    读取不得抛 UnicodeDecodeError 连累 explore（答案降为无注释，不炸题）。"""
+    from pathlib import Path
+
+    desc_dir = Path(fixture_db).parent / "database_description"
+    desc_dir.mkdir(exist_ok=True)
+    # 写入含 Windows-1252 字符（0x96）的非法 UTF-8 字节
+    (desc_dir / "students.csv").write_bytes(
+        b"column_name,column_description,data_format,value_description\n"
+        b"name,\x96 en dash desc,,\n")
+    ctx = build_schema_context(fixture_conn, "q", llm=None, db_path=fixture_db)
+    assert "CREATE TABLE students" in ctx  # DDL 仍在，未崩
+
+
 def test_database_description_only_selected_tables(fixture_conn, fixture_db):
     """选表路径：只进选中表的注释（token 纪律）。"""
     import csv

@@ -41,7 +41,9 @@ def _load_description(db_path: str | None, table: str) -> str:
     if not csv_path.exists():
         return ""
     try:
-        with csv_path.open(encoding="utf-8") as f:
+        # utf-8-sig 容 BOM；errors="replace" 容 BIRD 部分非 UTF-8 字节（如 formula_1 的
+        # 0x96）——宁可以替换符保留大部分注释，也不让编码错连累 explore（M3 回归）
+        with csv_path.open(encoding="utf-8-sig", errors="replace") as f:
             rows = list(csv.DictReader(f))
     except (OSError, csv.Error):
         return ""
