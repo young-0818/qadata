@@ -33,6 +33,14 @@ def extract_sql(text: str) -> str:
     return sql
 
 
+def _last_good_sql(attempts: list[SqlAttempt]) -> str | None:
+    """最近一次执行成功的 SQL（答案稳定性回退候选；不新增状态键，从 attempts 派生）。"""
+    for a in reversed(attempts):
+        if a.sql and a.error is None:
+            return a.sql
+    return None
+
+
 def _format_preview(columns: list[str], rows: list[tuple]) -> str:
     head = " | ".join(columns)
     body = "\n".join(" | ".join(str(v) for v in r) for r in rows)
@@ -106,6 +114,19 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None):
         res = state.get("result")
         sql = state.get("current_sql")
         attempts = state.get("attempts", [])
+        fallback_note = None
+        if res is None and attempts and attempts[-1].sql and attempts[-1].error:
+            # 执行失败耗尽（非提取失败耗尽，后者必须诚实失败——M2 钉死回归）：
+            # 回退重执行最近成功候选，答案不丢失；重执行失败则维持原诚实失败路径
+            good_sql = _last_good_sql(attempts)
+            if good_sql:
+                try:
+                    res = execute_sql(state["db_path"], good_sql,
+                                      max_rows=s.max_rows, timeout_s=s.sql_timeout_s)
+                    sql = good_sql
+                    fallback_note = "最终尝试失败，以下为最近一次成功执行的查询结果"
+                except Exception:  # noqa: BLE001 回退是锦上添花：炸了不得连累原诚实失败路径
+                    pass
         if res is None:
             # 永不编造：失败路径不调 LLM；汇报全部尝试（比 M1 单错误版信息量更高）
             if attempts:
@@ -146,6 +167,8 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None):
         note = state.get("verify_note")
         if note:  # 可疑但预算耗尽：数据真实，如实呈现＋标注（不是假失败）
             conclusion += f"\n（注意：该结果未通过自动校验：{note}）"
+        if fallback_note:  # 回退作答：数据真实，如实标注来源
+            conclusion += f"\n（注意：{fallback_note}）"
         return {"answer": Answer(conclusion=conclusion, sql=sql, result=res, failed=False)}
 
     return {

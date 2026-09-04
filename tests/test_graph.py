@@ -111,6 +111,22 @@ def test_run_question_absorbs_unhandled_errors():
     assert ans.sql is None and ans.result is None and ans.error_summary
 
 
+def test_budget_exhausted_falls_back_to_last_good(fixture_db):
+    """M3 靶子回归：执行失败耗尽 → 回退最近成功候选作答（答案不丢失）。"""
+    llm = ScriptedLLM([
+        "改写",
+        "SELECT AVG(score) FROM scores WHERE student_id = 999",  # 轮 1：成功但聚合 NULL → 可疑
+        "SELECT nope1 FROM students",                            # 轮 2：执行失败
+        "SELECT nope2 FROM students",                            # 轮 3：执行失败，预算耗尽
+        "暂无数据",
+    ])
+    ans = run_question(fixture_db, "谁成绩最好", llm=llm, settings=_S)
+    assert ans.failed is False
+    assert ans.sql == "SELECT AVG(score) FROM scores WHERE student_id = 999"
+    assert "最近一次成功执行" in ans.conclusion
+    assert llm.calls == 5
+
+
 def test_list_all_empty_not_retried(fixture_db):
     """M3 靶子回归：列出全部类空结果不判可疑——不触发重试，首轮答案直接保留
     （457/1309/1330「verify 假阳性→重试改坏」形态被治本堵住）。
