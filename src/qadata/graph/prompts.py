@@ -61,10 +61,13 @@ def format_failure_history(attempts: list, verify_note: str | None) -> str:
 def strip_conclusion_prefix(text: str) -> str:
     """防御「结论：结论：」复读（respond 模板自带"结论："引导，模型可能照抄）。"""
     t = text.strip()
-    for prefix in ("结论：", "结论:"):
-        if t.startswith(prefix):
-            return t[len(prefix):].strip()
-    return t
+    while True:
+        stripped = t
+        for prefix in ("结论：", "结论:"):
+            if t.startswith(prefix):
+                t = t[len(prefix):].strip()
+        if t == stripped:
+            return t
 
 
 def respond_prompt(question: str, sql: str, rows_table: str, total: int, n: int) -> str:

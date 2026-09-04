@@ -65,3 +65,8 @@ def test_strip_conclusion_prefix():
     assert strip_conclusion_prefix("结论：Alice 最好") == "Alice 最好"
     assert strip_conclusion_prefix("结论:Alice") == "Alice"
     assert strip_conclusion_prefix("Alice 最好") == "Alice 最好"
+
+
+def test_strip_conclusion_prefix_multiple_layers():
+    assert strip_conclusion_prefix("结论：结论：Alice 最好") == "Alice 最好"
+    assert strip_conclusion_prefix("结论:结论：结论：Bob") == "Bob"
