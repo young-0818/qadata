@@ -93,3 +93,14 @@ def test_fetch_cap_count_timeout_degrades(fixture_db):
     r = execute_sql(fixture_db, sql, max_rows=2, fetch_cap=2, timeout_s=0.3)
     assert r.row_count == 3  # 降级：len(fetched) = fetch_cap + 1 的近似下界
     assert r.truncated is True and len(r.rows) == 2
+
+
+def test_view_query_allowed_end_to_end(fixture_db):
+    import sqlite3
+
+    conn = sqlite3.connect(fixture_db)
+    conn.execute("CREATE VIEW adults AS SELECT id, name FROM students WHERE grade >= 3")
+    conn.commit()
+    conn.close()
+    r = execute_sql(fixture_db, "SELECT name FROM adults")
+    assert r.rows == [("Alice",)]

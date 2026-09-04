@@ -75,3 +75,18 @@ def test_llm_selection_call_traced(fixture_conn, tmp_path):
                          max_chars=10, tracer=log)
     rec = json.loads((tmp_path / "t.jsonl").read_text(encoding="utf-8"))
     assert rec["node"] == "explore"
+
+
+def test_list_tables_includes_views(fixture_db):
+    import sqlite3
+
+    conn = sqlite3.connect(fixture_db)
+    conn.execute("CREATE VIEW adults AS SELECT id, name FROM students WHERE grade >= 3")
+    conn.commit()
+    conn.close()
+    conn = sqlite3.connect(f"file:{fixture_db}?mode=ro", uri=True)
+    try:
+        assert "adults" in list_tables(conn)
+        assert "CREATE VIEW adults" in get_schema(conn, "adults")
+    finally:
+        conn.close()

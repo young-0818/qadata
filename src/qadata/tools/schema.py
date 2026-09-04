@@ -11,14 +11,14 @@ _PICK_PROMPT = (
 
 def list_tables(conn: sqlite3.Connection) -> list[str]:
     rows = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        "SELECT name FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY name"
     ).fetchall()
     return [r[0] for r in rows]
 
 
 def get_schema(conn: sqlite3.Connection, table: str) -> str:
     row = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        "SELECT sql FROM sqlite_master WHERE type IN ('table','view') AND name=?", (table,)
     ).fetchone()
     return row[0] if row and row[0] else f"-- 表 {table} 无 DDL"
 
