@@ -28,10 +28,21 @@ def test_normal_aggregate_passes():
     assert v.passed is True and v.reason is None
 
 
-def test_truncated_suspicious():
+def test_truncated_not_suspicious():
     rows = [(i,) for i in range(10)]
     v = verify_result("列出全部", "SELECT * FROM students", _result(rows, truncated=True))
-    assert v.passed is False and "截断" in v.reason
+    assert v.passed is True and v.reason is None
+
+
+def test_empty_list_all_passes():
+    """M3 靶子：列出全部类问题空结果合法（M2 改坏主因的治本）。"""
+    v = verify_result("列出所有学生", "SELECT name FROM students", _result([]))
+    assert v.passed is True and v.reason is None
+
+
+def test_empty_aggregate_question_still_suspicious():
+    v = verify_result("有多少人", "SELECT COUNT(*) FROM students", _result([]))
+    assert v.passed is False and "空" in v.reason
 
 
 def test_normal_rows_pass():

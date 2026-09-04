@@ -109,3 +109,14 @@ def test_run_question_absorbs_unhandled_errors():
     assert ans.failed is True
     assert ans.conclusion.startswith("未能完成查询")
     assert ans.sql is None and ans.result is None and ans.error_summary
+
+
+def test_list_all_empty_not_retried(fixture_db):
+    """M3 靶子回归：列出全部类空结果不判可疑——不触发重试，首轮答案直接保留
+    （457/1309/1330「verify 假阳性→重试改坏」形态被治本堵住）。
+    注意 understand 改写必须保留列出类措辞——verify 按改写后问题判断。"""
+    llm = ScriptedLLM(["列出所有不及格的学生", "SELECT name FROM students WHERE grade = 99", "没有这样的学生"])
+    ans = run_question(fixture_db, "列出所有不及格的学生", llm=llm, settings=_S)
+    assert ans.failed is False
+    assert "没有这样的学生" in ans.conclusion
+    assert llm.calls == 3  # understand + generate + respond，无重试
