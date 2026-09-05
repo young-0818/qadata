@@ -24,7 +24,24 @@ def _accuracy(records: list[dict]) -> float:
     return sum(int(r["correct"]) for r in records) / len(records) if records else 0.0
 
 
-def build_report(baseline_path: str, current_path: str) -> str:
+# 题型切片展示顺序（与 qtypes 六类一致）；未知兜底排最后
+_LABEL_ORDER = ("趋势", "对比", "排名", "极值", "分布", "明细", "未知")
+
+
+def _load_types(types_path: str) -> dict[int, str]:
+    p = Path(types_path)
+    if not p.exists():
+        raise FileNotFoundError(f"标签文件不存在：{types_path}")
+    qtypes = {}
+    for line in p.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            r = json.loads(line)
+            qtypes[r["question_id"]] = r.get("qtype") or "未知"
+    return qtypes
+
+
+def build_report(baseline_path: str, current_path: str,
+                 types_path: str | None = None) -> str:
     base, cur = load_records(baseline_path), load_records(current_path)
     b_ids, c_ids = _by_id(base), _by_id(cur)
     rescued = sorted(i for i in b_ids if b_ids[i]["correct"] is False
@@ -54,6 +71,18 @@ def build_report(baseline_path: str, current_path: str) -> str:
                          f"{(r.get('error') or '')[:60]} |")
     else:
         lines.append("无")
+    if types_path:
+        # E2 题型切片（M4）：按 qtype 分组出准确率，M5 分路径报告复用同一机制
+        qtypes = _load_types(types_path)
+        by_type: dict[str, list[bool]] = {}
+        for r in cur:
+            by_type.setdefault(qtypes.get(r["question_id"], "未知"), []).append(r["correct"])
+        lines += ["", f"## 题型切片（来源：{types_path}）",
+                  "| 题型 | 题数 | 准确率 |", "|---|---|---|"]
+        for t in _LABEL_ORDER:
+            if t in by_type:
+                vs = by_type[t]
+                lines.append(f"| {t} | {len(vs)} | {sum(vs) / len(vs):.1%} |")
     gold_failed = [r for r in cur if r.get("gold_failed")]
     lines += ["", f"## gold_failed：{len(gold_failed)} 题 {[r['question_id'] for r in gold_failed]}"]
     return "\n".join(lines)

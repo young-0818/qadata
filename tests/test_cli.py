@@ -45,3 +45,21 @@ def test_ask_passes_evidence(fixture_db, monkeypatch):
     monkeypatch.setattr(m, "run_question", fake_run_question)
     cli_main.main(["ask", fixture_db, "问题", "--evidence", "A2 = district name"])
     assert captured["evidence"] == "A2 = district name"
+
+
+def test_report_with_types(tmp_path, capsys):
+    import json
+
+    def rec(qid, correct):
+        return {"question_id": qid, "db_id": "s", "difficulty": "simple",
+                "question": f"q{qid}", "correct": correct}
+
+    b = tmp_path / "b.jsonl"
+    c = tmp_path / "c.jsonl"
+    t = tmp_path / "t.jsonl"
+    b.write_text("\n".join(json.dumps(rec(i, True), ensure_ascii=False) for i in (0, 1)), encoding="utf-8")
+    c.write_text("\n".join(json.dumps(rec(i, False), ensure_ascii=False) for i in (0, 1)), encoding="utf-8")
+    t.write_text(json.dumps({"question_id": 0, "qtype": "极值"}, ensure_ascii=False), encoding="utf-8")
+    code = cli_main.main(["report", "--baseline", str(b), "--current", str(c), "--types", str(t)])
+    assert code == 0
+    assert "题型切片" in capsys.readouterr().out

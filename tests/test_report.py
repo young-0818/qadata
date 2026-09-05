@@ -39,3 +39,33 @@ def test_load_records_parses(tmp_path):
     p = _write_records(tmp_path, "r.jsonl", [_rec(0, True)])
     recs = load_records(p)
     assert len(recs) == 1 and recs[0]["question_id"] == 0
+
+
+def _write_types(tmp_path, pairs):
+    p = tmp_path / "types.jsonl"
+    p.write_text("\n".join(
+        json.dumps({"question_id": i, "qtype": t}, ensure_ascii=False) for i, t in pairs),
+        encoding="utf-8")
+    return str(p)
+
+
+def test_build_report_types_slice(tmp_path):
+    """E2 题型切片：按 qtype 分组出准确率；缺标签题计「未知」不炸。"""
+    base = _write_records(tmp_path, "b.jsonl",
+                          [_rec(i, True) for i in (0, 1, 2, 4)])
+    cur = _write_records(tmp_path, "c.jsonl",
+                         [_rec(0, True), _rec(1, False), _rec(2, True), _rec(4, False)])
+    types = _write_types(tmp_path, [(0, "极值"), (1, "极值"), (2, "分布")])
+    md = build_report(base, cur, types_path=types)
+    assert "题型切片" in md
+    assert "| 极值 | 2 | 50.0% |" in md
+    assert "| 分布 | 1 | 100.0% |" in md
+    assert "| 未知 | 1 | 0.0% |" in md  # 题 4 无标签
+
+
+def test_build_report_without_types_no_slice(tmp_path):
+    """不传 types_path 时报告保持 M3 形态（无切片段）。"""
+    base = _write_records(tmp_path, "b.jsonl", [_rec(0, True)])
+    cur = _write_records(tmp_path, "c.jsonl", [_rec(0, False)])
+    md = build_report(base, cur)
+    assert "题型切片" not in md
