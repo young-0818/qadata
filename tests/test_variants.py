@@ -57,6 +57,61 @@ def test_run_variants_passes_precise_settings(tmp_path, monkeypatch):
     assert captured[0].precise_temperature == 0.0  # 0 是合法值，不得被 or 吞掉
 
 
+def test_run_variants_passes_settings_and_eval_flags_to_run_eval(monkeypatch):
+    """帕累托正确性关键：variant Settings 必须透传给 run_eval（否则节点回退
+    FALLBACK_SETTINGS，precise_candidates 静默失效＝三点曲线全成 c1）；
+    concurrency/qps/skip_respond 同样不得被 variants 分支吞掉。"""
+    from qadata.config import Settings
+
+    calls = []
+
+    def fake_run_eval(*args, **kwargs):
+        calls.append(kwargs)
+        return {"total": 0, "correct": 0}
+
+    monkeypatch.setattr("qadata.eval.variants.load_settings",
+                        lambda: Settings(api_key="k", base_url="b", model="m"))
+    monkeypatch.setattr("qadata.eval.variants.build_llm", lambda s: object())
+    monkeypatch.setattr("qadata.eval.variants.run_eval", fake_run_eval)
+    monkeypatch.setattr("qadata.eval.variants.build_multi_report", lambda *a, **k: "")
+
+    run_variants("q.json", "d", [{"name": "c3", "model": "m", "precise_candidates": 3}],
+                 concurrency=5, qps=8, skip_respond=True)
+
+    kw = calls[0]
+    assert kw["concurrency"] == 5
+    assert kw["skip_respond"] is True
+    assert kw["settings"].precise_candidates == 3
+    assert kw["settings"].max_qps == 8  # --qps 覆盖生效
+    assert kw["limiter"] is not None  # 限速器已构造并共享
+
+
+def test_cli_variants_forwards_concurrency_qps_skip_respond(monkeypatch, tmp_path):
+    """CLI --variants 分支不得吞掉运行参数（与直跑分支同语义）。"""
+    from qadata.cli.main import main
+
+    yaml_path = tmp_path / "v.yaml"
+    yaml_path.write_text("variants:\n  - name: a\n    model: m\n", encoding="utf-8")
+    ids_path = tmp_path / "ids.json"
+    ids_path.write_text("[0]", encoding="utf-8")
+    captured = {}
+
+    import qadata.eval.variants as variants_mod
+
+    def fake_run_variants(questions_path, db_dir, variants, **kwargs):
+        captured["variants"] = variants
+        captured.update(kwargs)
+
+    monkeypatch.setattr(variants_mod, "run_variants", fake_run_variants)
+    main(["eval", "--questions", "q.json", "--db-dir", "d",
+          "--ids", str(ids_path), "--variants", str(yaml_path),
+          "--concurrency", "5", "--qps", "8", "--skip-respond"])
+    assert captured["concurrency"] == 5
+    assert captured["qps"] == 8
+    assert captured["skip_respond"] is True
+    assert captured["question_ids"] == [0]
+
+
 def test_run_variants_writes_per_variant_and_compares(tmp_path, monkeypatch):
     """全假模型：各变体产出独立 JSONL + 汇总表；不得触网。"""
     from qadata.config import Settings

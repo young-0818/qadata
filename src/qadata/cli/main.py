@@ -76,7 +76,9 @@ def main(argv: list[str] | None = None) -> int:
             from qadata.eval.variants import load_variants, run_variants
 
             run_variants(args.questions, args.db_dir, load_variants(args.variants),
-                         question_ids=question_ids, sample=args.sample, resume=args.resume)
+                         question_ids=question_ids, sample=args.sample, resume=args.resume,
+                         concurrency=args.concurrency, qps=args.qps,
+                         skip_respond=args.skip_respond)
             return 0
         from dataclasses import replace as dc_replace
 

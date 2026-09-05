@@ -9,6 +9,7 @@ from qadata.config import Settings, load_settings
 from qadata.eval.bird import run_eval
 from qadata.eval.report import build_multi_report
 from qadata.llm.gateway import build_llm
+from qadata.llm.ratelimit import RateLimiter
 
 console = Console()
 
@@ -26,23 +27,32 @@ def load_variants(path: str) -> list[dict]:
 
 def run_variants(questions_path: str, db_dir: str, variants: list[dict],
                  question_ids: list[int] | None = None, sample: int | None = None,
-                 resume: bool = False) -> list[dict]:
+                 resume: bool = False, concurrency: int = 1,
+                 qps: float | None = None, skip_respond: bool = False) -> list[dict]:
+    """逐变体跑评测。concurrency/qps/skip_respond 与 CLI 直跑分支同语义透传。
+
+    注意：variant 的 settings 必须透传给 run_eval——节点从 settings 读
+    precise_candidates，缺省会静默回退 FALLBACK_SETTINGS（候选数＝1），
+    帕累托三点会全退化成一个点。"""
     base = load_settings()
     summaries = []
     for v in variants:
         s = Settings(api_key=base.api_key, base_url=v.get("base_url") or base.base_url,
                      model=v["model"], max_rows=base.max_rows,
                      retry_budget=base.retry_budget, sql_timeout_s=base.sql_timeout_s,
-                     llm_timeout_s=base.llm_timeout_s, max_qps=base.max_qps,
+                     llm_timeout_s=base.llm_timeout_s,
+                     max_qps=base.max_qps if qps is None else qps,
                      precise_candidates=v.get("precise_candidates")
                      or base.precise_candidates,
                      # 0.0 是合法温度，不得被 or 吞掉回默认值
                      precise_temperature=v.get("precise_temperature")
                      if v.get("precise_temperature") is not None
                      else base.precise_temperature)
+        limiter = RateLimiter(s.max_qps) if s.max_qps > 0 else None
         summary = run_eval(questions_path, db_dir, sample=sample, question_ids=question_ids,
                            llm=build_llm(s), out_path=f"runs/eval-{v['name']}.jsonl",
-                           resume=resume)
+                           resume=resume, concurrency=concurrency, settings=s,
+                           limiter=limiter, skip_respond=skip_respond)
         summaries.append({"name": v["name"], **summary})
     paths = [f"runs/eval-{v['name']}.jsonl" for v in variants]
     console.print(build_multi_report(paths, [v["name"] for v in variants]))
