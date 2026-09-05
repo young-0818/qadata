@@ -72,6 +72,27 @@ def test_connection_error_retried():
     assert out.content == "ok" and llm.calls == 2
 
 
+def test_backoff_acquires_limiter_before_each_attempt():
+    """限速与重试叠加：每次真实调用（含重试）前都先 acquire。"""
+    acquires = []
+
+    class FakeLimiter:
+        def acquire(self):
+            acquires.append(1)
+
+    llm = FlakyLLM(fail_times=1, exc=_rate_limit_error())
+    out = invoke_with_backoff(llm, "p", sleep=lambda _: None, limiter=FakeLimiter())
+    assert out.content == "ok"
+    assert len(acquires) == 2  # 两次尝试各 acquire 一次
+
+
+def test_backoff_without_limiter_unchanged():
+    """不给 limiter 时行为与旧版一致（无 acquire 动作）。"""
+    llm = FlakyLLM(fail_times=0, exc=None)
+    out = invoke_with_backoff(llm, "p", sleep=lambda _: None)
+    assert out.content == "ok" and llm.calls == 1
+
+
 def test_build_llm_passes_timeout(monkeypatch):
     captured = {}
 

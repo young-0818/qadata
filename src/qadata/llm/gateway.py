@@ -31,10 +31,13 @@ def _is_retryable(exc: Exception) -> bool:
 
 
 def invoke_with_backoff(llm, prompt: str, *, max_retries: int = 3,
-                        base_delay: float = 1.0, sleep=time.sleep):
-    """指数退避＋抖动（[0.5,1.0) 倍乘避免雪崩）；不可重试或耗尽即上抛。"""
+                        base_delay: float = 1.0, sleep=time.sleep, limiter=None):
+    """指数退避＋抖动（[0.5,1.0) 倍乘避免雪崩）；不可重试或耗尽即上抛。
+    limiter：可选 RateLimiter——每次真实调用（含重试）前 acquire（并发评测限速）。"""
     for attempt in range(max_retries + 1):
         try:
+            if limiter is not None:
+                limiter.acquire()
             return llm.invoke(prompt)
         except Exception as e:
             if attempt >= max_retries or not _is_retryable(e):

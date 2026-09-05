@@ -18,6 +18,7 @@ def _isolate_env(monkeypatch):
     monkeypatch.delenv("QADATA_RETRY_BUDGET", raising=False)
     monkeypatch.delenv("QADATA_SQL_TIMEOUT_S", raising=False)
     monkeypatch.delenv("QADATA_LLM_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("QADATA_MAX_QPS", raising=False)
 
 
 def test_load_settings_reads_env(monkeypatch):
@@ -79,4 +80,23 @@ def test_bad_llm_timeout_readable_error(monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
     monkeypatch.setenv("QADATA_LLM_TIMEOUT_S", "abc")
     with pytest.raises(RuntimeError, match="QADATA_LLM_TIMEOUT_S"):
+        load_settings()
+
+
+def test_load_settings_max_qps_default(monkeypatch):
+    """默认不限速（0）；并发评测按需用 --qps 打开。"""
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    assert load_settings().max_qps == 0.0
+
+
+def test_load_settings_max_qps_from_env(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setenv("QADATA_MAX_QPS", "8")
+    assert load_settings().max_qps == 8.0
+
+
+def test_bad_max_qps_readable_error(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setenv("QADATA_MAX_QPS", "abc")
+    with pytest.raises(RuntimeError, match="QADATA_MAX_QPS"):
         load_settings()

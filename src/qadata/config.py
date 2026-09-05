@@ -14,6 +14,7 @@ class Settings:
     retry_budget: int = 3     # 自纠错总尝试次数（含首次）
     sql_timeout_s: float = 5.0  # 沙箱资源层：查询超时
     llm_timeout_s: float = 120.0  # LLM 客户端超时（M2 实测单次 generate 188s 异常态兜底）
+    max_qps: float = 0.0  # 全局限速（次/秒）；0=不限速（并发评测用 --qps 打开）
 
 
 def _env_int(name: str, default: int, *, minimum: int | None = None) -> int:
@@ -51,6 +52,7 @@ def load_settings() -> Settings:
         retry_budget=_env_int("QADATA_RETRY_BUDGET", 3, minimum=1),
         sql_timeout_s=_env_float("QADATA_SQL_TIMEOUT_S", 5.0, minimum=0.1),
         llm_timeout_s=_env_float("QADATA_LLM_TIMEOUT_S", 120.0, minimum=10),
+        max_qps=_env_float("QADATA_MAX_QPS", 0.0, minimum=0.0),
     )
 
 

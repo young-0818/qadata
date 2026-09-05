@@ -36,10 +36,10 @@ def extract_usage(message) -> dict:
     }
 
 
-def timed_invoke(llm, prompt: str, node: str, tracer: TraceLogger | None) -> str:
+def timed_invoke(llm, prompt: str, node: str, tracer: TraceLogger | None, limiter=None) -> str:
     """调用 LLM（带指数退避）并记录该节点的 token 与延迟。返回 response.content。"""
     t0 = time.perf_counter()
-    resp = invoke_with_backoff(llm, prompt)
+    resp = invoke_with_backoff(llm, prompt, limiter=limiter)
     latency = int((time.perf_counter() - t0) * 1000)
     if tracer is not None:
         usage = extract_usage(resp)
