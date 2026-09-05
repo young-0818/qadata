@@ -1,13 +1,13 @@
 {
-  "date": "2026-09-03",
-  "commit": "c3679cb",
+  "date": "2026-09-05",
+  "commit": "a11544f",
   "question_ids_file": "tests/smoke_ids.json",
-  "accuracy": 0.5,
+  "accuracy": 0.9,
   "by_difficulty": {
-    "moderate": 0.5,
-    "simple": 0.4,
+    "moderate": 1.0,
+    "simple": 0.8,
     "challenging": 1.0
   },
   "model": "deepseek-v4-flash-0731",
-  "note": "取自 50 题配对对比运行的冒烟子集（零额外成本）。qwen3.7-flash 免费配额耗尽后切换模型，基线与新模型绑定；换模型须重建基线。"
+  "note": "M4 收尾重建（D 口径规则 5 落地后基线，--skip-respond 参数同 M4 真跑，判分不读结论不构成混杂）。旧基线 0.5（2026-09-03, c3679cb）已失效。唯一失分题 51（B 靶：街道地址选列歧义，B v1 已回滚，已知短板）。基线与模型绑定，换模型须重建。运行产物 runs/eval-m4-smoke.jsonl。"
 }
