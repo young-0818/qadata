@@ -15,10 +15,16 @@ def test_system_rules_is_static_prefix_of_sql_prompt():
     assert "SCHEMA_TEXT" in p and "问题" in p
 
 
-def test_system_rules_forbids_formatting():
-    assert "不格式化输出" in SYSTEM_RULES
+def test_system_rules_forbids_stringification_with_questiontext_exemption():
+    """M4-D（228 探针实证）：禁字符串化/拼接 %，但题面明示百分比或精度时按题面计算保留。
+
+    现行「不格式化输出」压制了模型按题面做 ×100/ROUND 的意愿（A 规则 0/3 → B 规则 3/3 判对）。
+    """
+    assert "不字符串化输出" in SYSTEM_RULES
+    assert "百分比或小数精度" in SYSTEM_RULES
+    assert "不要拼接 %" in SYSTEM_RULES
     p = sql_prompt(schema="S", evidence="", question="Q")
-    assert "不格式化输出" in p and p.startswith(SYSTEM_RULES)
+    assert "不字符串化输出" in p and p.startswith(SYSTEM_RULES)  # 前缀缓存纪律不变
 
 
 def test_system_rules_forbids_extra_columns():
