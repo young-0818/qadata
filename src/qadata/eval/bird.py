@@ -127,6 +127,11 @@ def _run_concurrent_path(questions, db_dir, llm, max_rows, out, resume,
     run_id = uuid.uuid4().hex[:12]
     todo = [q for q in questions
             if not (resume and _shard_paths(q["question_id"], out)[0].exists())]
+    if not resume:
+        # 新一轮（非续跑）先清除待跑题的遗留分片：中间态收口合并不得混入上次运行的记录
+        for q in todo:
+            for p in _shard_paths(q["question_id"], out):
+                p.unlink(missing_ok=True)
     if todo:
         with ThreadPoolExecutor(max_workers=max(1, min(concurrency, len(todo)))) as ex:
             futs = {}

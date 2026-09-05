@@ -188,6 +188,39 @@ def test_run_eval_flush_makes_progress_visible(tmp_path, monkeypatch):
     run_eval(str(tmp_path / "dev.json"), db_dir)
 
 
+def test_run_eval_concurrent_stale_shards_cleared(tmp_path, monkeypatch):
+    """非 resume 新跑必须清掉上次运行遗留分片——中间态合并不得混入旧记录。"""
+    import time
+
+    _make_three(tmp_path, monkeypatch)
+    shard_dir = tmp_path / "runs" / "eval-shards"
+    shard_dir.mkdir(parents=True)
+    stale = {"question_id": 0, "db_id": "school", "difficulty": "simple", "question": "q0",
+             "gold_sql": "SELECT 1", "gold_failed": False, "pred_sql": "STALE",
+             "correct": False, "error": "old", "error_class": "judge_mismatch"}
+    (shard_dir / "0.jsonl").write_text(json.dumps(stale) + "\n", encoding="utf-8")
+
+    clean_intermediate = []
+    from qadata.types import Answer
+
+    def fake(db_path_, question_, evidence="", **kw):
+        if question_ == "q0":
+            time.sleep(0.5)  # 慢题：其 STALE 分片若未清，将混入首合并中间态
+        elif question_ == "q1":
+            time.sleep(0.15)  # q2 先完成触发首合并，q1 在其后检查中间态
+            out = tmp_path / "runs" / "eval-last.jsonl"
+            if out.exists():
+                clean_intermediate.append("STALE" not in out.read_text(encoding="utf-8"))
+        return Answer(conclusion="ok", sql="SELECT 1", failed=False)
+
+    monkeypatch.setattr("qadata.eval.bird.run_question", fake)
+    run_eval(str(tmp_path / "dev.json"), str(tmp_path), concurrency=3)
+    assert clean_intermediate and all(clean_intermediate)
+    out = tmp_path / "runs" / "eval-last.jsonl"
+    recs = [json.loads(l) for l in out.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert len(recs) == 3 and all(r["correct"] for r in recs)
+
+
 def _make_three(tmp_path, monkeypatch):
     """并发测试共用脚手架：school 库 + 3 题 dev.json + chdir 隔离 runs/。"""
     make_fixture_db(tmp_path)
