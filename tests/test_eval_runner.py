@@ -281,6 +281,23 @@ def test_run_eval_concurrent_merge_idempotent(tmp_path, monkeypatch):
     assert summary["total"] == 3
 
 
+def test_run_eval_skip_respond_plumbed(tmp_path, monkeypatch):
+    """--skip-respond 透传：run_eval → _run_one → run_question 全链路。"""
+    _make_three(tmp_path, monkeypatch)
+    captured = {}
+    from qadata.types import Answer
+
+    def fake_run_question(db_path_, question_, evidence="", **kw):
+        captured["seen"] = captured.get("seen", 0) + 1
+        captured["skip_respond"] = kw.get("skip_respond")
+        return Answer(conclusion="ok", sql="SELECT 1", failed=False)
+
+    monkeypatch.setattr("qadata.eval.bird.run_question", fake_run_question)
+    run_eval(str(tmp_path / "dev.json"), str(tmp_path), concurrency=3, skip_respond=True)
+    assert captured["seen"] == 3
+    assert captured["skip_respond"] is True
+
+
 def test_run_eval_concurrent_traces_merged(tmp_path, monkeypatch):
     """traces 同分片：worker 写各自 traces 分片，主线程收口追加进 runs/traces.jsonl。"""
     _make_three(tmp_path, monkeypatch)

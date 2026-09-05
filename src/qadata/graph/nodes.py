@@ -51,8 +51,11 @@ def format_rows(result: QueryResult, limit: int = PREVIEW_ROWS) -> str:
     return _format_preview(result.columns, result.rows[:limit])
 
 
-def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None):
-    """节点工厂：闭包注入 llm/tracer/settings/limiter，便于测试时替换假模型与配置。"""
+def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
+               skip_respond: bool = False):
+    """节点工厂：闭包注入 llm/tracer/settings/limiter，便于测试时替换假模型与配置。
+    skip_respond：评测模式——成功路径不生成结论文本（判分只读 answer.sql 的执行结果），
+    失败诚实汇报与回退重执行不受影响。产品路径（ask/Web）默认 False，全家桶保留。"""
     s = settings or FALLBACK_SETTINGS
 
     def understand(state: dict) -> dict:
@@ -148,24 +151,29 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None)
                 )
             }
         preview = res.rows[:PREVIEW_ROWS]  # 预览行只算一次，表格与 n= 同源派生
-        rows_table = _format_preview(res.columns, preview)
-        if res.truncated:
-            # 截断提示：让模型如实措辞、勿把截断行当全量（仅影响 prompt 呈现，不参与判分）
-            rows_table += "\n（注意：结果已截断，实际行数可能更多）"
-        text = timed_invoke(
-            llm,
-            respond_prompt(
-                question=state["question"],
-                sql=sql or "",
-                rows_table=rows_table,
-                total=res.row_count,
-                n=len(preview),
-            ),
-            "respond",
-            tracer,
-            limiter,
-        )
-        conclusion = strip_conclusion_prefix(str(text))
+        if skip_respond:
+            # 评测模式：结论不参与判分（_run_one 只重执行 answer.sql），占位文本省
+            # 一次 LLM 调用；verify/回退标注仍按原逻辑挂上（确定性，不烧 token）
+            conclusion = "（评测模式：跳过结论生成）"
+        else:
+            rows_table = _format_preview(res.columns, preview)
+            if res.truncated:
+                # 截断提示：让模型如实措辞、勿把截断行当全量（仅影响 prompt 呈现，不参与判分）
+                rows_table += "\n（注意：结果已截断，实际行数可能更多）"
+            text = timed_invoke(
+                llm,
+                respond_prompt(
+                    question=state["question"],
+                    sql=sql or "",
+                    rows_table=rows_table,
+                    total=res.row_count,
+                    n=len(preview),
+                ),
+                "respond",
+                tracer,
+                limiter,
+            )
+            conclusion = strip_conclusion_prefix(str(text))
         note = state.get("verify_note")
         if note:  # 可疑但预算耗尽：数据真实，如实呈现＋标注（不是假失败）
             conclusion += f"\n（注意：该结果未通过自动校验：{note}）"

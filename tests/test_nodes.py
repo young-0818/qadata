@@ -34,6 +34,47 @@ def test_nodes_pass_limiter_to_timed_invoke(monkeypatch):
     assert captured["understand"] is sentinel
 
 
+def test_skip_respond_placeholder_conclusion_without_llm(fixture_db):
+    """评测模式 --skip-respond：成功路径不调 LLM（ScriptedLLM 空脚本零容忍），
+    占位结论入 Answer，sql/result 原样保留（判分只读 sql）。"""
+    from tests.fakes import ScriptedLLM
+
+    llm = ScriptedLLM(["每个学生的平均成绩是多少", "SELECT name FROM students WHERE id = 1"])
+    nodes = make_nodes(llm, skip_respond=True)
+    state = {"db_path": fixture_db, "question": "谁成绩最好"}
+    state.update(nodes["understand"](state))
+    state.update(nodes["explore"](state))
+    state.update(nodes["generate"](state))
+    state.update(nodes["execute"](state))
+    state.update(nodes["verify"](state))
+    state.update(nodes["respond"](state))
+    ans = state["answer"]
+    assert llm.calls == 2  # understand + generate；respond 未调（超脚本即炸）
+    assert ans.failed is False
+    assert ans.sql == "SELECT name FROM students WHERE id = 1"
+    assert ans.result.rows == [("Alice",)]
+    assert "跳过结论生成" in ans.conclusion
+
+
+def test_skip_respond_failure_path_stays_honest(fixture_db):
+    """失败路径（执行失败耗尽）仍走确定性诚实汇报，skip 只作用于成功路径。"""
+    from tests.fakes import ScriptedLLM
+
+    llm = ScriptedLLM(["q", "SELECT nope FROM students"])
+    nodes = make_nodes(llm, skip_respond=True)
+    state = {"db_path": fixture_db, "question": "谁成绩最好"}
+    state.update(nodes["understand"](state))
+    state.update(nodes["explore"](state))
+    state.update(nodes["generate"](state))
+    state.update(nodes["execute"](state))
+    state.update(nodes["verify"](state))
+    state.update(nodes["respond"](state))
+    ans = state["answer"]
+    assert llm.calls == 2  # 失败汇报本就不调 LLM（永不编造）
+    assert ans.failed is True
+    assert "未能完成查询" in ans.conclusion and "nope" in ans.conclusion
+
+
 def test_nodes_happy_path(fixture_db):
     llm = FakeListChatModel(
         responses=["每个学生的平均成绩是多少", "SELECT name FROM students WHERE id = 1", "Alice 的成绩最好"]

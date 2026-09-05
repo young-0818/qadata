@@ -51,6 +51,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="并发路数（默认 5，5-8；1=串行，兼容旧语义）")
     p_eval.add_argument("--qps", type=float, default=None,
                         help="全局限速（次/秒）；不传=不限速")
+    p_eval.add_argument("--skip-respond", action="store_true",
+                        help="评测模式：跳过结论 LLM 生成（判分不读结论，省 1 次调用/题）")
 
     p_report = sub.add_parser("report", help="两轮评测对比：qadata report --baseline A --current B")
     p_report.add_argument("--baseline", required=True)
@@ -96,6 +98,7 @@ def main(argv: list[str] | None = None) -> int:
             settings=settings,
             limiter=limiter,
             llm=build_llm(settings),  # 共享实例贯穿所有线程（替代逐题自建）
+            skip_respond=args.skip_respond,
         )
         return 0
     if args.cmd == "report":

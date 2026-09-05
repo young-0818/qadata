@@ -22,9 +22,10 @@ def _route_after_verify(state: dict, budget: int) -> str:
     return "generate" if len(state.get("attempts", [])) < budget else "respond"
 
 
-def build_graph(llm, tracer=None, settings: Settings | None = None, limiter=None):
+def build_graph(llm, tracer=None, settings: Settings | None = None, limiter=None,
+                skip_respond: bool = False):
     s = settings or FALLBACK_SETTINGS
-    nodes = make_nodes(llm, tracer, settings=s, limiter=limiter)
+    nodes = make_nodes(llm, tracer, settings=s, limiter=limiter, skip_respond=skip_respond)
     g = StateGraph(AgentState)
     for name in ("understand", "explore", "generate", "execute", "verify", "respond"):
         g.add_node(name, nodes[name])
@@ -47,12 +48,14 @@ def build_graph(llm, tracer=None, settings: Settings | None = None, limiter=None
 
 
 def run_question(db_path: str, question: str, evidence: str = "", llm=None,
-                 tracer=None, settings: Settings | None = None, limiter=None) -> Answer:
+                 tracer=None, settings: Settings | None = None, limiter=None,
+                 skip_respond: bool = False) -> Answer:
     try:
         if llm is None:
             settings = settings or load_settings()
             llm = build_llm(settings)
-        graph = build_graph(llm, tracer, settings=settings, limiter=limiter)
+        graph = build_graph(llm, tracer, settings=settings, limiter=limiter,
+                            skip_respond=skip_respond)
         final = graph.invoke({"db_path": db_path, "question": question, "evidence": evidence})
         return final["answer"]
     except Exception as e:  # noqa: BLE001 run_question 是最外层守护：有意收敛一切裸异常
