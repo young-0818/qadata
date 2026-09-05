@@ -93,6 +93,22 @@ def test_backoff_without_limiter_unchanged():
     assert out.content == "ok" and llm.calls == 1
 
 
+def test_build_llm_precise_mode_uses_precise_temperature(monkeypatch):
+    """精准模式（候选>1）温度切换 precise_temperature；默认关闭时仍 0。"""
+    captured = {}
+
+    class FakeChatOpenAI:
+        def __init__(self, **kw):
+            captured.update(kw)
+
+    monkeypatch.setattr("qadata.llm.gateway.ChatOpenAI", FakeChatOpenAI)
+    build_llm(Settings(api_key="k", base_url="b", model="m",
+                       precise_candidates=3, precise_temperature=0.3))
+    assert captured["temperature"] == 0.3
+    build_llm(Settings(api_key="k", base_url="b", model="m"))
+    assert captured["temperature"] == 0
+
+
 def test_build_llm_passes_timeout(monkeypatch):
     captured = {}
 

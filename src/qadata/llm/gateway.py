@@ -12,11 +12,13 @@ RETRYABLE_STATUS = {429, 500, 502, 503, 504}  # 限流与服务端抖动；401/4
 
 def build_llm(settings: Settings | None = None) -> ChatOpenAI:
     s = settings or load_settings()
+    # 精准模式（候选>1）用 precise_temperature 制造候选多样性；关闭时保持 temperature=0
+    temp = s.precise_temperature if s.precise_candidates > 1 else 0
     return ChatOpenAI(
         model=s.model,
         api_key=s.api_key,
         base_url=s.base_url,
-        temperature=0,
+        temperature=temp,
         request_timeout=s.llm_timeout_s,
     )
 

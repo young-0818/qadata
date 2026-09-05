@@ -27,6 +27,36 @@ def test_load_variants_bad_config_raises(tmp_path, content, match):
         load_variants(str(p))
 
 
+def test_run_variants_passes_precise_settings(tmp_path, monkeypatch):
+    """变体可选 precise_candidates/precise_temperature 透传进 Settings（M4-C 帕累托用）。"""
+    from qadata.config import Settings
+    from tests.conftest import make_fixture_db
+    from tests.fakes import ScriptedLLM
+
+    make_fixture_db(tmp_path)
+    import shutil
+    (tmp_path / "school").mkdir(exist_ok=True)
+    shutil.move(str(tmp_path / "school.sqlite"), str(tmp_path / "school" / "school.sqlite"))
+    data = [{"question_id": 0, "db_id": "school", "question": "q0", "evidence": "",
+             "SQL": "SELECT name FROM students", "difficulty": "simple"}]
+    (tmp_path / "dev.json").write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("qadata.eval.variants.load_settings",
+                        lambda: Settings(api_key="k", base_url="b", model="m"))
+    captured = []
+
+    def fake_build(s):
+        captured.append(s)
+        return ScriptedLLM(["q0", "SELECT name FROM students", "ok"])
+
+    monkeypatch.setattr("qadata.eval.variants.build_llm", fake_build)
+    run_variants(str(tmp_path / "dev.json"), str(tmp_path),
+                 [{"name": "c3", "model": "m", "precise_candidates": 3,
+                   "precise_temperature": 0.0}])
+    assert captured[0].precise_candidates == 3
+    assert captured[0].precise_temperature == 0.0  # 0 是合法值，不得被 or 吞掉
+
+
 def test_run_variants_writes_per_variant_and_compares(tmp_path, monkeypatch):
     """全假模型：各变体产出独立 JSONL + 汇总表；不得触网。"""
     from qadata.config import Settings

@@ -15,4 +15,6 @@ class AgentState(TypedDict, total=False):
     attempts: list[SqlAttempt]
     last_error: str | None
     verify_note: str | None  # verify 判定可疑的原因；None=通过或未经 verify
+    precise_candidates: list[str] | None  # M4-C 载荷键（非预算键）：同轮多候选的 SQL 列表；
+    # 账本仍由 len(attempts) 承担——批量=一轮，execute 用完即清（整值覆盖语义显式置 None）
     answer: Answer | None

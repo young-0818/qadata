@@ -19,6 +19,8 @@ def _isolate_env(monkeypatch):
     monkeypatch.delenv("QADATA_SQL_TIMEOUT_S", raising=False)
     monkeypatch.delenv("QADATA_LLM_TIMEOUT_S", raising=False)
     monkeypatch.delenv("QADATA_MAX_QPS", raising=False)
+    monkeypatch.delenv("QADATA_PRECISE_CANDIDATES", raising=False)
+    monkeypatch.delenv("QADATA_PRECISE_TEMPERATURE", raising=False)
 
 
 def test_load_settings_reads_env(monkeypatch):
@@ -99,4 +101,31 @@ def test_bad_max_qps_readable_error(monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
     monkeypatch.setenv("QADATA_MAX_QPS", "abc")
     with pytest.raises(RuntimeError, match="QADATA_MAX_QPS"):
+        load_settings()
+
+
+def test_precise_defaults_off(monkeypatch):
+    """精准模式默认关闭：候选数 1（不投票），温度 0.3 仅精准态使用。"""
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    s = load_settings()
+    assert s.precise_candidates == 1 and s.precise_temperature == 0.3
+
+
+def test_precise_candidates_from_env(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setenv("QADATA_PRECISE_CANDIDATES", "3")
+    assert load_settings().precise_candidates == 3
+
+
+def test_precise_candidates_below_one_rejected(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setenv("QADATA_PRECISE_CANDIDATES", "0")
+    with pytest.raises(RuntimeError, match="QADATA_PRECISE_CANDIDATES"):
+        load_settings()
+
+
+def test_negative_precise_temperature_rejected(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setenv("QADATA_PRECISE_TEMPERATURE", "-1")
+    with pytest.raises(RuntimeError, match="QADATA_PRECISE_TEMPERATURE"):
         load_settings()

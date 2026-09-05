@@ -15,6 +15,8 @@ class Settings:
     sql_timeout_s: float = 5.0  # 沙箱资源层：查询超时
     llm_timeout_s: float = 120.0  # LLM 客户端超时（M2 实测单次 generate 188s 异常态兜底）
     max_qps: float = 0.0  # 全局限速（次/秒）；0=不限速（并发评测用 --qps 打开）
+    precise_candidates: int = 1  # M4-C 精准模式候选数（1=关闭；3/5 建议奇数）
+    precise_temperature: float = 0.3  # 精准模式采样温度（候选>1 时生效；关闭时无效）
 
 
 def _env_int(name: str, default: int, *, minimum: int | None = None) -> int:
@@ -53,6 +55,8 @@ def load_settings() -> Settings:
         sql_timeout_s=_env_float("QADATA_SQL_TIMEOUT_S", 5.0, minimum=0.1),
         llm_timeout_s=_env_float("QADATA_LLM_TIMEOUT_S", 120.0, minimum=10),
         max_qps=_env_float("QADATA_MAX_QPS", 0.0, minimum=0.0),
+        precise_candidates=_env_int("QADATA_PRECISE_CANDIDATES", 1, minimum=1),
+        precise_temperature=_env_float("QADATA_PRECISE_TEMPERATURE", 0.3, minimum=0.0),
     )
 
 

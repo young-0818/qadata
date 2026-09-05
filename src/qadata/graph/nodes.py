@@ -2,6 +2,7 @@
 import re
 
 from qadata.config import FALLBACK_SETTINGS, Settings
+from qadata.graph.precise import NO_MAJORITY_ERROR, run_precise_batch
 from qadata.graph.prompts import (
     format_failure_history,
     respond_prompt,
@@ -79,6 +80,25 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
             question=state["question"],
             history=history,
         )
+        if s.precise_candidates > 1:
+            # 精准模式：同一 prompt 连打 K 发（temperature 由 build_llm 按候选数切换，
+            # 多样性已探针验证）；提取失败的候选丢弃，全灭走提取失败入账路径
+            sqls, extract_fails = [], 0
+            for _ in range(s.precise_candidates):
+                text = timed_invoke(llm, prompt, "generate", tracer, limiter)
+                try:
+                    sqls.append(extract_sql(str(text)))
+                except ValueError:
+                    extract_fails += 1
+            if tracer is not None and (sqls or extract_fails):
+                tracer.log("precise_generate", valid=len(sqls), extraction_failed=extract_fails)
+            if not sqls:
+                err = f"精准模式 {s.precise_candidates} 次采样均未提取出合法 SQL"
+                attempts = list(state.get("attempts", []))
+                attempts.append(SqlAttempt(sql="", error=err))
+                return {"current_sql": None, "last_error": err, "attempts": attempts,
+                        "precise_candidates": None}
+            return {"current_sql": sqls[0], "last_error": None, "precise_candidates": sqls}
         text = timed_invoke(llm, prompt, "generate", tracer, limiter)
         try:
             sql = extract_sql(str(text))
@@ -89,6 +109,28 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         return {"current_sql": sql, "last_error": None}
 
     def execute(state: dict) -> dict:
+        candidates = state.get("precise_candidates")
+        if candidates and len(candidates) > 1:
+            # 票决轮（M4-C）：批量=一轮账本，attempts 只记一条；用完显式清载荷键
+            outcome = run_precise_batch(state["db_path"], candidates,
+                                        max_rows=s.max_rows, timeout_s=s.sql_timeout_s,
+                                        tracer=tracer)
+            attempts = list(state.get("attempts", []))
+            if outcome.winner_sql is None:
+                err = f"精准模式 {len(candidates)} 个候选全部执行失败"
+                if outcome.fail_excerpt:
+                    err += f"：{outcome.fail_excerpt}"
+                attempts.append(SqlAttempt(sql="", error=err))
+                return {"attempts": attempts, "result": None, "last_error": err,
+                        "precise_candidates": None}
+            if outcome.no_majority:
+                attempts.append(SqlAttempt(sql="", error=NO_MAJORITY_ERROR))
+            else:
+                attempts.append(SqlAttempt(sql=outcome.winner_sql,
+                                           row_count=outcome.winner_result.row_count))
+            return {"attempts": attempts, "current_sql": outcome.winner_sql,
+                    "result": outcome.winner_result, "last_error": None,
+                    "precise_candidates": None}
         sql = state.get("current_sql")
         if not sql:
             # generate 阶段已失败：显式清掉上一轮残留的 result（整值覆盖语义下
@@ -111,6 +153,10 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         res = state.get("result")
         if res is None:
             return {"verify_note": None}  # 执行已失败：路由直接走兜底，无需校验
+        last = state.get("attempts", [])[-1] if state.get("attempts") else None
+        if last is not None and not last.sql and last.error == NO_MAJORITY_ERROR:
+            # 票决不能自证：无多数派一律判可疑（不计正确路线）→ 有预算重试/耗尽带标注
+            return {"verify_note": NO_MAJORITY_ERROR}
         verdict = verify_result(state["question"], state.get("current_sql") or "", res)
         return {"verify_note": None if verdict.passed else verdict.reason}
 
