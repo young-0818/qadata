@@ -19,6 +19,21 @@ def test_format_rows_pipe_table():
     assert "name" in t and "A" in t and "1.0" in t
 
 
+def test_nodes_pass_limiter_to_timed_invoke(monkeypatch):
+    """限速器透传：make_nodes 注入的 limiter 必须进全部 timed_invoke 调用。"""
+    captured = {}
+
+    def fake_timed_invoke(llm, prompt, node, tracer, limiter=None):
+        captured[node] = limiter
+        return "ok"
+
+    monkeypatch.setattr("qadata.graph.nodes.timed_invoke", fake_timed_invoke)
+    sentinel = object()
+    nodes = make_nodes(None, None, limiter=sentinel)
+    nodes["understand"]({"question": "q"})
+    assert captured["understand"] is sentinel
+
+
 def test_nodes_happy_path(fixture_db):
     llm = FakeListChatModel(
         responses=["每个学生的平均成绩是多少", "SELECT name FROM students WHERE id = 1", "Alice 的成绩最好"]

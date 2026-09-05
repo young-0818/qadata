@@ -51,19 +51,19 @@ def format_rows(result: QueryResult, limit: int = PREVIEW_ROWS) -> str:
     return _format_preview(result.columns, result.rows[:limit])
 
 
-def make_nodes(llm, tracer=None, settings: Settings | None = None):
-    """节点工厂：闭包注入 llm/tracer/settings，便于测试时替换假模型与配置。"""
+def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None):
+    """节点工厂：闭包注入 llm/tracer/settings/limiter，便于测试时替换假模型与配置。"""
     s = settings or FALLBACK_SETTINGS
 
     def understand(state: dict) -> dict:
-        q = timed_invoke(llm, understand_prompt(state["question"]), "understand", tracer)
+        q = timed_invoke(llm, understand_prompt(state["question"]), "understand", tracer, limiter)
         return {"original_question": state["question"], "question": str(q).strip()}
 
     def explore(state: dict) -> dict:
         conn = open_readonly(state["db_path"])
         try:
             ctx = build_schema_context(conn, state["question"], llm=llm, tracer=tracer,
-                                       db_path=state["db_path"])
+                                       db_path=state["db_path"], limiter=limiter)
         finally:
             conn.close()
         return {"db_schema": ctx}
@@ -76,7 +76,7 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None):
             question=state["question"],
             history=history,
         )
-        text = timed_invoke(llm, prompt, "generate", tracer)
+        text = timed_invoke(llm, prompt, "generate", tracer, limiter)
         try:
             sql = extract_sql(str(text))
         except ValueError as e:
@@ -163,6 +163,7 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None):
             ),
             "respond",
             tracer,
+            limiter,
         )
         conclusion = strip_conclusion_prefix(str(text))
         note = state.get("verify_note")

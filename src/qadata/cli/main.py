@@ -47,6 +47,10 @@ def main(argv: list[str] | None = None) -> int:
     p_eval.add_argument("--out", default="runs/eval-last.jsonl", help="输出 JSONL 路径")
     p_eval.add_argument("--resume", action="store_true", help="断点续跑：跳过已完成题号")
     p_eval.add_argument("--variants", default=None, help="变体矩阵 YAML（M3 工具链，实验 M4 跑）")
+    p_eval.add_argument("--concurrency", type=int, default=5,
+                        help="并发路数（默认 5，5-8；1=串行，兼容旧语义）")
+    p_eval.add_argument("--qps", type=float, default=None,
+                        help="全局限速（次/秒）；不传=不限速")
 
     p_report = sub.add_parser("report", help="两轮评测对比：qadata report --baseline A --current B")
     p_report.add_argument("--baseline", required=True)
@@ -70,8 +74,17 @@ def main(argv: list[str] | None = None) -> int:
             run_variants(args.questions, args.db_dir, load_variants(args.variants),
                          question_ids=question_ids, sample=args.sample, resume=args.resume)
             return 0
-        from qadata.eval.bird import run_eval  # Task 10 实现
+        from dataclasses import replace as dc_replace
 
+        from qadata.config import load_settings
+        from qadata.eval.bird import run_eval
+        from qadata.llm.gateway import build_llm
+        from qadata.llm.ratelimit import RateLimiter
+
+        settings = load_settings()
+        if args.qps is not None:
+            settings = dc_replace(settings, max_qps=args.qps)
+        limiter = RateLimiter(settings.max_qps) if settings.max_qps > 0 else None
         run_eval(
             questions_path=args.questions,
             db_dir=args.db_dir,
@@ -79,6 +92,10 @@ def main(argv: list[str] | None = None) -> int:
             question_ids=question_ids,
             out_path=args.out,
             resume=args.resume,
+            concurrency=args.concurrency,
+            settings=settings,
+            limiter=limiter,
+            llm=build_llm(settings),  # 共享实例贯穿所有线程（替代逐题自建）
         )
         return 0
     if args.cmd == "report":

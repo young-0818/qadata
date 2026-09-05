@@ -33,7 +33,7 @@ def run_variants(questions_path: str, db_dir: str, variants: list[dict],
         s = Settings(api_key=base.api_key, base_url=v.get("base_url") or base.base_url,
                      model=v["model"], max_rows=base.max_rows,
                      retry_budget=base.retry_budget, sql_timeout_s=base.sql_timeout_s,
-                     llm_timeout_s=base.llm_timeout_s)
+                     llm_timeout_s=base.llm_timeout_s, max_qps=base.max_qps)
         summary = run_eval(questions_path, db_dir, sample=sample, question_ids=question_ids,
                            llm=build_llm(s), out_path=f"runs/eval-{v['name']}.jsonl",
                            resume=resume)
