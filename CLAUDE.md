@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目
 
-「问数」(qadata)：对话式数据分析 Agent——自然语言问题 → SQL → 只读沙箱执行 → 可信答案。LangGraph 编排，BIRD 基准评测，求职作品项目，**评测驱动开发**（每个里程碑要有准确率数字）。权威设计文档在 `docs/superpowers/specs/2026-09-02-qadata-agent-design.md`（注意 `docs/` 整体被 .gitignore，仅本地存在；里程碑移交清单见其 §11.1）。
+「问数」(qadata)：对话式数据分析 Agent——自然语言问题 → SQL → 只读沙箱执行 → 可信答案。LangGraph 编排，BIRD 基准评测，求职作品项目，**评测驱动开发**（每个里程碑要有准确率数字）。权威设计文档在 `.scratch/qadata-agent/spec.md`，M1–M4 工作档案（spec/plan/复盘/ledger）按里程碑存于 `.scratch/qadata-mN/`（注意 `.scratch/` 与 `docs/` 均被 .gitignore，仅本地存在；里程碑移交清单见主设计 §11.1）。
 
 ## 常用命令
 
@@ -68,3 +68,17 @@ question → understand → explore → generate → execute ──成功──�
 - 测试用 `conftest.py` 的 `RecorderLLM`（M1 遗留，捕获 prompt 断言链路）与新标准的 `ScriptedLLM`。
 - `tests/test_config.py` 的 autouse 夹具隔离了 `load_dotenv` 与环境变量——防止开发者本机 `.env` 污染测试；新增 config 变量必须同步进夹具的 delenv 列表。
 - CI（GitHub Actions）门禁 ruff＋pytest；ruff 用当前版默认规则，升级 ruff 后若变红先分辨真问题还是规则漂移。
+
+## Agent skills
+
+### Issue tracker
+
+议题与规格以 markdown 形式保存在本地 `.scratch/<feature>/`（不入库）。见 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+保留五个默认分诊角色（`needs-triage` / `needs-info` / `ready-for-agent` / `ready-for-human` / `wontfix`）。见 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+单上下文布局：根目录 `CONTEXT.md` + `docs/adr/`。见 `docs/agents/domain.md`。
