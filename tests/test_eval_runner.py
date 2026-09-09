@@ -339,7 +339,7 @@ def test_run_eval_concurrent_traces_merged(tmp_path, monkeypatch):
     def fake_run_question(db_path_, question_, evidence="", **kw):
         tracer = kw.get("tracer")
         if tracer is not None:
-            tracer.log("generate", latency_ms=1, input_tokens=10, output_tokens=5, total_tokens=15)
+            tracer.log("generate", latency_s=0.001, input_tokens=10, output_tokens=5, total_tokens=15)
         return Answer(conclusion="ok", sql="SELECT 1", failed=False)
 
     monkeypatch.setattr("qadata.eval.bird.run_question", fake_run_question)

@@ -53,6 +53,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="全局限速（次/秒）；不传=不限速")
     p_eval.add_argument("--skip-respond", action="store_true",
                         help="评测模式：跳过结论 LLM 生成（判分不读结论，省 1 次调用/题）")
+    p_eval.add_argument("--budget", default=None,
+                        help="预算账本 markdown：轮末自动追加一行（题数×调用/tokens 实测；"
+                             "估算成本与累计两列留待填由人折算），如 runs/m5-budget.md")
 
     p_report = sub.add_parser("report", help="两轮评测对比：qadata report --baseline A --current B")
     p_report.add_argument("--baseline", required=True)
@@ -103,6 +106,7 @@ def main(argv: list[str] | None = None) -> int:
             limiter=limiter,
             llm=build_llm(settings),  # 共享实例贯穿所有线程（替代逐题自建）
             skip_respond=args.skip_respond,
+            budget_path=args.budget,
         )
         return 0
     if args.cmd == "report":

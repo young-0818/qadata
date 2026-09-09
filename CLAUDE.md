@@ -20,11 +20,11 @@ qadata ask data/bird/dev/dev_databases/financial/financial.sqlite "去年销售�
 qadata eval --questions data/bird/dev/dev.json --db-dir data/bird/dev/dev_databases --sample 100
 qadata eval --questions data/bird/dev/dev.json --db-dir data/bird/dev/dev_databases --ids tests/m2_compare_ids.json  # 固定题集
 # M4 真跑统一参数（并发＋限速＋省 1 次调用/题；模型一律用 .env 的 QADATA_MODEL——2026-09-09 用户裁决，废弃 M4 脚本内嵌 export 锁模型做法；跑分记录须注明实跑模型）：
-#   --concurrency 5 --qps 8 --skip-respond
+#   --concurrency 5 --qps 8 --skip-respond --budget runs/m5-budget.md
 qadata report --baseline runs/A.jsonl --current runs/B.jsonl --types runs/m4-attribution.jsonl  # 两轮 diff＋题型切片
 ```
 
-- eval 逐题结果写 `runs/eval-last.jsonl`，节点级 token/延迟写 `runs/traces.jsonl`（带 run_id/question_id 归属）；两者与 `data/` 均不入库。抽样跑分固定 seed=42 可复现。
+- eval 逐题结果写 `runs/eval-last.jsonl`（每题带 run_id/llm_calls/input·output·total_tokens/latency_s，失败题也计——票 10），节点级明细写 `runs/traces.jsonl`（裸北京时间 ts＋latency_s 秒；历史行为 UTC/毫秒旧格式，不迁移）；轮末逐题汇总另落 `runs/tokens-<run_id>.json`（含 model），`--budget` 给定后自动向账本追加一行（成本/累计列留待填保持人审）；两者与 `data/` 均不入库。抽样跑分固定 seed=42 可复现。
 - 评测参考值：M1 基线 BIRD dev-100 **63.0%**（qwen3.7-flash）；50 题配对 M2 **58.0%** → M3 **64.0%** → M4 终局运行 **60.0%**（deepseek-v4-flash-0731；M4 表观 Δ 被端点跨时段漂移淹没——同代码同日 32→36→29/30，README M4 段有证据链，各线增量以受控探针/同时段配对为准，不以跨时段 Δ 计）。冒烟 10 题固定集回归门槛在 `tests/smoke_baseline.json`（M4 重建后 9/10）——**与模型绑定，换模型必须重建基线**。
 - 轨道①（M5 指标考卷）固定题集 `tests/m5_financial_ids.json`：financial 106 题按 BIRD 难度分层 seed=42 抽 50（simple 29/moderate 18/challenging 3），一经冻结不得换题（换题＝历史数字作废，ADR-0001）；纯 SQL 对照分母 **27/50（54.0%）**，绑定 deepseek-v4-flash-0731（明细见 runs/m5-track1-baseline-report.md，本地）。
 - 评测花费红线：单次对比 ≤ ¥3；测试不得依赖真实 API/网络。

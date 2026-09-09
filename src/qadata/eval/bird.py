@@ -14,7 +14,7 @@ from rich.table import Table
 
 from qadata.eval.match import results_match
 from qadata.graph.build import run_question
-from qadata.llm.tracing import TraceLogger
+from qadata.llm.tracing import TraceLogger, now_beijing
 from qadata.tools.db import open_readonly
 
 console = Console()
@@ -85,18 +85,24 @@ def run_eval(questions_path: str, db_dir: str, sample: int | None = None,
              llm=None, max_rows: int = 10000,
              out_path: str = "runs/eval-last.jsonl", resume: bool = False,
              concurrency: int = 1, settings=None, limiter=None,
-             skip_respond: bool = False) -> dict:
+             skip_respond: bool = False, budget_path: str | None = None) -> dict:
     """跑评测。concurrency>1 走分片并发；=1 保持 M3 串行语义（逐题 flush）。
 
     skip_respond：评测模式跳过结论 LLM 生成（判分只读 answer.sql 的执行结果，
     省 1 次调用/题）；settings/limiter 由调用方构造后透传（共享实例贯穿所有线程）；
-    concurrency=1 且未提供时行为与历史版本完全一致。"""
+    concurrency=1 且未提供时行为与历史版本完全一致。
+    budget_path（票 10）：给定则轮末向该账本 markdown 自动追加一行
+    （题数×调用/tokens 实测；估算成本与累计两列留「待填」由人折算）。"""
     questions = load_questions(questions_path, sample=sample, question_ids=question_ids)
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
+    if budget_path and not Path(budget_path).is_file():
+        # 前置校验：账本不存在直接拒绝开跑——绝不等到烧完整轮钱之后才报路径写错
+        raise FileNotFoundError(f"预算账本不存在：{budget_path}（先建表头再跑，避免追加孤儿行）")
     if concurrency > 1:
         return _run_concurrent_path(questions, db_dir, llm, max_rows, out, resume,
-                                    concurrency, settings, limiter, skip_respond)
+                                    concurrency, settings, limiter, skip_respond,
+                                    budget_path)
 
     tracer = TraceLogger(TRACE_PATH)
     done_ids: set[int] = set()
@@ -118,11 +124,14 @@ def run_eval(questions_path: str, db_dir: str, sample: int | None = None,
     records = [json.loads(l) for l in out.read_text(encoding="utf-8").splitlines() if l.strip()]
     summary = _summarize(records)
     _print_summary(summary)
+    _emit_run_stats(tracer.run_id, settings, out, {q["question_id"] for q in todo},
+                    records, budget_path)
     return summary
 
 
 def _run_concurrent_path(questions, db_dir, llm, max_rows, out, resume,
-                         concurrency, settings, limiter, skip_respond) -> dict:
+                         concurrency, settings, limiter, skip_respond,
+                         budget_path=None) -> dict:
     """并发分片流程：每题独立分片（评测记录＋traces），主线程单写者收口合并。"""
     run_id = uuid.uuid4().hex[:12]
     todo = [q for q in questions
@@ -141,17 +150,18 @@ def _run_concurrent_path(questions, db_dir, llm, max_rows, out, resume,
                 tracer.set_context(question_id=str(q["question_id"]))
                 fut = ex.submit(_run_one, q, db_dir, llm, max_rows, tracer, settings,
                                 limiter, skip_respond)
-                futs[fut] = (q, shard_rec, shard_trace)
+                futs[fut] = (q, shard_rec, shard_trace, tracer)
             for fut in as_completed(futs):
-                q, shard_rec, shard_trace = futs[fut]
+                q, shard_rec, shard_trace, tracer = futs[fut]
                 try:
                     rec = fut.result()
                 except Exception as e:  # noqa: BLE001 并发兜底：分片线程裸异常不炸整批
+                    # 兜底记录也挂运行统计（票 10：成本已烧不能漏计），异常前已落账的调用从分片 tracer 取回
                     rec = {"question_id": q["question_id"], "db_id": q["db_id"],
                            "difficulty": q.get("difficulty"), "question": q["question"],
                            "gold_sql": q["SQL"], "gold_failed": False, "pred_sql": None,
                            "correct": False, "error": f"并发分片异常：{e}",
-                           "error_class": "answer_failed"}
+                           "error_class": "answer_failed", **_run_stats(tracer, q)}
                 shard_rec.parent.mkdir(parents=True, exist_ok=True)
                 shard_rec.write_text(json.dumps(rec, ensure_ascii=False) + "\n", encoding="utf-8")
                 _merge_out(questions, out)  # 主线程收口：进度实时可见，合并幂等
@@ -163,7 +173,48 @@ def _run_concurrent_path(questions, db_dir, llm, max_rows, out, resume,
     records = [json.loads(l) for l in out.read_text(encoding="utf-8").splitlines() if l.strip()]
     summary = _summarize(records)
     _print_summary(summary)
+    _emit_run_stats(run_id, settings, out, {q["question_id"] for q in todo},
+                    records, budget_path)
     return summary
+
+
+_STAT_KEYS = ("llm_calls", "input_tokens", "output_tokens", "total_tokens", "latency_s")
+
+
+def _emit_run_stats(run_id, settings, out, processed_ids, records, budget_path=None) -> None:
+    """票 10 轮末收口：逐题明细→tokens-<run_id>.json＋控制台汇总行＋账本自动记行。
+
+    合计只计「本次调用处理的题」（--resume 续跑不重复计账）；
+    账本行「估算成本/累计」两列留待填——成本折算保持人审（数字诚实）。"""
+    proc = [r for r in records if r["question_id"] in processed_ids]
+    if not proc:
+        return
+    totals = {k: round(sum(r.get(k, 0) for r in proc), 2) for k in _STAT_KEYS}
+    model = getattr(settings, "model", "") if settings is not None else ""
+    doc = {"run_id": run_id, "model": model, "ts": now_beijing(), "n_questions": len(proc),
+           "totals": totals,
+           "questions": [{k: r.get(k) for k in ("question_id", "correct", "error_class", *_STAT_KEYS)}
+                         for r in proc]}
+    tokens_file = out.parent / f"tokens-{run_id}.json"
+    tokens_file.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+    n_correct = sum(1 for r in proc if r["correct"])
+    tokens_str = (f"in {totals['input_tokens']} / out {totals['output_tokens']}"
+                  f" / total {totals['total_tokens']} tokens；延迟 {totals['latency_s']}s")
+    console.print(f"run_id={run_id}｜{len(proc)} 题｜{totals['llm_calls']} 调用｜{tokens_str}｜"
+                  f"对 {n_correct}/{len(proc)}｜明细 {tokens_file.name}")
+    if budget_path:
+        with open(budget_path, "a", encoding="utf-8") as f:
+            f.write(f"| {now_beijing()[:10]} | run {run_id}（{model or '未知模型'}，自动记录） | "
+                    f"{len(proc)} 题 {totals['llm_calls']} 调用 | "
+                    f"{tokens_str} | 待填 | 待填 | "
+                    f"{n_correct}/{len(proc)}；明细 tokens-{run_id}.json |\n")
+
+
+def _run_stats(tracer, q: dict) -> dict:
+    """票 10：逐题运行统计（run_id＋调用数/token/延迟求和）；失败题也带（成本已烧）。"""
+    if tracer is None:
+        return {}
+    return {"run_id": tracer.run_id, **tracer.usage_for(str(q["question_id"]))}
 
 
 def _run_one(q: dict, db_dir: str, llm, max_rows: int, tracer, settings=None,
@@ -178,24 +229,24 @@ def _run_one(q: dict, db_dir: str, llm, max_rows: int, tracer, settings=None,
                               llm=llm, tracer=tracer, settings=settings, limiter=limiter,
                               skip_respond=skip_respond)
     except Exception as e:  # noqa: BLE001 单题隔离：评测器最外层，单题任何失败不阻塞整批
-        return {**base, "pred_sql": None, "correct": False, "error": str(e),
+        return {**base, **_run_stats(tracer, q), "pred_sql": None, "correct": False, "error": str(e),
                 "error_class": "answer_failed"}
     if answer.failed or not answer.sql:
-        return {**base, "pred_sql": answer.sql, "correct": False,
+        return {**base, **_run_stats(tracer, q), "pred_sql": answer.sql, "correct": False,
                 "error": answer.error_summary or "no sql", "error_class": "answer_failed"}
     try:
         pred_rows = _exec(str(db_path), answer.sql, max_rows)
     except Exception as e:  # noqa: BLE001 单题隔离
-        return {**base, "pred_sql": answer.sql, "correct": False, "error": str(e),
+        return {**base, **_run_stats(tracer, q), "pred_sql": answer.sql, "correct": False, "error": str(e),
                 "error_class": "pred_exec_failed"}
     try:
         gold_rows = _exec(str(db_path), q["SQL"], max_rows)
     except Exception as e:  # noqa: BLE001 gold 失败单独成类：与 pred 失败分标
-        return {**base, "pred_sql": answer.sql, "correct": False,
+        return {**base, **_run_stats(tracer, q), "pred_sql": answer.sql, "correct": False,
                 "error": f"gold 执行失败：{e}", "gold_failed": True,
                 "error_class": "gold_failed"}
     correct = results_match(pred_rows, gold_rows)
-    return {**base, "pred_sql": answer.sql, "correct": correct, "error": None,
+    return {**base, **_run_stats(tracer, q), "pred_sql": answer.sql, "correct": correct, "error": None,
             "error_class": None if correct else "judge_mismatch"}
 
 
