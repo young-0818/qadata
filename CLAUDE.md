@@ -15,11 +15,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 .venv/Scripts/python -m ruff check src tests   # lint（另有 ruff format）
 
 # CLI（需仓库根目录有 .env，参照 .env.example：DEEPSEEK_API_KEY 必填；
-# QADATA_BASE_URL / QADATA_MODEL 可切换任意 OpenAI 兼容端点，当前 .env 为 deepseek-v4-flash-0731）
+# QADATA_BASE_URL / QADATA_MODEL 可切换任意 OpenAI 兼容端点（当前为百炼 coding plan，模型以 .env 的 QADATA_MODEL 为准）
 qadata ask data/bird/dev/dev_databases/financial/financial.sqlite "去年销售额是多少" --evidence "销售额 = …"
 qadata eval --questions data/bird/dev/dev.json --db-dir data/bird/dev/dev_databases --sample 100
 qadata eval --questions data/bird/dev/dev.json --db-dir data/bird/dev/dev_databases --ids tests/m2_compare_ids.json  # 固定题集
-# M4 真跑统一参数（并发＋限速＋省 1 次调用/题；模型一律走 runs/m4-*.sh 内嵌 export，防 .env 被手改）：
+# M4 真跑统一参数（并发＋限速＋省 1 次调用/题；模型一律用 .env 的 QADATA_MODEL——2026-09-09 用户裁决，废弃 M4 脚本内嵌 export 锁模型做法；跑分记录须注明实跑模型）：
 #   --concurrency 5 --qps 8 --skip-respond
 qadata report --baseline runs/A.jsonl --current runs/B.jsonl --types runs/m4-attribution.jsonl  # 两轮 diff＋题型切片
 ```
