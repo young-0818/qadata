@@ -106,25 +106,32 @@ def print_report_summary(baseline_path: str, current_path: str) -> None:
 # 「同一批题」上的对数；deepseek 27 分母只作水平参照，不进本函数。
 
 
-def path_stats(current: list[dict], baseline: list[dict]) -> dict:
+def _is_hit(r: dict) -> bool:
+    """命中路径判据；缺 path 字段（票 05 前产物）一律计兜底——容错不崩（旧 run 惯例）。"""
+    return r.get("path") == "metric"
+
+
+def _n_correct(rows: list[dict]) -> int:
+    return sum(int(r["correct"]) for r in rows)
+
+
+def path_stats(baseline: list[dict], current: list[dict]) -> dict:
     """按 path 字段拆两轮记录出分路径统计（纯函数，文件读取归 build_*）。
 
-    缺 path 字段的记录（票 05 前产物）一律计兜底——容错不崩（旧 run 惯例）。
+    参数序与 build_report/build_path_report 同构（baseline 在前）。
     降级题（template_fell_back）的最终路径是 fallback，自然计入兜底。
     """
     b = _by_id(baseline)
 
     def _grp(rows: list[dict]) -> dict:
-        n = len(rows)
-        cc = sum(int(r["correct"]) for r in rows)
         # 对照轮同题对数：题号在对照轮缺失时不计分母（配对题集一致，理论不可达）
         matched = [r for r in rows if r["question_id"] in b]
-        bc = sum(int(b[r["question_id"]]["correct"]) for r in matched)
-        return {"n": n, "correct": cc, "acc": cc / n if n else 0.0,
-                "baseline_correct": bc, "baseline_n": len(matched)}
+        return {"n": len(rows), "correct": _n_correct(rows),
+                "baseline_correct": _n_correct([b[r["question_id"]] for r in matched]),
+                "baseline_n": len(matched)}
 
-    hits = [r for r in current if r.get("path") == "metric"]
-    fbs = [r for r in current if r.get("path") != "metric"]
+    hits = [r for r in current if _is_hit(r)]
+    fbs = [r for r in current if not _is_hit(r)]
     return {"total": len(current),
             "hit_rate": round(len(hits) / len(current), 4) if current else 0.0,
             "hit": _grp(hits), "fallback": _grp(fbs),
@@ -167,7 +174,7 @@ def build_path_report(baseline_path: str, current_path: str,
     baseline＝对照轮（metric_layer 关），current＝指标轮（关开各一轮同时段配对）。
     """
     base, cur = load_records(baseline_path), load_records(current_path)
-    st = path_stats(cur, base)
+    st = path_stats(base, cur)
     hit, fb = st["hit"], st["fallback"]
 
     def _row(name: str, g: dict) -> str:
@@ -199,16 +206,20 @@ def build_path_report(baseline_path: str, current_path: str,
         "|---|---|---|",
     ]
     lines += [f"| {c} | {v} | {why} |" for c, v, why in _verdict_rows(st)]
+    # 口径注脚（票 06 评审成文）：①③按「对照轮同题配对」判，严于 Q9 字面的全卷基线——
+    # 同端点同时段是 2026-09-09 裁决的主判据；deepseek 27 分母只作水平参照，另行标注。
+    lines.append("\n> 口径：①③基线取对照轮**同一批题**的对数（同时段配对主判据），"
+                 "非全卷基线均值——较 Q9 字面更严，跨端点 27 分母仅作水平参照。")
 
     # 命中明细＋翻转清单：判卷依据的题级证据（⑨闸在体观测＝极值题是否误入命中路径）
     by_metric: dict[str, list[dict]] = {}
     for r in cur:
-        if r.get("path") == "metric":
+        if _is_hit(r):
             by_metric.setdefault(str(r.get("metric_name")), []).append(r)
     lines += ["", "## 命中明细", "", "| 指标 | 题数 | 对 | 题号 |", "|---|---|---|---|"]
     for name, rows in sorted(by_metric.items(), key=lambda kv: (-len(kv[1]), kv[0])):
         ids = ",".join(str(r["question_id"]) for r in rows)
-        lines.append(f"| {name} | {len(rows)} | {sum(int(r['correct']) for r in rows)} | {ids} |")
+        lines.append(f"| {name} | {len(rows)} | {_n_correct(rows)} | {ids} |")
     fell = [str(r["question_id"]) for r in cur if r.get("template_fell_back")]
     lines.append(f"\n降级题：{'、'.join(fell) or '无'}")
     b = _by_id(base)
@@ -219,8 +230,8 @@ def build_path_report(baseline_path: str, current_path: str,
                 [r["question_id"] for r in rows
                  if b.get(r["question_id"], {}).get("correct") is True and not r["correct"]])
 
-    for label, rows in (("命中路径", [r for r in cur if r.get("path") == "metric"]),
-                        ("兜底路径", [r for r in cur if r.get("path") != "metric"])):
+    for label, rows in (("命中路径", [r for r in cur if _is_hit(r)]),
+                        ("兜底路径", [r for r in cur if not _is_hit(r)])):
         res, bro = _flips(rows)
         lines.append(f"- {label}翻转：救回 {res or '无'}｜改坏 {bro or '无'}")
 
@@ -236,11 +247,11 @@ def build_path_report(baseline_path: str, current_path: str,
             if t not in seen:
                 continue
             rows = [r for r in cur if qtypes.get(r["question_id"], "未知") == t]
-            hs = [r for r in rows if r.get("path") == "metric"]
-            fs = [r for r in rows if r.get("path") != "metric"]
+            hs = [r for r in rows if _is_hit(r)]
+            fs = [r for r in rows if not _is_hit(r)]
             lines.append(f"| {t} | {len(rows)} | {len(hs)} | "
-                         f"{_pct(sum(int(r['correct']) for r in hs) / len(hs)) if hs else '—'} | "
-                         f"{_pct(sum(int(r['correct']) for r in fs) / len(fs)) if fs else '—'} |")
+                         f"{_pct(_n_correct(hs) / len(hs)) if hs else '—'} | "
+                         f"{_pct(_n_correct(fs) / len(fs)) if fs else '—'} |")
     return "\n".join(lines)
 
 

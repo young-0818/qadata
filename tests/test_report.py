@@ -93,7 +93,7 @@ def test_path_stats_three_numbers():
     # cur 命中题 0..4（对 0,1,2,3）；兜底题 5..11（对 5,6,8,9）
     base = ([_prec(i, i in {0, 1, 2}, "fallback") for i in range(5)]
             + [_prec(i, i in {5, 6, 8, 9}, "fallback") for i in range(5, 12)])
-    st = path_stats(cur, base)
+    st = path_stats(base, cur)
     assert st["total"] == 12
     assert st["hit"]["n"] == 5 and st["hit"]["correct"] == 4
     assert st["hit"]["baseline_correct"] == 3   # off 轮在同一批命中题上对 3
@@ -106,7 +106,7 @@ def test_path_stats_missing_path_field_is_fallback():
     """旧 run 无 path 字段（票 05 前产物）：一律计兜底，报告不崩。"""
     cur = [{"question_id": 0, "correct": True}, {"question_id": 1, "correct": False}]
     base = _baseline_round({0, 1}, n=2)
-    st = path_stats(cur, base)
+    st = path_stats(base, cur)
     assert st["hit"]["n"] == 0
     assert st["fallback"]["n"] == 2 and st["fallback"]["correct"] == 1
 
@@ -115,7 +115,7 @@ def test_path_stats_fell_back_counted():
     """模板降级题走兜底路径，但降级旗标单列（命中率分母不含降级为命中）。"""
     cur = [_prec(0, True, "fallback", fell=True), _prec(1, True, "metric", "m")]
     base = _baseline_round({0, 1}, n=2)
-    st = path_stats(cur, base)
+    st = path_stats(base, cur)
     assert st["fell_back"] == 1
     assert st["fallback"]["n"] == 1 and st["hit"]["n"] == 1
 
@@ -156,8 +156,8 @@ def test_build_path_report_fallback_regression(tmp_path):
     b = _write_records(tmp_path, "b.jsonl", base)
     md = build_path_report(b, c)
     assert "判负" in md
-    # 兜底路径行体现本轮 5 对、基线 9 对
-    assert "5/10" in md and "9" in md
+    # 兜底路径行体现本轮 5 对、对照轮同题 9 对
+    assert "5/10" in md and "9/10" in md
 
 
 def test_build_path_report_qtype_path_slice(tmp_path):
