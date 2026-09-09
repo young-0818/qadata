@@ -9,6 +9,9 @@ class AgentState(TypedDict, total=False):
     question: str
     original_question: str  # understand 改写前的原问题（多轮/审计用）
     evidence: str  # BIRD 官方业务口径说明（企业场景等价物：指标字典/口径文档）
+    intent: dict | None  # M5 载体 A：understand 同调产出的六字段题面摘要（宁空勿造，未明示即 null）；
+    # None＝解析失败回退态（原文当改写问题，不烧重试预算）。三约束字段进 generate 尾段；
+    # metric_mention/dimensions/filters 供 metric_match 填槽消费（票 05）
     db_schema: str
     current_sql: str | None
     result: QueryResult | None
