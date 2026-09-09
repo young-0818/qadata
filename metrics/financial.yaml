@@ -1,0 +1,277 @@
+# financial 指标注册表（M5 票 04）——人审口径字典，Text-to-Metrics 命中路径的唯一口径源。
+#
+# 定稿凭证（护栏①）：2026-09-09 用户逐条审核拍板「全过」，18/18 无修改；
+#   拍板点①–⑨均按草案取向（违约仅'B'／率×100／日期格式按库实际／⑨极值闸走票 05 L2 指令）。
+#   全证据链与词表设计理由见 .scratch/qadata-m5/issues/04。
+#
+# 构建信息隔离（护栏①，成文见 .scratch/qadata-m5/issues/04）：
+#   起草会话信息源＝database_description/ 列注释＋库本体只读采样＋轨道①考卷题面
+#   （question＋evidence 文本，白名单脚本提取）；全程未读取 dev.json 的 SQL 字段，
+#   不存在从 gold 答案反推模板的路径。
+#
+# 库本体取证（2026-09-09，financial.sqlite 全表核验）：
+#   五个日期列（account.date／loan.date／trans.date／card.issued／client.birth_date）
+#   实际全部以文本 'YYYY-MM-DD' 存储，非声明格式 YYMMDD 的违例行数＝0。
+#   时间槽声明一律按库实际（YYMMDD 只渲染裸整数，若照描述声明将永配不上文本行）。
+#
+# 槽语义提醒（票 03 契约，影响审核预期）：
+#   - 模板声明了时间槽⇒题面必须给出可解析时间范围才命中；未声明时间槽⇒题面带时间即未命中；
+#   - 过滤槽（{status}/{operation}/{type}）⇒题面必须恰好给出该类别值才命中；
+#   - 一切多约束/JOIN 具名题走兜底路径——注册表管不着的题让它走兜底（票 04 条款③）。
+
+metrics:
+  # ── 贷款域（loan，时间列 loan.date：文本 YYYY-MM-DD，取值域 1993-07-05～1998-12-08）──
+  - name: loan_count
+    display_name: 贷款笔数
+    aliases: [贷款合同数, 批准贷款笔数, number of loans, loan count, how many loans]
+    meaning: 统计期内银行批准的贷款合同数量
+    definition: 以贷款批准日期（loan.date）落入时间范围计条；一笔合同计 1
+    sql_template: SELECT COUNT(loan.loan_id) FROM loan WHERE loan.date BETWEEN {time_start} AND {time_end}
+    time_slot: {column: loan.date, date_format: YYYY-MM-DD}
+    available_dimensions: {}
+    source_tables: [loan]
+
+  - name: loan_default_rate
+    display_name: 贷款违约率
+    aliases: [违约率, 不良率, 贷款不良率, default rate, loan default rate, percentage of defaulted loans]
+    meaning: 统计期内批准贷款中最终以违约收尾的占比
+    definition: 违约＝loan.status='B'（合同已结束但贷款未还清）；＝ status='B' 笔数 ÷ 全部笔数 × 100；
+      注＝status='D'（履约中、客户欠款）不计入违约分子（2026-09-09 拍板：仅 B）
+    sql_template: SELECT SUM(CASE WHEN loan.status = 'B' THEN 1 ELSE 0 END) * 100.0 / COUNT(loan.loan_id) FROM loan WHERE loan.date BETWEEN {time_start} AND {time_end}
+    time_slot: {column: loan.date, date_format: YYYY-MM-DD}
+    available_dimensions: {}
+    source_tables: [loan]
+
+  - name: loan_status_count
+    display_name: 按还款状态的贷款笔数
+    aliases: [贷款状态笔数, loans by status, number of loans by status]
+    meaning: 统计期内各还款状态下的贷款合同数量
+    definition: 还款状态取值域 A＝结清无问题／B＝结清未还清（违约）／C＝履约中无问题／D＝履约中欠款；
+      题面须明示具体状态才填槽（标签以题面措辞为准——载体 A 的 filters 原样摘录题面词）
+    sql_template: SELECT COUNT(loan.loan_id) FROM loan WHERE loan.status = {status} AND loan.date BETWEEN {time_start} AND {time_end}
+    time_slot: {column: loan.date, date_format: YYYY-MM-DD}
+    filter_slots:
+      status:
+        # 标签词表＝题面措辞（英文单复数/介词变体）＋中文 CLI 措辞，映射到库值（人工审核）
+        "结清无问题": A
+        "已结清没有违约": A
+        "finished with no problems": A
+        "finished no problems": A
+        "contracts finished with no problems": A
+        "contract finished with no problems": A
+        "no problems": A
+        "fully paid with no issue": A
+        "paid with no issue": A
+        "fully paid": A
+        "结清违约": B
+        "违约": B
+        "违约贷款": B
+        "loan not paid": B
+        "not paid": B
+        "finished with trouble": B
+        "defaulted": B
+        "履约中正常": C
+        "running contract": C
+        "ok so far": C
+        "履约中欠款": D
+        "client in debt": D
+        "in debt": D
+    available_dimensions: {}
+    source_tables: [loan]
+
+  - name: loan_approved_amount_sum
+    display_name: 贷款批准金额合计
+    aliases: [贷款总额, 批准贷款总金额, total loan amount, sum of loan amounts]
+    meaning: 统计期内批准的贷款金额总量
+    definition: 对 loan.amount（批准金额，库注释单位 USD）求和；时间窗按批准日期
+    sql_template: SELECT SUM(loan.amount) FROM loan WHERE loan.date BETWEEN {time_start} AND {time_end}
+    time_slot: {column: loan.date, date_format: YYYY-MM-DD}
+    available_dimensions: {}
+    source_tables: [loan]
+
+  - name: loan_approved_amount_avg
+    display_name: 平均贷款批准金额
+    aliases: [平均贷款金额, 户均贷款额, average loan amount, average approved amount]
+    meaning: 统计期内批准贷款的户均金额
+    definition: loan.amount 的算术平均；时间窗按批准日期
+    sql_template: SELECT AVG(loan.amount) FROM loan WHERE loan.date BETWEEN {time_start} AND {time_end}
+    time_slot: {column: loan.date, date_format: YYYY-MM-DD}
+    available_dimensions: {}
+    source_tables: [loan]
+
+  # ── 账户域（account，时间列 account.date：库内实际为文本 YYYY-MM-DD，见文件头取证）──
+  - name: account_opened_count
+    display_name: 开户数
+    aliases: [新开账户数, 账户开设数量, number of accounts opened, accounts opened]
+    meaning: 统计期内新开的账户数量
+    definition: 以 account.date（开户日期）落入时间范围计户
+    sql_template: SELECT COUNT(account.account_id) FROM account WHERE account.date BETWEEN {time_start} AND {time_end}
+    time_slot: {column: account.date, date_format: YYYY-MM-DD}
+    available_dimensions: {}
+    source_tables: [account]
+
+  - name: account_opened_distribution
+    display_name: 开户数分布
+    aliases: [各区开户数, 按地区统计开户数, accounts opened by district, accounts by region]
+    meaning: 统计期内新开户在地区/分区上的分布
+    definition: 按账户所属分区（district.A2）或地区（district.A3）分组计数；
+      维度由题面明示（2026-09-09 拍板：四标签词表放行，跑分后可迭代）
+    sql_template: SELECT {dimensions}, COUNT(account.account_id) FROM account JOIN district ON account.district_id = district.district_id WHERE account.date BETWEEN {time_start} AND {time_end} GROUP BY {dimensions}
+    time_slot: {column: account.date, date_format: YYYY-MM-DD}
+    available_dimensions:
+      地区: district.A3
+      分区: district.A2
+      region: district.A3
+      district: district.A2
+    source_tables: [account, district]
+
+  # ── 客户域（client；静态指标不带时间槽——题面带时间即未命中，走兜底）──
+  - name: client_count
+    display_name: 客户数
+    aliases: [客户数量, 客户总数, number of clients, client count, how many clients]
+    meaning: 银行全部登记客户数量
+    definition: client 表按 client_id 计数；不带时间窗（birth_date 非业务统计期，2026-09-09 拍板：不加出生年窗版本）
+    sql_template: SELECT COUNT(client.client_id) FROM client
+    available_dimensions: {}
+    source_tables: [client]
+
+  - name: female_client_count
+    display_name: 女性客户数
+    aliases: [女客户数, 女性客户数量, number of female clients, female clients]
+    meaning: 性别为女的登记客户数量
+    definition: gender＝'F' 计为女（库注释 F＝female）
+    sql_template: SELECT COUNT(client.client_id) FROM client WHERE client.gender = 'F'
+    available_dimensions: {}
+    source_tables: [client]
+
+  - name: male_client_count
+    display_name: 男性客户数
+    aliases: [男客户数, 男性客户数量, number of male clients, male clients]
+    meaning: 性别为男的登记客户数量
+    definition: gender＝'M' 计为男（库注释 M＝male）
+    sql_template: SELECT COUNT(client.client_id) FROM client WHERE client.gender = 'M'
+    available_dimensions: {}
+    source_tables: [client]
+
+  # ── 交易域（trans，时间列 trans.date：文本 YYYY-MM-DD，取值域 1993-01-01～1998-12-31）──
+  - name: transaction_count
+    display_name: 交易笔数
+    aliases: [交易数量, 交易记录数, number of transactions, transaction count]
+    meaning: 统计期内账户交易流水条数
+    definition: 以 trans.date 落入时间范围计条；不区分收支方向（区分方向的题走兜底，2026-09-09 拍板：暂不加 type 方向条）
+    sql_template: SELECT COUNT(trans.trans_id) FROM trans WHERE trans.date BETWEEN {time_start} AND {time_end}
+    time_slot: {column: trans.date, date_format: YYYY-MM-DD}
+    available_dimensions: {}
+    source_tables: [trans]
+
+  - name: transaction_amount_sum
+    display_name: 交易金额合计
+    aliases: [交易总额, 交易金额总和, total transaction amount, sum of transactions]
+    meaning: 统计期内交易流水金额总量
+    definition: 对 trans.amount 求和（该列不带符号，全表 0 负行，收支方向由 type 表达；
+      本条＝收支混合的流水总额度，不是净额）
+    sql_template: SELECT SUM(trans.amount) FROM trans WHERE trans.date BETWEEN {time_start} AND {time_end}
+    time_slot: {column: trans.date, date_format: YYYY-MM-DD}
+    available_dimensions: {}
+    source_tables: [trans]
+
+  - name: transaction_operation_count
+    display_name: 按交易方式的交易笔数
+    aliases: [交易方式笔数, transactions by operation]
+    meaning: 统计期内各交易方式（取现/刷卡/存入/转账等）的流水条数
+    definition: trans.operation 五值域封闭映射；题面须明示方式才填槽；
+      注＝type（PRIJEM 收/VYDAJ 支/VYBER）与 operation 是两个维度，本条只管 operation
+    sql_template: SELECT COUNT(trans.trans_id) FROM trans WHERE trans.operation = {operation} AND trans.date BETWEEN {time_start} AND {time_end}
+    time_slot: {column: trans.date, date_format: YYYY-MM-DD}
+    filter_slots:
+      operation:
+        # 标签词表＝题面措辞（含单复数变体）＋中文 CLI 措辞→库值（人工审核）
+        "信用卡取款": VYBER KARTOU
+        "credit card withdrawal": VYBER KARTOU
+        "credit card withdrawals": VYBER KARTOU
+        "现金取款": VYBER
+        "现金提款": VYBER
+        "withdrawal in cash": VYBER
+        "withdrawals in cash": VYBER
+        "现金存入": VKLAD
+        "credit in cash": VKLAD
+        "跨行转入": PREVOD Z UCTU
+        "collection from another bank": PREVOD Z UCTU
+        "汇往他行": PREVOD NA UCET
+        "remittance to another bank": PREVOD NA UCET
+    available_dimensions: {}
+    source_tables: [trans]
+
+  # ── 卡域（card，时间列 card.issued：库内实际为文本 YYYY-MM-DD，见文件头取证）──
+  - name: card_issued_count
+    display_name: 信用卡发卡数
+    aliases: [发卡数量, 发卡量, number of cards issued, credit cards issued, how many credit cards]
+    meaning: 统计期内发放的信用卡数量
+    definition: 以 card.issued（发卡日期）落入时间范围计张
+    sql_template: SELECT COUNT(card.card_id) FROM card WHERE card.issued BETWEEN {time_start} AND {time_end}
+    time_slot: {column: card.issued, date_format: YYYY-MM-DD}
+    available_dimensions: {}
+    source_tables: [card]
+
+  - name: card_issued_type_count
+    display_name: 按卡种的发卡数
+    aliases: [各等级发卡数, cards by type]
+    meaning: 统计期内各等级信用卡的发放数量
+    definition: 卡等级 junior＝初级／classic＝标准／gold＝金卡（库注释）；题面须明示卡种才填槽
+    sql_template: SELECT COUNT(card.card_id) FROM card WHERE card.type = {type} AND card.issued BETWEEN {time_start} AND {time_end}
+    time_slot: {column: card.issued, date_format: YYYY-MM-DD}
+    filter_slots:
+      type:
+        # 题面常见形态「'gold' cards / junior credit cards」——单复数与限定词变体都要在词表里
+        "金卡": gold
+        "gold": gold
+        "gold card": gold
+        "gold cards": gold
+        "gold credit card": gold
+        "gold credit cards": gold
+        "标准卡": classic
+        "普通卡": classic
+        "classic": classic
+        "classic card": classic
+        "classic cards": classic
+        "classic credit card": classic
+        "classic credit cards": classic
+        "初级卡": junior
+        "junior": junior
+        "junior card": junior
+        "junior cards": junior
+        "junior credit card": junior
+        "junior credit cards": junior
+    available_dimensions: {}
+    source_tables: [card]
+
+  # ── 地区社会指标（district；年份烧在列名里＝静态口径，不带时间槽）──
+  - name: avg_unemployment_rate_1995
+    display_name: 1995年平均失业率
+    aliases: [1995失业率, 一九九五年失业率, average unemployment rate 1995, unemployment rate 1995]
+    meaning: 全部分区 1995 年失业率的算术平均
+    definition: 取 district.A12（库注释＝unemployment rate 1995）求 AVG；
+      分区属性表无日期列，年份即口径的一部分
+    sql_template: SELECT AVG(district.A12) FROM district
+    available_dimensions: {}
+    source_tables: [district]
+
+  - name: avg_unemployment_rate_1996
+    display_name: 1996年平均失业率
+    aliases: [1996失业率, 一九九六年失业率, average unemployment rate 1996, unemployment rate 1996]
+    meaning: 全部分区 1996 年失业率的算术平均
+    definition: 取 district.A13（库注释＝unemployment rate 1996）求 AVG；
+      分区属性表无日期列，年份即口径的一部分
+    sql_template: SELECT AVG(district.A13) FROM district
+    available_dimensions: {}
+    source_tables: [district]
+
+  - name: avg_salary
+    display_name: 平均薪资水平
+    aliases: [平均工资, 平均月薪, average salary, average wages]
+    meaning: 全部分区平均薪资（district.A11）的算术平均
+    definition: 取 district.A11 求 AVG；A11 为分区静态属性（库注释＝average salary），
+      无时间窗口径
+    sql_template: SELECT AVG(district.A11) FROM district
+    available_dimensions: {}
+    source_tables: [district]
