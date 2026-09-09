@@ -17,6 +17,7 @@ from qadata.graph.metrics import (
     Metric,
     RegistryError,
     fill_slots,
+    has_extreme_signal,
     load_registry,
     match_metric,
     normalize,
@@ -308,6 +309,39 @@ def test_match_level1_empty_or_absent_mention():
     assert match_metric("", metrics) is None
     assert match_metric("   ", metrics) is None
     assert match_metric("违约率", []) is None
+
+
+# ── ⑨ 闸·机制版（票 06 owner 批准）：具名极值/比较题形判定纯函数 ──────
+
+@pytest.mark.parametrize("text", [
+    "Which account has the lowest approved amount",   # lowest
+    "top nine districts by highest",                   # top/highest
+    "the owner of the largest loan",                   # largest
+    "rank the districts",                              # rank
+    "oldest client",                                   # oldest
+    "户均贷款额最高的地区",                             # 最…高
+    "排名前 5 的分区",                                  # 排名
+    "第 3 高的账户",                                    # 第…高
+])
+def test_extreme_signal_positive(text):
+    assert has_extreme_signal(text)
+
+
+@pytest.mark.parametrize("text", [
+    "average approved amount",                         # 无最高级：户均条合法命中
+    "number of loans in 1997",
+    "贷款违约率是多少",
+    "almost everyone",                                 # 词边界：最…不含极值词形
+    "second district",                                 # second 非触发词（序数仅 第N/前N）
+    "",                                                # 空串
+])
+def test_extreme_signal_negative(text):
+    assert not has_extreme_signal(text)
+
+
+def test_extreme_signal_ignores_non_string_and_or_across_args():
+    assert not has_extreme_signal(None, 123, ["most"])   # 非字符串忽略
+    assert has_extreme_signal("average loan amount", None, "the highest")  # 任一命中即 True
 
 
 # ── 填槽（时间/维度/过滤；任一槽填不出＝判未命中——宁空勿造）──────────

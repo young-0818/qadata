@@ -9,6 +9,7 @@ from qadata.config import FALLBACK_SETTINGS, Settings
 from qadata.graph.intent import parse_understand_response
 from qadata.graph.metrics import (
     fill_slots,
+    has_extreme_signal,
     load_registry,
     match_metric,
     parse_metric_review,
@@ -120,6 +121,11 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
             m = parse_metric_review(text, metrics)
         if m is None:
             return _miss("两级匹配未命中（L2 判 NONE 或解析失败）")
+        # ⑨ 闸·机制版（票 06）：极值/比较题形在 L1/L2 任一级命中都撤销——
+        # 「谁最大」要的是明细排序答案，不是聚合口径；L2 指令只守得住 L2 那道门。
+        if has_extreme_signal(state.get("original_question"), state.get("question"),
+                              intent.get("metric_mention"), intent.get("output_form")):
+            return _miss(f"⑨ 闸：题形含具名极值/比较，撤销 {m.name} 命中走兜底")
         fill = fill_slots(m, intent, today=_today())
         if not fill.ok:
             return _miss(f"{level} 命中 {m.name} 但填槽未过：{fill.reason}")

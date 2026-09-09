@@ -201,6 +201,57 @@ def test_real_financial_registry_hit_end_to_end(monkeypatch):
     assert llm.calls == 2  # understand + respond（generate/explore 未进）
 
 
+def test_gate9_blocks_extreme_form_via_l1(fin_env):
+    """⑨ 闸机制版（票 06）：L1 包含命中后、填槽前撤销——极值题形不得直出模板。
+    calls 不含 L2（闸在 L1 命中后零调用拦截）。"""
+    db, reg = fin_env
+    llm = ScriptedLLM([
+        _understand_json("1995年哪个月贷款笔数最多", mention="贷款笔数最多", filters=["1995"]),
+        "SELECT COUNT(loan_id) FROM loan WHERE date LIKE '1995%'",  # 兜底 generate
+        "3月最多",  # respond
+    ])
+    ans = run_question(db, "1995年哪个月贷款笔数最多", llm=llm, settings=_S(reg))
+    assert ans.path == "fallback" and ans.metric_name is None
+    assert ans.template_fell_back is False  # 未进过模板，不算降级
+    assert llm.calls == 3  # understand + generate + respond（闸零新增调用）
+
+
+def test_gate9_also_applies_after_l2_hit(fin_env):
+    """⑨ 闸对 L2 命中同样生效（纵深防御：模型哪天不守「极值→NONE」指令也拦得住）。"""
+    db, reg = fin_env
+    llm = ScriptedLLM([
+        _understand_json("哪个月的贷款数最高", mention="月度贷款统计", filters=["1995"]),
+        "loan_count",  # L2 违规命中（本应 NONE）——闸兜底撤销
+        "SELECT COUNT(loan_id) FROM loan WHERE date LIKE '1995%'",  # 兜底 generate
+        "3月",  # respond
+    ])
+    ans = run_question(db, "哪个月的贷款数最高", llm=llm, settings=_S(reg))
+    assert ans.path == "fallback" and ans.metric_name is None
+    assert llm.calls == 4  # understand + L2 + generate + respond
+
+
+@_has_real
+def test_gate9_q98_live_shape(monkeypatch):
+    """票 06 探针在体形态逐字复现（Q98）：真模型实抽 mention="approved amount"＋
+    filters=["1997"]——补闸前 L1 穿透＋填槽 OK＝AVG 模板答 MIN 题；闸后撤销走兜底。"""
+    monkeypatch.chdir(_REAL_REPO_ROOT)
+    q = ("Among the accounts who have approved loan date in 1997, list out the "
+         "accounts that have the lowest approved amount and choose weekly issuance statement.")
+    llm = ScriptedLLM([
+        _understand_json(q, mention="approved amount", filters=["1997"]),  # 探针实录抽取
+        "account, loan",  # explore 选表（真库 8 表超全量上限）
+        ("SELECT account_id FROM loan WHERE date BETWEEN '1997-01-01' AND '1997-12-31' "
+         "ORDER BY amount ASC LIMIT 1"),  # 兜底 generate
+        "1997 年批准金额最低的账户",  # respond
+    ])
+    ans = run_question(_REAL_DB, q, llm=llm,
+                       settings=Settings(api_key="", base_url="", model="",
+                                         metric_layer=True, metrics_dir="metrics"))
+    assert ans.path == "fallback" and ans.metric_name is None
+    assert "AVG(loan.amount)" not in ans.sql  # 户均模板绝不得成为答案
+    assert llm.calls == 4  # understand + explore 选表 + generate + respond（L1 命中被闸撤销，不进 L2）
+
+
 @_has_real
 def test_gate9_named_extreme_question_l2_none_falls_back(monkeypatch):
     """⑨ 闸靶例端到端（题形捕捉自冻结集 Q156「largest loan amount」）：

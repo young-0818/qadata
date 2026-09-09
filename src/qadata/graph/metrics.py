@@ -124,6 +124,28 @@ def match_metric(mention: str | None, metrics: list[Metric]) -> Metric | None:
     return inclusion[0] if len(inclusion) == 1 else None
 
 
+# ⑨ 闸·机制版（票 06，owner 批准 2026-09-09）：探针在体证实 L1 包含穿透——裸
+# mention "approved amount" 直中户均条且时间槽可填（Q98 型），L2 的极值→NONE
+# 指令对这类题根本触不到（L1 已命中）。词表判「具名极值/比较」题形，命中一律
+# 撤销走兜底：误拒合法指标题有兜底接住（宁漏勿错），放过误命中则直接产出错数字。
+_EXTREME_EN = re.compile(
+    r"\b(highest|lowest|largest|smallest|greatest|fewest|maximum|minimum|top|rank\w*|"
+    r"oldest|youngest|newest|most|least)\b", re.IGNORECASE)
+_EXTREME_CN = re.compile(
+    r"最[大小高低多少早晚贵贱重长短新旧]|排名|排行|前\s*[\d一二两三四五六七八九十]+|"
+    r"第\s*[\d一二两三四五六七八九十百]+")
+
+
+def has_extreme_signal(*texts: Any) -> bool:
+    """任一文本含具名极值/排名/序数词形 → True（确定性零调用；非字符串忽略）。"""
+    for t in texts:
+        if not isinstance(t, str) or not t:
+            continue
+        if _EXTREME_EN.search(t) or _EXTREME_CN.search(t):
+            return True
+    return False
+
+
 def parse_metric_review(text: Any, metrics: list[Metric]) -> Metric | None:
     """第二级 LLM 复核输出的严格解析（票 05 契约，解析归缝 B、调用归节点）。
 
