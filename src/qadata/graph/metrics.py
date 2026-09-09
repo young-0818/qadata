@@ -31,6 +31,9 @@ import yaml
 # 时间槽可声明的日期格式（票 04 的两类坑位：loan.date 文本 vs account.date 整数 YYMMDD）
 DATE_FORMATS = ("YYYY-MM-DD", "YYMMDD")
 
+# 时间槽渲染出的占位符名（声明↔模板对账与填槽共用同一份，不两处各写各的）
+TIME_START, TIME_END = "time_start", "time_end"
+
 # 槽名＝合法 Python 标识符样式的小写占位符；模板里除 {slot} 外不得出现花括号
 _PLACEHOLDER_FILL = re.compile(r"\{([A-Za-z_]\w*)\}")
 _PLACEHOLDER_STRIP = re.compile(r"\{[A-Za-z_]\w*\}")
@@ -56,8 +59,10 @@ class TimeSlot:
 
 @dataclass(frozen=True)
 class FilterSlot:
-    name: str                                      # 占位符名（模板里的 {name}）
-    values: dict[str, str] = field(compare=False)  # 值标签→SQL 字面量值（人工审核口径）
+    name: str  # 占位符名（模板里的 {name}）
+    # 值标签→口径值（人工审核）：数值标量渲染为裸字面量，字符串带引号——
+    # 与时间槽「按列形态产出字面量」同一条纪律，不把类型裁决甩给 SQLite 亲和性
+    values: dict[str, str | float] = field(compare=False)
 
 
 @dataclass(frozen=True)
@@ -82,9 +87,6 @@ class FillResult:
     ok: bool
     params: dict[str, str] | None = None
     reason: str = ""
-
-    def __bool__(self) -> bool:
-        return self.ok
 
 
 # ── 归一化与第一级匹配 ────────────────────────────────────────────
@@ -139,16 +141,12 @@ def load_registry(path: str | Path) -> list[Metric]:
 
 
 def parse_registry(data: Any, *, source: str = "注册表") -> list[Metric]:
-    """从已解析的 YAML 结构（dict/list）构造注册表；任一条目不过校验即整体拒绝。"""
-    if isinstance(data, dict):
-        entries = data.get("metrics")
-    elif isinstance(data, list):
-        entries = data
-    else:
-        entries = None
+    """从已解析的 YAML 结构构造注册表（契约形态：顶层 'metrics:' 映射）；
+    任一条目不过校验即整体拒绝。"""
+    entries = data.get("metrics") if isinstance(data, dict) else None
     if not isinstance(entries, list):
         raise RegistryError(
-            f"{source}：注册表须为 'metrics:' 列表（或顶层列表），收到 {type(data).__name__}"
+            f"{source}：注册表须为顶层 'metrics:' 列表，收到 {type(data).__name__}"
         )
     metrics: list[Metric] = []
     names: set[str] = set()
@@ -192,7 +190,8 @@ def _parse_entry(entry: Any, source: str, idx: int) -> Metric:
     definition = _req_text(entry, "definition", where)
     sql_template = _req_text(entry, "sql_template", where)
 
-    aliases = _req_str_list(entry, "aliases", where, non_empty=True)
+    # aliases 可空（契约：匹配键＝aliases∪展示名，display_name 单独即可寻址）；血缘表不可空
+    aliases = _req_str_list(entry, "aliases", where, non_empty=False)
     source_tables = tuple(_req_str_list(entry, "source_tables", where, non_empty=True))
 
     if "available_dimensions" not in entry:
@@ -211,9 +210,9 @@ def _parse_entry(entry: Any, source: str, idx: int) -> Metric:
     time_slot = _parse_time_slot(entry.get("time_slot"), where)
     filter_slots = _parse_filter_slots(entry.get("filter_slots"), where)
 
-    _check_template(sql_template, time_slot, filter_slots,
-                    bool(available_dimensions), where)
     placeholders = frozenset(_PLACEHOLDER_FILL.findall(sql_template))
+    _check_template(sql_template, placeholders, time_slot, filter_slots,
+                    bool(available_dimensions), where)
 
     return Metric(
         name=name, display_name=display, meaning=meaning, definition=definition,
@@ -233,6 +232,15 @@ def _req_str_list(entry: dict, key: str, where: str, *, non_empty: bool) -> list
     if non_empty and not v:
         raise RegistryError(f"{where}：字段 '{key}' 不得为空（空注册项没有存在意义）")
     return [i.strip() for i in v]
+
+
+def _slot_mismatch(placeholders: set[str] | frozenset[str],
+                   params: dict[str, str]) -> str:
+    """填槽/渲染共用的对账话术（两处裁决同一判据）。通过返回空串。"""
+    missing = sorted(placeholders - set(params))
+    extra = sorted(set(params) - placeholders)
+    bits = [f"缺 {m}" for m in missing] + [f"多 {x}" for x in extra]
+    return "；".join(bits)
 
 
 def _parse_time_slot(ts: Any, where: str) -> TimeSlot | None:
@@ -262,19 +270,20 @@ def _parse_filter_slots(fs: Any, where: str) -> tuple[FilterSlot, ...]:
             raise RegistryError(f"{where}：过滤槽名 '{slot_name}' 须为小写标识符（模板占位符用）")
         if not isinstance(mapping, dict) or not mapping:
             raise RegistryError(f"{where}：过滤槽 '{slot_name}' 须为非空 值标签→值 映射")
-        values: dict[str, str] = {}
+        values: dict[str, str | float] = {}
         for label, v in mapping.items():
             if not isinstance(label, str) or not label.strip():
                 raise RegistryError(f"{where}：过滤槽 '{slot_name}' 的值标签非法：{label!r}")
             if isinstance(v, bool) or not isinstance(v, (str, int, float)) \
                     or not str(v).strip():
                 raise RegistryError(f"{where}：过滤槽 '{slot_name}' 的值缺失：{label!r}")
-            values[label.strip()] = str(v).strip()
+            values[label.strip()] = v.strip() if isinstance(v, str) else v
         slots.append(FilterSlot(name=slot_name, values=values))
     return tuple(slots)
 
 
-def _check_template(sql_template: str, time_slot: TimeSlot | None,
+def _check_template(sql_template: str, placeholders: frozenset[str],
+                    time_slot: TimeSlot | None,
                     filter_slots: tuple[FilterSlot, ...],
                     has_dimensions: bool, where: str) -> None:
     """声明↔模板双向对账：静默丢失的口径条件＝带病运行，加载期一律拒绝。"""
@@ -283,10 +292,15 @@ def _check_template(sql_template: str, time_slot: TimeSlot | None,
         raise RegistryError(
             f"{where}：模板含非命名占位符的花括号（条件/循环语法不支持，仅 {{槽名}} 形式）"
         )
-    used = set(_PLACEHOLDER_FILL.findall(sql_template))
+    if time_slot is not None and time_slot.column not in sql_template:
+        raise RegistryError(
+            f"{where}：时间槽声明的目标日期列 '{time_slot.column}' 未原样出现在模板中——"
+            "模板里的时间过滤必须写全限定的声明列（列声明不许是装饰）"
+        )
+    used = set(placeholders)
     declared = {s.name for s in filter_slots}
     if time_slot is not None:
-        declared |= {"time_start", "time_end"}
+        declared |= {TIME_START, TIME_END}
     if has_dimensions:
         declared.add("dimensions")
     for slot in sorted(used - declared):
@@ -311,8 +325,8 @@ class _TimeSlotError(ValueError):
     与加载期的 RegistryError 区分——归属不同（纪律③）。"""
 
 
-def _parse_point(token: str, today: date) -> tuple[date, date]:
-    """单点时间表达 → (start, end)；解析不出返回 _NOT_TIME。"""
+def _parse_point(token: str, today: date) -> tuple[date, date] | object:
+    """单点时间表达 → (start, end)；解析不出返回 _NOT_TIME 哨兵。"""
     if token in _RELATIVE_YEARS:
         y = today.year + _RELATIVE_YEARS[token]
         return date(y, 1, 1), date(y, 12, 31)
@@ -334,8 +348,8 @@ def _parse_point(token: str, today: date) -> tuple[date, date]:
     return _NOT_TIME
 
 
-def _parse_time_token(token: str, today: date) -> tuple[date, date]:
-    """filters 元素 → 时间区间 (start, end)；非时间形态返回 _NOT_TIME；
+def _parse_time_token(token: str, today: date) -> tuple[date, date] | object:
+    """filters 元素 → 时间区间 (start, end)；非时间形态返回 _NOT_TIME 哨兵；
     时间范围残缺/倒置 → _TimeSlotError（写了时间就得解得开，不许悄悄丢弃）。"""
     if (rm := _RANGE.match(token)):
         left = _parse_point(rm.group(1).strip(), today)
@@ -361,8 +375,12 @@ def _format_date_literal(d: date, fmt: str) -> str:
     raise _TimeSlotError(f"不支持的日期格式声明：{fmt}")
 
 
-def _sql_str_literal(value: str) -> str:
-    return "'" + value.replace("'", "''") + "'"
+def _slot_literal(value: str | float) -> str:
+    """过滤槽值 → SQL 字面量：数值标量裸值、字符串带引号转义——与 _format_date_literal
+    同一条纪律（列形态决定字面量形态），不把类型裁决甩给 SQLite 亲和性。bool 加载期已拒。"""
+    if isinstance(value, str):
+        return "'" + value.replace("'", "''") + "'"
+    return str(value)
 
 
 def fill_slots(metric: Metric, intent: dict | None, *,
@@ -402,8 +420,8 @@ def fill_slots(metric: Metric, intent: dict | None, *,
                 return FillResult(False, None, "题面含多个时间表达，模板时间槽无法裁决")
             start, end = parsed[0]
             params = {
-                "time_start": _format_date_literal(start, metric.time_slot.date_format),
-                "time_end": _format_date_literal(end, metric.time_slot.date_format),
+                TIME_START: _format_date_literal(start, metric.time_slot.date_format),
+                TIME_END: _format_date_literal(end, metric.time_slot.date_format),
             }
         elif parsed:
             return FillResult(False, None, "指标无时间槽但题面带时间约束")
@@ -426,7 +444,7 @@ def fill_slots(metric: Metric, intent: dict | None, *,
 
         # ── 过滤槽 ──
         slots = {s.name: s for s in metric.filter_slots}
-        slot_owners: dict[str, str] = {}
+        slot_owners: dict[str, str | float] = {}
         for f in non_time:
             tok = normalize(f)
             hits = [(s.name, value) for s in slots.values()
@@ -441,15 +459,12 @@ def fill_slots(metric: Metric, intent: dict | None, *,
                 return FillResult(False, None, f"过滤槽 '{name}' 出现多值，单值语义承载不了")
             slot_owners[name] = value
         for name, value in slot_owners.items():
-            params[name] = _sql_str_literal(value)
+            params[name] = _slot_literal(value)
     except _TimeSlotError as e:
         return FillResult(False, None, str(e))
 
-    if set(params) != set(metric.placeholders):
-        missing = sorted(set(metric.placeholders) - set(params))
-        extra = sorted(set(params) - set(metric.placeholders))
-        bits = [f"缺 {m}" for m in missing] + [f"多 {x}" for x in extra]
-        return FillResult(False, None, "参数槽与模板占位符不齐：" + "；".join(bits))
+    if mismatch := _slot_mismatch(metric.placeholders, params):
+        return FillResult(False, None, f"参数槽与模板占位符不齐：{mismatch}")
     return FillResult(True, params)
 
 
@@ -462,11 +477,8 @@ def render_sql(metric: Metric, params: dict[str, str]) -> str:
     不发明 SQL：缺槽/多槽即报错；渲染产物照常过沙箱四层（票 05 接线），
     不存在绕过 sqlguard 白名单的旁路。
     """
-    if set(params) != set(metric.placeholders):
-        missing = sorted(set(metric.placeholders) - set(params))
-        extra = sorted(set(params) - set(metric.placeholders))
-        bits = [f"缺 {m}" for m in missing] + [f"多 {x}" for x in extra]
-        raise ValueError(f"模板渲染参数不齐：{'；'.join(bits)}")
+    if mismatch := _slot_mismatch(metric.placeholders, params):
+        raise ValueError(f"模板渲染参数不齐：{mismatch}")
 
     def _sub(m: re.Match) -> str:
         return params[m.group(1)]

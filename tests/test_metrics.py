@@ -31,17 +31,18 @@ TODAY = dt.date(2024, 6, 15)
 
 # ── 夹具注册表（不依赖真实 YAML）──────────────────────────────────
 
-# 时间槽声明形态 A：文本日期列（loan.date 存 'YYYY-MM-DD'）
+# 时间槽声明形态 A：文本日期列（loan.date 存 'YYYY-MM-DD'）；
+# 模板时间过滤必须原样写声明列（列声明非装饰，code-review Spec(a)2 收紧的契约）
 _RATE_SQL = (
     "SELECT district_id, CAST(SUM(CASE WHEN status = 'B' THEN 1 ELSE 0 END) AS REAL)"
     " / COUNT(*) FROM loan"
-    " WHERE date BETWEEN {time_start} AND {time_end}"
+    " WHERE loan.date BETWEEN {time_start} AND {time_end}"
     " GROUP BY {dimensions}"
 )
 # 时间槽声明形态 B：整数日期列（account.date 存 YYMMDD）——票面点名的两类坑位
 _ACCT_SQL = (
     "SELECT COUNT(*) FROM account"
-    " WHERE date BETWEEN {time_start} AND {time_end}"
+    " WHERE account.date BETWEEN {time_start} AND {time_end}"
 )
 # 过滤槽：口径由模板承载，值由意图 filters 经值映射填入
 _STATUS_SQL = "SELECT COUNT(*) FROM loan WHERE status = {status}"
@@ -134,11 +135,11 @@ def test_blank_required_field_rejects_load(field):
         _parse_one(**{field: "   "})
 
 
-def test_empty_source_tables_or_aliases_rejects_load():
+def test_malformed_alias_entry_rejects_load():
     with pytest.raises(RegistryError):
-        _parse_one(source_tables=[])
+        _parse_one(aliases="违约率")          # 须为列表不是裸字符串
     with pytest.raises(RegistryError):
-        _parse_one(aliases=[])
+        _parse_one(aliases=["违约率", "  "])  # 列表内空串
 
 
 def test_unsupported_date_format_rejects_load():
@@ -152,14 +153,33 @@ def test_unsupported_date_format_rejects_load():
 def test_time_slot_declared_without_placeholders_rejects_load():
     """声明了时间槽但模板没用它＝带病运行（时间条件静默丢失），加载期拒绝。"""
     with pytest.raises(RegistryError):
-        _parse_one(sql_template="SELECT COUNT(*) FROM loan",
+        _parse_one(sql_template="SELECT COUNT(*) FROM loan"
+                   " WHERE loan.date IS NOT NULL",
                    available_dimensions={})
 
 
 def test_filter_slot_declared_without_placeholder_rejects_load():
     with pytest.raises(RegistryError):
         _parse_one(sql_template=_ACCT_SQL, available_dimensions={},
+                   time_slot={"column": "account.date", "date_format": "YYMMDD"},
                    filter_slots={"status": {"违约": "B"}})
+
+
+def test_time_slot_column_must_appear_in_template_rejects_load():
+    """声明列与模板过滤列对不上＝列声明是装饰，加载期拒绝（review Spec(a)2）。"""
+    with pytest.raises(RegistryError) as exc:
+        _parse_one(time_slot={"column": "account.date",
+                              "date_format": "YYYY-MM-DD"})
+    assert "account.date" in str(exc.value)
+
+
+def test_empty_aliases_allowed_but_empty_source_tables_rejected():
+    """契约：匹配键＝aliases∪展示名（display_name 单独可寻址），aliases 允许为空；
+    血缘缺失＝六要素残缺，拒绝。"""
+    m = _parse_one(aliases=[])
+    assert match_metric("贷款违约率", [m]) is m
+    with pytest.raises(RegistryError):
+        _parse_one(source_tables=[])
 
 
 def test_unknown_placeholder_rejects_load():
@@ -171,10 +191,10 @@ def test_unknown_placeholder_rejects_load():
     "bad_template",
     [
         ("SELECT {% if dims %} a {% endif %} FROM loan"
-         " WHERE date >= {time_start} AND date <= {time_end}"),
-        ("SELECT {time_start|iso} FROM loan WHERE date >= {time_start}"
-         " AND date <= {time_end}"),
-        "SELECT a FROM loan WHERE t LIKE {time_start}}% AND date <= {time_end}",
+         " WHERE loan.date >= {time_start} AND loan.date <= {time_end}"),
+        ("SELECT {time_start|iso} FROM loan WHERE loan.date >= {time_start}"
+         " AND loan.date <= {time_end}"),
+        "SELECT a FROM loan WHERE t LIKE {time_start}}% AND loan.date <= {time_end}",
     ],
 )
 def test_conditional_loop_or_malformed_placeholder_rejects_load(bad_template):
@@ -214,6 +234,8 @@ def test_malformed_registry_structure_rejects_load():
         parse_registry("不是列表也不是字典")
     with pytest.raises(RegistryError):
         parse_registry({"metrics": "nope"})
+    with pytest.raises(RegistryError):
+        parse_registry([_full_entry()])  # 契约形态只有顶层 'metrics:' 映射
 
 
 def test_load_registry_missing_file_raises():
@@ -333,6 +355,19 @@ def test_fill_date_unparseable_rejects_for_text_declaration():
     assert "时间" in res.reason or "日期" in res.reason
 
 
+def test_fill_yymmdd_century_ambiguity_is_format_specific_miss():
+    """票面「日期格式对不上」的真正形态：1993 年解析完全成功，但 YYMMDD 双位年无歧义
+    表示 → 未命中；同一年份在 YYYY-MM-DD 声明下正常命中——失败源于格式声明而非解析，
+    这才算两类声明各一例（review Spec(a)1）。"""
+    m = _acct_metric()
+    res = fill_slots(m, _intent(filters=["1993年"]), today=TODAY)
+    assert not res.ok and "YYMMDD" in res.reason
+    m2 = _parse_one()  # YYYY-MM-DD 声明
+    res2 = fill_slots(m2, _intent(filters=["1993年"], dimensions=["地区"]),
+                      today=TODAY)
+    assert res2.ok and res2.params["time_start"] == "'1993-01-01'"
+
+
 def test_fill_time_slot_missing_when_declared():
     """指标声明了时间槽而题面没给任何时间 → 宁空勿造，判未命中。"""
     m = _parse_one()
@@ -388,6 +423,16 @@ def test_fill_filter_slot_mapping():
     res2 = fill_slots(m, _intent(filters=["逾期"]), today=TODAY)
     assert not res2.ok and res2.params is None
     assert "过滤" in res2.reason
+
+
+def test_fill_filter_slot_numeric_value_renders_bare():
+    """数值口径值渲染裸字面量（= 3 而非 '3'）——类型裁决在模块内，不留给亲和性
+    （review Spec(c)6）。"""
+    m = _parse_one(sql_template="SELECT COUNT(*) FROM loan WHERE period = {period}",
+                   available_dimensions={}, time_slot=None,
+                   filter_slots={"period": {"季度": 3}})
+    res = fill_slots(m, _intent(filters=["季度"]), today=TODAY)
+    assert res.ok and res.params["period"] == "3"
 
 
 def test_fill_multiple_time_expressions_reject():
