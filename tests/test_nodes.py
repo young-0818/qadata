@@ -130,8 +130,7 @@ def test_understand_keeps_original_question():
 
     nodes = make_nodes(ScriptedLLM(["改写后的问题"]))
     out = nodes["understand"]({"question": "原始问题"})
-    # M5 票 02 起 understand 多返回 intent 键（纯文本＝解析失败回退态 None，同 test_intent.py）
-    assert out == {"original_question": "原始问题", "question": "改写后的问题", "intent": None}
+    assert out == {"original_question": "原始问题", "question": "改写后的问题"}
 
 
 def test_generate_failure_records_attempt(fixture_db):

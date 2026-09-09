@@ -2,7 +2,6 @@
 import re
 
 from qadata.config import FALLBACK_SETTINGS, Settings
-from qadata.graph.intent import parse_understand_response
 from qadata.graph.precise import NO_MAJORITY_ERROR, run_precise_batch
 from qadata.graph.prompts import (
     format_failure_history,
@@ -61,12 +60,8 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
     s = settings or FALLBACK_SETTINGS
 
     def understand(state: dict) -> dict:
-        # 载体 A（M5 票 02）：改写＋六字段意图同调产出，零新增调用；
-        # 解析失败＝回退纯原文＋intent None，不写 attempts、不烧重试预算（§3.7 既定降级语义）
-        text = timed_invoke(llm, understand_prompt(state["question"], state.get("evidence", "")),
-                            "understand", tracer, limiter)
-        question, intent = parse_understand_response(text)
-        return {"original_question": state["question"], "question": question, "intent": intent}
+        q = timed_invoke(llm, understand_prompt(state["question"]), "understand", tracer, limiter)
+        return {"original_question": state["question"], "question": str(q).strip()}
 
     def explore(state: dict) -> dict:
         conn = open_readonly(state["db_path"])
@@ -84,7 +79,6 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
             evidence=state.get("evidence", ""),
             question=state["question"],
             history=history,
-            intent=state.get("intent"),
         )
         if s.precise_candidates > 1:
             # 精准模式：同一 prompt 连打 K 发（temperature 由 build_llm 按候选数切换，
