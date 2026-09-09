@@ -1,5 +1,5 @@
-"""评测报告：两轮对比 diff 与 N 路变体汇总（M3 评测器完备）。
-记录字段一律 .get 容错：旧 run 文件可能缺 gold_failed/error_class。"""
+"""评测报告：两轮对比 diff、N 路变体汇总（M3 评测器完备）与轨道①分路径报告（M5 票 06）。
+记录字段一律 .get 容错：旧 run 文件可能缺 gold_failed/error_class/path。"""
 import json
 from pathlib import Path
 
@@ -99,6 +99,149 @@ def print_report_summary(baseline_path: str, current_path: str) -> None:
     t.add_row("当前", str(len(cur)), f"{acc_c:.1%}")
     t.add_row("Δ", "", f"{acc_c - acc_b:+.1%}")
     console.print(t)
+
+
+# ── M5 票 06：轨道①分路径报告（命中率／命中路径／兜底路径 × 题型切片＋判卷）──
+# 判卷主判据（2026-09-09 裁决）：同端点同时段配对——基线口径一律取对照轮
+# 「同一批题」上的对数；deepseek 27 分母只作水平参照，不进本函数。
+
+
+def path_stats(current: list[dict], baseline: list[dict]) -> dict:
+    """按 path 字段拆两轮记录出分路径统计（纯函数，文件读取归 build_*）。
+
+    缺 path 字段的记录（票 05 前产物）一律计兜底——容错不崩（旧 run 惯例）。
+    降级题（template_fell_back）的最终路径是 fallback，自然计入兜底。
+    """
+    b = _by_id(baseline)
+
+    def _grp(rows: list[dict]) -> dict:
+        n = len(rows)
+        cc = sum(int(r["correct"]) for r in rows)
+        # 对照轮同题对数：题号在对照轮缺失时不计分母（配对题集一致，理论不可达）
+        matched = [r for r in rows if r["question_id"] in b]
+        bc = sum(int(b[r["question_id"]]["correct"]) for r in matched)
+        return {"n": n, "correct": cc, "acc": cc / n if n else 0.0,
+                "baseline_correct": bc, "baseline_n": len(matched)}
+
+    hits = [r for r in current if r.get("path") == "metric"]
+    fbs = [r for r in current if r.get("path") != "metric"]
+    return {"total": len(current),
+            "hit_rate": round(len(hits) / len(current), 4) if current else 0.0,
+            "hit": _grp(hits), "fallback": _grp(fbs),
+            "fell_back": sum(1 for r in current if r.get("template_fell_back"))}
+
+
+def _pct(x: float) -> str:
+    return f"{x:.1%}"
+
+
+def _verdict_rows(st: dict) -> list[tuple[str, str, str]]:
+    """验收条款①②③逐条判定（spec Q9 五条款中轨道①的三条；④已在票 02 判负成文）。
+
+    ②先行：命中 <10 题时分路径噪声压倒信号，①不给判过也不给判负——无结论。
+    ①命中 ≥ 基线：本轮命中题对数 ≥ 对照轮同题对数；
+    ③兜底 ≥ 基线−2：容忍 2 题端点抖动。
+    """
+    hit, fb = st["hit"], st["fallback"]
+    rows = []
+    if hit["n"] < 10:
+        rows.append(("① 命中路径 ≥ 纯 SQL 基线（同题）", "无结论",
+                     f"条款②先行：命中仅 {hit['n']} 题 <10，样本不足"))
+        rows.append(("② 命中样本量", "样本不足，无结论",
+                     f"命中 {hit['n']}/{st['total']} 题 <10"))
+    else:
+        ok1 = hit["correct"] >= hit["baseline_correct"]
+        rows.append(("① 命中路径 ≥ 纯 SQL 基线（同题）", "判过" if ok1 else "判负",
+                     f"命中题本轮 {hit['correct']} 对 vs 对照轮同题 {hit['baseline_correct']} 对"))
+        rows.append(("② 命中样本量", "足够", f"命中 {hit['n']} 题 ≥10"))
+    ok3 = fb["correct"] >= fb["baseline_correct"] - 2
+    rows.append(("③ 兜底 ≥ 基线−2 题", "判过" if ok3 else "判负",
+                 f"兜底本轮 {fb['correct']} 对 vs 对照轮同题 {fb['baseline_correct']} 对（容忍带 −2）"))
+    return rows
+
+
+def build_path_report(baseline_path: str, current_path: str,
+                      types_path: str | None = None) -> str:
+    """分路径 markdown 报告：三个数＋判卷表＋题型×路径切片＋命中明细／翻转清单。
+
+    baseline＝对照轮（metric_layer 关），current＝指标轮（关开各一轮同时段配对）。
+    """
+    base, cur = load_records(baseline_path), load_records(current_path)
+    st = path_stats(cur, base)
+    hit, fb = st["hit"], st["fallback"]
+
+    def _row(name: str, g: dict) -> str:
+        if g["n"] == 0:
+            return f"| {name} | 0 | — | — | — | — |"
+        return (f"| {name} | {g['n']} | {g['correct']}/{g['n']} | {_pct(g['correct'] / g['n'])} | "
+                f"{g['baseline_correct']}/{g['baseline_n']} | "
+                f"{_pct(g['baseline_correct'] / g['baseline_n']) if g['baseline_n'] else '—'} |")
+
+    lines = [
+        "# 轨道①分路径报告（M5 票 06）",
+        "",
+        f"- 对照轮（纯 SQL）`{baseline_path}`：{len(base)} 题，{_accuracy(base):.1%}",
+        f"- 指标轮 `{current_path}`：{st['total']} 题，{_accuracy(cur):.1%}（Δ {_accuracy(cur) - _accuracy(base):+.1%}）",
+        "",
+        "## 三个数",
+        "",
+        (f"- 命中率：{hit['n']}/{st['total']} = {_pct(st['hit_rate'])}"
+         f"（模板降级 {st['fell_back']} 题计入兜底）"),
+        "",
+        "| 路径 | 题数 | 本轮对 | 本轮准确率 | 对照轮同题对 | 对照准确率 |",
+        "|---|---|---|---|---|---|",
+        _row("命中路径", hit),
+        _row("兜底路径", fb),
+        "",
+        "## 判卷（Q9 轨道①三条款，主判据＝同端点同时段配对）",
+        "",
+        "| 条款 | 判定 | 依据 |",
+        "|---|---|---|",
+    ]
+    lines += [f"| {c} | {v} | {why} |" for c, v, why in _verdict_rows(st)]
+
+    # 命中明细＋翻转清单：判卷依据的题级证据（⑨闸在体观测＝极值题是否误入命中路径）
+    by_metric: dict[str, list[dict]] = {}
+    for r in cur:
+        if r.get("path") == "metric":
+            by_metric.setdefault(str(r.get("metric_name")), []).append(r)
+    lines += ["", "## 命中明细", "", "| 指标 | 题数 | 对 | 题号 |", "|---|---|---|---|"]
+    for name, rows in sorted(by_metric.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+        ids = ",".join(str(r["question_id"]) for r in rows)
+        lines.append(f"| {name} | {len(rows)} | {sum(int(r['correct']) for r in rows)} | {ids} |")
+    fell = [str(r["question_id"]) for r in cur if r.get("template_fell_back")]
+    lines.append(f"\n降级题：{'、'.join(fell) or '无'}")
+    b = _by_id(base)
+
+    def _flips(rows: list[dict]) -> tuple[list, list]:
+        return ([r["question_id"] for r in rows
+                 if b.get(r["question_id"], {}).get("correct") is False and r["correct"]],
+                [r["question_id"] for r in rows
+                 if b.get(r["question_id"], {}).get("correct") is True and not r["correct"]])
+
+    for label, rows in (("命中路径", [r for r in cur if r.get("path") == "metric"]),
+                        ("兜底路径", [r for r in cur if r.get("path") != "metric"])):
+        res, bro = _flips(rows)
+        lines.append(f"- {label}翻转：救回 {res or '无'}｜改坏 {bro or '无'}")
+
+    if types_path:
+        # 题型×路径切片：复用 E2 标签器与 _LABEL_ORDER 展示序（spec 双轨评测第 6 条）
+        qtypes = _load_types(types_path)
+        lines += ["", f"## 题型×路径切片（来源：{types_path}）", "",
+                  "| 题型 | 题数 | 命中 | 命中准确率 | 兜底准确率 |", "|---|---|---|---|---|"]
+        seen = set()
+        for r in cur:
+            seen.add(qtypes.get(r["question_id"], "未知"))
+        for t in _LABEL_ORDER:
+            if t not in seen:
+                continue
+            rows = [r for r in cur if qtypes.get(r["question_id"], "未知") == t]
+            hs = [r for r in rows if r.get("path") == "metric"]
+            fs = [r for r in rows if r.get("path") != "metric"]
+            lines.append(f"| {t} | {len(rows)} | {len(hs)} | "
+                         f"{_pct(sum(int(r['correct']) for r in hs) / len(hs)) if hs else '—'} | "
+                         f"{_pct(sum(int(r['correct']) for r in fs) / len(fs)) if fs else '—'} |")
+    return "\n".join(lines)
 
 
 def build_multi_report(paths: list[str], names: list[str]) -> str:

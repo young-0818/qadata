@@ -63,3 +63,28 @@ def test_report_with_types(tmp_path, capsys):
     code = cli_main.main(["report", "--baseline", str(b), "--current", str(c), "--types", str(t)])
     assert code == 0
     assert "题型切片" in capsys.readouterr().out
+
+
+def test_report_paths_mode(tmp_path, capsys):
+    """票 06：--paths 走出分路径报告（三个数＋判卷表），非默认 diff 报告。"""
+    import json
+
+    def rec(qid, correct, path):
+        return {"question_id": qid, "db_id": "s", "difficulty": "simple",
+                "question": f"q{qid}", "correct": correct, "path": path,
+                "metric_name": "m" if path == "metric" else None,
+                "template_fell_back": False}
+
+    def round_records(path_for):
+        return "\n".join(json.dumps(rec(i, True, path_for(i)), ensure_ascii=False)
+                         for i in range(12)) + "\n"
+
+    b = tmp_path / "b.jsonl"
+    c = tmp_path / "c.jsonl"
+    b.write_text(round_records(lambda i: "fallback"), encoding="utf-8")
+    c.write_text(round_records(lambda i: "metric" if i < 10 else "fallback"), encoding="utf-8")
+    code = cli_main.main(["report", "--baseline", str(b), "--current", str(c), "--paths"])
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "分路径报告" in out and "命中率" in out and "判卷" in out
+    assert "失败样本" not in out  # 未走 diff 报告形态

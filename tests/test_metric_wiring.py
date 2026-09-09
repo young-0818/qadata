@@ -199,3 +199,27 @@ def test_real_financial_registry_hit_end_to_end(monkeypatch):
     assert ans.path == "metric" and ans.metric_name == "loan_default_rate"
     assert ans.result is not None and not ans.failed
     assert llm.calls == 2  # understand + respond（generate/explore 未进）
+
+
+@_has_real
+def test_gate9_named_extreme_question_l2_none_falls_back(monkeypatch):
+    """⑨ 闸靶例端到端（题形捕捉自冻结集 Q156「largest loan amount」）：
+    具名极值题 L1 未中→L2 复核判 NONE→兜底，绝不得把户均/合计模板当答案直出。
+    （L2 指令对真模型的有效性＝票 06 探针在体验证；本例钉接线形态。）"""
+    monkeypatch.chdir(_REAL_REPO_ROOT)
+    q = "Who is the owner of the account with the largest loan amount?"
+    llm = ScriptedLLM([
+        _understand_json(q, mention="largest loan amount"),  # 最高级随题面摘进 mention
+        "NONE",  # L2 依⑨指令判负
+        "account, loan, client, disp",  # explore 选表（真 financial 8 表超全量上限，兜底路径要 1 调）
+        ("SELECT c.owner FROM loan l JOIN account a ON l.account_id = a.account_id "
+         "JOIN disp d ON d.account_id = a.account_id JOIN client c ON c.client_id = d.client_id "
+         "ORDER BY l.amount DESC LIMIT 1"),  # generate 兜底
+        "最大贷款账户的持有人",  # respond
+    ])
+    ans = run_question(_REAL_DB, q, llm=llm,
+                       settings=Settings(api_key="", base_url="", model="",
+                                         metric_layer=True, metrics_dir="metrics"))
+    assert ans.path == "fallback" and ans.metric_name is None
+    assert ans.template_fell_back is False  # 未进过模板，不算降级
+    assert llm.calls == 5  # understand + L2 + explore 选表 + generate + respond

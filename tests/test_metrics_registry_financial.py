@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from qadata.graph.metrics import fill_slots, load_registry, render_sql
+from qadata.graph.metrics import fill_slots, load_registry, match_metric, render_sql
 from qadata.tools.sqlguard import validate_sql
 
 REGISTRY_PATH = Path(__file__).resolve().parents[1] / "metrics" / "financial.yaml"
@@ -62,3 +62,33 @@ def test_every_metric_fills_renders_and_passes_sqlguard(registry):
         assert "{" not in sql, f"{m.name}：渲染后仍有未填占位符"
         # 不过关抛 SqlExecutionError＝本测试红（表全集取各条血缘表并集，不碰 data/）
         validate_sql(sql, allowed_tables=sorted(known_tables))
+
+
+# ── M5 票 06：⑨ 闸靶例（真文件回归侧＝判域，真跑侧＝在体观测）──────────
+# 票 04 §F.4 捕捉自轨道①冻结题集的真实形态：Q98/99（approved amount 极值）、
+# Q156（largest loan amount）、Q94/189（lowest average salary）。
+
+
+def test_gate9_superlative_mentions_reach_l2(registry):
+    """极值形态 mention（含最高级词/题面措辞整摘）L1 确定性别名判未中——
+    ⑨「具名极值→NONE」L2 指令确为这类题的看门人（本测试钉闸的生效域）。"""
+    for mention in ("lowest approved amount", "largest loan amount", "loan amount",
+                    "highest approved amount", "most accounts with loan"):
+        assert match_metric(mention, registry) is None, f"{mention!r} 竟被 L1 命中"
+
+
+def test_gate9_residual_bare_mention_passes_l1(registry):
+    """残留风险成文（票 04 最重风险的当前状态钉，非「正确行为」背书）：
+    裸「approved amount」经包含单命中户均条（"average approved amount" ⊃ "approved amount"）、
+    裸「average salary」精确命中——此时 L2 极值指令**触不到**（L1 已命中直填槽）。
+    防线实为 understand 的 mention 抽取质量＋填槽宁空勿造，在体胜负看票 06 真跑观测；
+    若要机制化（output_form 含最高/最低即拒填）属裁决变更，随本测试一起改（owner 拍板）。"""
+    m = match_metric("approved amount", registry)
+    assert m is not None and m.name == "loan_approved_amount_avg"
+    # 时间窗可填＝误命中活性域（Q98 型带 1997）；纯骨架无时间被宁空勿造兜住（Q156 型同理）
+    assert fill_slots(m, {"metric_mention": "approved amount", "dimensions": [],
+                          "filters": ["1997"]}, today=TODAY).ok
+    assert not fill_slots(m, {"metric_mention": "approved amount", "dimensions": [],
+                              "filters": []}, today=TODAY).ok
+    m2 = match_metric("lowest average salary", registry)  # Q94/189 族：包含穿透
+    assert m2 is not None and m2.name == "avg_salary"
