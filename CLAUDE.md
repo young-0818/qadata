@@ -26,6 +26,7 @@ qadata report --baseline runs/A.jsonl --current runs/B.jsonl --types runs/m4-att
 
 - eval 逐题结果写 `runs/eval-last.jsonl`，节点级 token/延迟写 `runs/traces.jsonl`（带 run_id/question_id 归属）；两者与 `data/` 均不入库。抽样跑分固定 seed=42 可复现。
 - 评测参考值：M1 基线 BIRD dev-100 **63.0%**（qwen3.7-flash）；50 题配对 M2 **58.0%** → M3 **64.0%** → M4 终局运行 **60.0%**（deepseek-v4-flash-0731；M4 表观 Δ 被端点跨时段漂移淹没——同代码同日 32→36→29/30，README M4 段有证据链，各线增量以受控探针/同时段配对为准，不以跨时段 Δ 计）。冒烟 10 题固定集回归门槛在 `tests/smoke_baseline.json`（M4 重建后 9/10）——**与模型绑定，换模型必须重建基线**。
+- 轨道①（M5 指标考卷）固定题集 `tests/m5_financial_ids.json`：financial 106 题按 BIRD 难度分层 seed=42 抽 50（simple 29/moderate 18/challenging 3），一经冻结不得换题（换题＝历史数字作废，ADR-0001）；纯 SQL 对照分母 **27/50（54.0%）**，绑定 deepseek-v4-flash-0731（明细见 runs/m5-track1-baseline-report.md，本地）。
 - 评测花费红线：单次对比 ≤ ¥3；测试不得依赖真实 API/网络。
 
 ## 架构
