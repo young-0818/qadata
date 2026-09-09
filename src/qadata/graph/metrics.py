@@ -28,7 +28,8 @@ from typing import Any
 
 import yaml
 
-# 时间槽可声明的日期格式（票 04 的两类坑位：loan.date 文本 vs account.date 整数 YYMMDD）
+# 时间槽可声明的日期格式（两类形态。票 04 实库取证：financial 五个日期列全为文本
+# YYYY-MM-DD——描述 CSV 声称的 account.date/card.issued YYMMDD 与库实际不符，YYMMDD 留给真存该形态的库）
 DATE_FORMATS = ("YYYY-MM-DD", "YYMMDD")
 
 # 时间槽渲染出的占位符名（声明↔模板对账与填槽共用同一份，不两处各写各的）

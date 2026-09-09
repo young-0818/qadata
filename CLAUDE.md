@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # 环境：.venv 为 editable 安装（pip install -e ".[dev]"），git bash 无需激活即可用：
-.venv/Scripts/python -m pytest                 # 全部测试（当前 208 个，必须全绿）
+.venv/Scripts/python -m pytest                 # 全部测试（当前 296 个，必须全绿）
 .venv/Scripts/python -m pytest tests/test_eval_match.py::test_xxx   # 单个测试
 .venv/Scripts/python -m ruff check src tests   # lint（另有 ruff format）
 
@@ -28,6 +28,7 @@ qadata report --baseline runs/A.jsonl --current runs/B.jsonl --types runs/m4-att
 - 评测参考值：M1 基线 BIRD dev-100 **63.0%**（qwen3.7-flash）；50 题配对 M2 **58.0%** → M3 **64.0%** → M4 终局运行 **60.0%**（deepseek-v4-flash-0731；M4 表观 Δ 被端点跨时段漂移淹没——同代码同日 32→36→29/30，README M4 段有证据链，各线增量以受控探针/同时段配对为准，不以跨时段 Δ 计）。冒烟 10 题固定集回归门槛在 `tests/smoke_baseline.json`（M4 重建后 9/10）——**与模型绑定，换模型必须重建基线**。
 - 轨道①（M5 指标考卷）固定题集 `tests/m5_financial_ids.json`：financial 106 题按 BIRD 难度分层 seed=42 抽 50（simple 29/moderate 18/challenging 3），一经冻结不得换题（换题＝历史数字作废，ADR-0001）；纯 SQL 对照分母 **27/50（54.0%）**，绑定 deepseek-v4-flash-0731（明细见 runs/m5-track1-baseline-report.md，本地）。**模型缺口警示**：.env 现为 kimi-k2.7-code——轨道① on/off 配对须同模型同时段，若以 kimi 跑则 27/50 深基线跨模型不可比，需按纪律处理（票 06 已标注）。
 - 票 02 意图尾段注入（条款④）**判负成文**（2026-09-09，kimi 同日配对 32/50 vs 32/50、翻转 3/3、1466 分离探针证翻转不可复现＝注入信号≤载体 A 改写漂移噪声带）：软用途入墓地，载体 A（六字段意图）保留、唯一消费者＝metric_match，回炉裁决与全证据链见 `.scratch/qadata-m5/issues/02`。
+- 票 04 注册表**定稿入库**（2026-09-09 owner 拍板「全过」，提交 054388b，护栏①放行凭证在 YAML 文件头）：`metrics/financial.yaml` 18 条原子指标（六要素＋中英别名）。**库实际坑**：被测库五个日期列全为文本 YYYY-MM-DD，与 database_description 声称的 YYMMDD 不符——填槽字面量一律按库实际；槽标签以题面措辞为准（载体 A filters＝题面原样摘录，等值匹配容不得注释措辞）。裁决⑧⑨移交票 05：prompt 强调时间 filters 输出裸时间形；L2 指令「题面求具名极值/比较→NONE」防包含路径误命中户均条（票 06 设靶）。
 - 评测花费红线：单次对比 ≤ ¥3；测试不得依赖真实 API/网络。
 
 ## 架构
