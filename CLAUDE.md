@@ -26,7 +26,8 @@ qadata report --baseline runs/A.jsonl --current runs/B.jsonl --types runs/m4-att
 
 - eval 逐题结果写 `runs/eval-last.jsonl`（每题带 run_id/llm_calls/input·output·total_tokens/latency_s，失败题也计——票 10），节点级明细写 `runs/traces.jsonl`（裸北京时间 ts＋latency_s 秒；历史行为 UTC/毫秒旧格式，不迁移）；轮末逐题汇总另落 `runs/tokens-<run_id>.json`（含 model），`--budget` 给定后自动向账本追加一行（成本/累计列留待填保持人审）；两者与 `data/` 均不入库。抽样跑分固定 seed=42 可复现。
 - 评测参考值：M1 基线 BIRD dev-100 **63.0%**（qwen3.7-flash）；50 题配对 M2 **58.0%** → M3 **64.0%** → M4 终局运行 **60.0%**（deepseek-v4-flash-0731；M4 表观 Δ 被端点跨时段漂移淹没——同代码同日 32→36→29/30，README M4 段有证据链，各线增量以受控探针/同时段配对为准，不以跨时段 Δ 计）。冒烟 10 题固定集回归门槛在 `tests/smoke_baseline.json`（M4 重建后 9/10）——**与模型绑定，换模型必须重建基线**。
-- 轨道①（M5 指标考卷）固定题集 `tests/m5_financial_ids.json`：financial 106 题按 BIRD 难度分层 seed=42 抽 50（simple 29/moderate 18/challenging 3），一经冻结不得换题（换题＝历史数字作废，ADR-0001）；纯 SQL 对照分母 **27/50（54.0%）**，绑定 deepseek-v4-flash-0731（明细见 runs/m5-track1-baseline-report.md，本地）。
+- 轨道①（M5 指标考卷）固定题集 `tests/m5_financial_ids.json`：financial 106 题按 BIRD 难度分层 seed=42 抽 50（simple 29/moderate 18/challenging 3），一经冻结不得换题（换题＝历史数字作废，ADR-0001）；纯 SQL 对照分母 **27/50（54.0%）**，绑定 deepseek-v4-flash-0731（明细见 runs/m5-track1-baseline-report.md，本地）。**模型缺口警示**：.env 现为 kimi-k2.7-code——轨道① on/off 配对须同模型同时段，若以 kimi 跑则 27/50 深基线跨模型不可比，需按纪律处理（票 06 已标注）。
+- 票 02 意图尾段注入（条款④）**判负成文**（2026-09-09，kimi 同日配对 32/50 vs 32/50、翻转 3/3、1466 分离探针证翻转不可复现＝注入信号≤载体 A 改写漂移噪声带）：软用途入墓地，载体 A（六字段意图）保留、唯一消费者＝metric_match，回炉裁决与全证据链见 `.scratch/qadata-m5/issues/02`。
 - 评测花费红线：单次对比 ≤ ¥3；测试不得依赖真实 API/网络。
 
 ## 架构
@@ -42,7 +43,8 @@ question → understand → explore → generate → execute ──成功──�
 
 - 重试预算不新增状态键：`len(attempts)` 即账本（默认 3，`Settings.retry_budget`）；generate 提取失败也写 `SqlAttempt(sql="", error=…)` 入账。
 - **精准模式（M4-C，默认关）**：`Settings.precise_candidates>1` 时 generate 同 prompt 连打 K 发＝**一轮账本**（`build_llm` 按候选数切 `precise_temperature`）；execute 票决（结果级多数派，纯函数 `graph/precise.py`），票决不能自证——并列无多数派取最大组代表转 verify 强判可疑进重试/标注；载荷走唯一新状态键 `precise_candidates`（非预算键）。**注意**：探针实证该端点运行内采样噪声≈0（temp=0.3 三发结果恒收敛），自一致性无收益前提，工作点决策留 M5。
-- `graph/state.py`：`AgentState` TypedDict（total=False），**无 reducer，各键整值覆盖**；含 `original_question`（改写前原问题）、`verify_note`（可疑原因，None=通过）。
+- `graph/state.py`：`AgentState` TypedDict（total=False），**无 reducer，各键整值覆盖**；含 `original_question`（改写前原问题）、`verify_note`（可疑原因，None=通过）、`intent`（M5 载体 A：understand 同调六字段意图，None=解析失败回退，**勿再喂 prompt**——尾段注入④判负已拆，`test_generate_never_reads_intent` 钉死）。
+- `graph/intent.py`（M5 票 02）：`parse_understand_response` 纯函数（JSON 提取/宁空勿造归一/失败回退原文不烧预算）；意图唯一消费者＝metric_match 填槽（票 05）。
 - `graph/nodes.py`：`make_nodes(llm, tracer, settings)` 节点工厂，闭包注入依赖以便测试替换假模型；respond 失败路径不调 LLM（永不编造）；**答案稳定性回退**：执行失败耗尽且最后尝试为执行失败形态时，respond 重执行 `_last_good_sql(attempts)`（从 attempts 派生，不新增状态键）作答并标注。
 - `graph/verify.py`：规则校验器（空结果/聚合异常），确定性不烧 token；M3 精准化：「列出全部/所有/有哪些」类问题豁免空结果判可疑，截断不再触发重试（由 respond 标注）。
 - `graph/error_hints.py`：SQL 错误分类→中文修复建议（规则版，零 token），进失败历史段。
