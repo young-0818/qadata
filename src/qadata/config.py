@@ -17,6 +17,8 @@ class Settings:
     max_qps: float = 0.0  # 全局限速（次/秒）；0=不限速（并发评测用 --qps 打开）
     precise_candidates: int = 1  # M4-C 精准模式候选数（1=关闭；3/5 建议奇数）
     precise_temperature: float = 0.3  # 精准模式采样温度（候选>1 时生效；关闭时无效）
+    metric_layer: bool = False  # M5 票 05 指标层总开关（False 时管线与纯 SQL 现状逐行为一致）
+    metrics_dir: str = "metrics"  # 注册表目录（按库名寻址 metrics/<db>.yaml）
 
 
 def _env_int(name: str, default: int, *, minimum: int | None = None) -> int:
@@ -41,6 +43,21 @@ def _env_float(name: str, default: float, *, minimum: float | None = None) -> fl
     return v
 
 
+_TRUE_FORMS = {"1", "true", "yes"}
+_FALSE_FORMS = {"0", "false", "no"}
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw in _TRUE_FORMS:
+        return True
+    if raw in _FALSE_FORMS:
+        return False
+    raise RuntimeError(f"环境变量 {name} 需布尔形态（1/0/true/false/yes/no），当前值：{raw!r}")
+
+
 def load_settings() -> Settings:
     load_dotenv()
     api_key = os.getenv("DEEPSEEK_API_KEY")
@@ -57,6 +74,8 @@ def load_settings() -> Settings:
         max_qps=_env_float("QADATA_MAX_QPS", 0.0, minimum=0.0),
         precise_candidates=_env_int("QADATA_PRECISE_CANDIDATES", 1, minimum=1),
         precise_temperature=_env_float("QADATA_PRECISE_TEMPERATURE", 0.3, minimum=0.0),
+        metric_layer=_env_bool("QADATA_METRIC_LAYER", False),
+        metrics_dir=os.getenv("QADATA_METRICS_DIR", "metrics"),
     )
 
 

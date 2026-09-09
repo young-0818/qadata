@@ -124,6 +124,21 @@ def match_metric(mention: str | None, metrics: list[Metric]) -> Metric | None:
     return inclusion[0] if len(inclusion) == 1 else None
 
 
+def parse_metric_review(text: Any, metrics: list[Metric]) -> Metric | None:
+    """第二级 LLM 复核输出的严格解析（票 05 契约，解析归缝 B、调用归节点）。
+
+    只接受注册表内部名或 NONE；仅剥空白与大小写，不加别的宽容——夹解释、
+    报展示名、报不存在的名字一律判未命中（宁漏勿错）。
+    """
+    token = str(text).strip().lower()
+    if not token or token == "none":
+        return None
+    for m in metrics:
+        if m.name.lower() == token:
+            return m
+    return None
+
+
 # ── 加载与六要素校验 ──────────────────────────────────────────────
 
 

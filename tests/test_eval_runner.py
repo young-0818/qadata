@@ -349,3 +349,67 @@ def test_run_eval_concurrent_traces_merged(tmp_path, monkeypatch):
     assert len(trace_lines) == 3
     assert {t["question_id"] for t in trace_lines} == {"0", "1", "2"}
     assert len({t["run_id"] for t in trace_lines}) == 1  # 同一次运行同一 run_id
+
+
+# ── M5 票 05 缝 C：逐题记录落盘 path/metric_name/template_fell_back ──────
+
+def _school_env(tmp_path, monkeypatch):
+    make_fixture_db(tmp_path)
+    import shutil
+    (tmp_path / "school").mkdir(exist_ok=True)
+    shutil.move(str(tmp_path / "school.sqlite"), str(tmp_path / "school" / "school.sqlite"))
+    q = {"question_id": 0, "db_id": "school", "question": "所有人", "evidence": "",
+         "SQL": "SELECT name FROM students", "difficulty": "simple"}
+    return q, str(tmp_path)
+
+
+def test_run_one_records_path_fields_fallback(tmp_path, monkeypatch):
+    """默认（指标层关）：记录带 path=fallback／metric_name=None／fell_back=False。"""
+    from qadata.eval import bird
+    from qadata.types import Answer
+    q, db_dir = _school_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(bird, "run_question",
+                        lambda *a, **k: Answer(conclusion="ok", sql="SELECT name FROM students",
+                                               failed=False))
+    rec = bird._run_one(q, db_dir, None, 100, None)
+    assert rec["path"] == "fallback" and rec["metric_name"] is None
+    assert rec["template_fell_back"] is False
+
+
+def test_run_one_records_path_fields_metric(tmp_path, monkeypatch):
+    """命中路径：三字段随 Answer 落进记录（供 report 分路径切片，票 06）。"""
+    from qadata.eval import bird
+    from qadata.types import Answer
+    q, db_dir = _school_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        bird, "run_question",
+        lambda *a, **k: Answer(conclusion="ok", sql="SELECT name FROM students", failed=False,
+                               path="metric", metric_name="student_count",
+                               template_fell_back=False))
+    rec = bird._run_one(q, db_dir, None, 100, None)
+    assert rec["path"] == "metric" and rec["metric_name"] == "student_count"
+
+
+def test_run_one_records_downgrade_flag(tmp_path, monkeypatch):
+    """模板降级：path=fallback 但 fell_back=True（分路径报告据此单列降级题）。"""
+    from qadata.eval import bird
+    from qadata.types import Answer
+    q, db_dir = _school_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        bird, "run_question",
+        lambda *a, **k: Answer(conclusion="ok", sql="SELECT name FROM students", failed=False,
+                               path="fallback", metric_name=None, template_fell_back=True))
+    rec = bird._run_one(q, db_dir, None, 100, None)
+    assert rec["path"] == "fallback" and rec["template_fell_back"] is True
+
+
+def test_run_one_failure_record_has_path_fields(tmp_path, monkeypatch):
+    """失败/异常记录也带 path 字段（缺省 fallback）——分母不因缺字段而崩。"""
+    from qadata.eval import bird
+    q, db_dir = _school_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(bird, "run_question",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("炸")))
+    rec = bird._run_one(q, db_dir, None, 100, None)
+    assert rec["error_class"] == "answer_failed"
+    assert rec["path"] == "fallback" and rec["metric_name"] is None
+    assert rec["template_fell_back"] is False

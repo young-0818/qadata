@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # 环境：.venv 为 editable 安装（pip install -e ".[dev]"），git bash 无需激活即可用：
-.venv/Scripts/python -m pytest                 # 全部测试（当前 296 个，必须全绿）
+.venv/Scripts/python -m pytest                 # 全部测试（当前 336 个，必须全绿）
 .venv/Scripts/python -m pytest tests/test_eval_match.py::test_xxx   # 单个测试
 .venv/Scripts/python -m ruff check src tests   # lint（另有 ruff format）
 
@@ -22,6 +22,8 @@ qadata eval --questions data/bird/dev/dev.json --db-dir data/bird/dev/dev_databa
 # M4 真跑统一参数（并发＋限速＋省 1 次调用/题；模型一律用 .env 的 QADATA_MODEL——2026-09-09 用户裁决，废弃 M4 脚本内嵌 export 锁模型做法；跑分记录须注明实跑模型）：
 #   --concurrency 5 --qps 8 --skip-respond --budget runs/m5-budget.md
 qadata report --baseline runs/A.jsonl --current runs/B.jsonl --types runs/m4-attribution.jsonl  # 两轮 diff＋题型切片
+# M5 指标层（票 05，默认关）：QADATA_METRIC_LAYER=1 开命中路径（ask/eval 共用，注册表按库名寻址 metrics/<db>.yaml）；
+# 关时管线与纯 Text-to-SQL 现状逐行为一致（评测 path 恒 fallback）。轨道① on/off 配对须同模型同时段。
 ```
 
 - eval 逐题结果写 `runs/eval-last.jsonl`（每题带 run_id/llm_calls/input·output·total_tokens/latency_s，失败题也计——票 10），节点级明细写 `runs/traces.jsonl`（裸北京时间 ts＋latency_s 秒；历史行为 UTC/毫秒旧格式，不迁移）；轮末逐题汇总另落 `runs/tokens-<run_id>.json`（含 model），`--budget` 给定后自动向账本追加一行（成本/累计列留待填保持人审）；两者与 `data/` 均不入库。抽样跑分固定 seed=42 可复现。
@@ -33,18 +35,20 @@ qadata report --baseline runs/A.jsonl --current runs/B.jsonl --types runs/m4-att
 
 ## 架构
 
-六节点＋双条件边的自纠错状态机（M2）：
+六节点（＋M5 可选指标层节点）＋双条件边的自纠错状态机：
 
 ```
-question → understand → explore → generate → execute ──成功──→ verify ──通过──→ respond
-                              ↑                  │                  │
-                              └──失败且有预算─────┘   └──可疑且有预算──┘
+question → understand →〔metric_match〕→ explore → generate → execute ──成功──→ verify ──通过──→ respond
+                            命中↓未命中→explore        ↑          │                  │
+                                                    └──失败且有预算─┘   └──可疑且有预算──┘
                     （预算耗尽：失败→respond 兜底；可疑→respond 带校验标注）
 ```
+- **指标层（M5 票 05，`Settings.metric_layer` 默认关＝上图〔〕节点不进、与纯 SQL 现状逐行为一致）**：understand 后插 metric_match——两级匹配（L1 归一化别名确定性别名 → L2 LLM 复核整表 ≤18 条，只输出指标名或 NONE，解析失败＝未命中，宁漏勿错）；命中→填槽→渲染→走既有 execute（沙箱四层无旁路）→verify；未命中/该库无注册表文件→整节点跳过零调用走兜底。模板执行失败或结果可疑→记一条模板 attempt→降级兜底恰好一次（`matched_metric` 由 explore 清 None 作二次降级闸；`metric_note` 留原因进失败历史与 respond 标注）。评测逐题记录加 `path`（metric/fallback）/`metric_name`/`template_fell_back`。
 
 - 重试预算不新增状态键：`len(attempts)` 即账本（默认 3，`Settings.retry_budget`）；generate 提取失败也写 `SqlAttempt(sql="", error=…)` 入账。
 - **精准模式（M4-C，默认关）**：`Settings.precise_candidates>1` 时 generate 同 prompt 连打 K 发＝**一轮账本**（`build_llm` 按候选数切 `precise_temperature`）；execute 票决（结果级多数派，纯函数 `graph/precise.py`），票决不能自证——并列无多数派取最大组代表转 verify 强判可疑进重试/标注；载荷走唯一新状态键 `precise_candidates`（非预算键）。**注意**：探针实证该端点运行内采样噪声≈0（temp=0.3 三发结果恒收敛），自一致性无收益前提，工作点决策留 M5。
-- `graph/state.py`：`AgentState` TypedDict（total=False），**无 reducer，各键整值覆盖**；含 `original_question`（改写前原问题）、`verify_note`（可疑原因，None=通过）、`intent`（M5 载体 A：understand 同调六字段意图，None=解析失败回退，**勿再喂 prompt**——尾段注入④判负已拆，`test_generate_never_reads_intent` 钉死）。
+- `graph/state.py`：`AgentState` TypedDict（total=False），**无 reducer，各键整值覆盖**；含 `original_question`（改写前原问题）、`verify_note`（可疑原因，None=通过）、`intent`（M5 载体 A：understand 同调六字段意图，None=解析失败回退，**勿再喂 prompt**——尾段注入④判负已拆，`test_generate_never_reads_intent` 钉死）、`matched_metric`（票 05 命中指标名，载荷兼作 respond 血缘/评测记录来源，兜底路径与降级后由 explore 清 None）、`metric_note`（票 05 模板降级原因，None=未降级；进失败历史与 respond 标注）。
+- `graph/metrics.py`（M5 票 03，纯函数）：注册表六要素校验加载（`load_registry`/缺要素 `RegistryError` 拒绝、不带病运行）／L1 `match_metric`（归一化精确或包含，多候选歧义判 None）／`fill_slots`（时间/维度/过滤槽，任一填不出判未命中）／`render_sql`（命名占位符）／`parse_metric_review`（L2 严格解析，票 05）。**不碰 LLM 不碰图**（AST 级 import 纪律测试钉死）。`metrics/financial.yaml` 为票 04 定稿注册表（按库名寻址 `metrics/<db>.yaml`）。
 - `graph/intent.py`（M5 票 02）：`parse_understand_response` 纯函数（JSON 提取/宁空勿造归一/失败回退原文不烧预算）；意图唯一消费者＝metric_match 填槽（票 05）。
 - `graph/nodes.py`：`make_nodes(llm, tracer, settings)` 节点工厂，闭包注入依赖以便测试替换假模型；respond 失败路径不调 LLM（永不编造）；**答案稳定性回退**：执行失败耗尽且最后尝试为执行失败形态时，respond 重执行 `_last_good_sql(attempts)`（从 attempts 派生，不新增状态键）作答并标注。
 - `graph/verify.py`：规则校验器（空结果/聚合异常），确定性不烧 token；M3 精准化：「列出全部/所有/有哪些」类问题豁免空结果判可疑，截断不再触发重试（由 respond 标注）。

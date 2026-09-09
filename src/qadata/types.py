@@ -35,3 +35,9 @@ class Answer:
     result: QueryResult | None = None
     failed: bool = False
     error_summary: str | None = None
+    # M5 票 05 评测路径字段：path＝metric（命中模板作答）/fallback（兜底路线，含指标层关闭）；
+    # metric_name＝命中指标名（降级后被 explore 清载荷，随之路失——trace 可回溯）；
+    # template_fell_back＝模板失败降级旗标
+    path: str = "fallback"
+    metric_name: str | None = None
+    template_fell_back: bool = False

@@ -530,3 +530,40 @@ def test_metrics_module_touches_no_graph_config_or_llm():
     offenders = {m for m in imported if m.split(".")[0] not in stdlib_or_yaml}
     assert not offenders, f"metrics 模块违规导入：{offenders}"
     assert not any(m.startswith("qadata.") for m in imported)
+
+
+# ── 第二级 LLM 复核输出解析（票 05：纯解析归缝 B，调用归节点）────────
+
+def _two_metrics():
+    return parse_registry(_registry(
+        _full_entry(),
+        _full_entry(name="loan_count", display_name="贷款笔数",
+                    aliases=["贷款合同数"],
+                    sql_template="SELECT COUNT(*) FROM loan"
+                                 " WHERE loan.date BETWEEN {time_start} AND {time_end}",
+                    available_dimensions={}),
+    ))
+
+
+def test_review_accepts_exact_name():
+    ms = _two_metrics()
+    assert metrics_mod.parse_metric_review("loan_default_rate", ms) is ms[0]
+
+
+def test_review_tolerates_whitespace_and_case_only():
+    """只剥空白与大小写——不加别的宽容（宁漏勿错）。"""
+    ms = _two_metrics()
+    assert metrics_mod.parse_metric_review("  LOAN_DEFAULT_RATE\n", ms) is ms[0]
+
+
+@pytest.mark.parametrize("text", ["NONE", "none", " None ", ""])
+def test_review_none_and_empty_are_miss(text):
+    assert metrics_mod.parse_metric_review(text, _two_metrics()) is None
+
+
+def test_review_rejects_explanation_and_display_name():
+    """契约「输出只接受指标名或 NONE」：夹解释、报展示名、报不存在的名字一律判未命中。"""
+    ms = _two_metrics()
+    assert metrics_mod.parse_metric_review("loan_default_rate 最贴合题意", ms) is None
+    assert metrics_mod.parse_metric_review("贷款违约率", ms) is None
+    assert metrics_mod.parse_metric_review("some_other_metric", ms) is None

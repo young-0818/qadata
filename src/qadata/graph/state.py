@@ -20,4 +20,8 @@ class AgentState(TypedDict, total=False):
     verify_note: str | None  # verify 判定可疑的原因；None=通过或未经 verify
     precise_candidates: list[str] | None  # M4-C 载荷键（非预算键）：同轮多候选的 SQL 列表；
     # 账本仍由 len(attempts) 承担——批量=一轮，execute 用完即清（整值覆盖语义显式置 None）
+    matched_metric: str | None  # M5 票 05：命中指标名（载荷键）——兼作 respond 血缘展示与评测记录来源；
+    # 兜底路径清 None，降级时 explore 显式覆盖（防路由二次降级，仿 precise_candidates 纪律）
+    metric_note: str | None  # M5 票 05：指标模板降级原因（执行失败/校验可疑）；None=未发生降级。
+    # 进失败历史（generate 可见）与 respond 标注
     answer: Answer | None

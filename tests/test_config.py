@@ -21,6 +21,8 @@ def _isolate_env(monkeypatch):
     monkeypatch.delenv("QADATA_MAX_QPS", raising=False)
     monkeypatch.delenv("QADATA_PRECISE_CANDIDATES", raising=False)
     monkeypatch.delenv("QADATA_PRECISE_TEMPERATURE", raising=False)
+    monkeypatch.delenv("QADATA_METRIC_LAYER", raising=False)
+    monkeypatch.delenv("QADATA_METRICS_DIR", raising=False)
 
 
 def test_load_settings_reads_env(monkeypatch):
@@ -129,3 +131,37 @@ def test_negative_precise_temperature_rejected(monkeypatch):
     monkeypatch.setenv("QADATA_PRECISE_TEMPERATURE", "-1")
     with pytest.raises(RuntimeError, match="QADATA_PRECISE_TEMPERATURE"):
         load_settings()
+
+
+def test_metric_layer_defaults_off(monkeypatch):
+    """指标层总开关默认关（负结果预案⑤：功能保留、主线数字零污染）。"""
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    s = load_settings()
+    assert s.metric_layer is False and s.metrics_dir == "metrics"
+
+
+def test_metric_layer_env_on(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setenv("QADATA_METRIC_LAYER", "1")
+    assert load_settings().metric_layer is True
+
+
+@pytest.mark.parametrize("raw", ["0", "false", "False", "no"])
+def test_metric_layer_env_off_forms(monkeypatch, raw):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setenv("QADATA_METRIC_LAYER", raw)
+    assert load_settings().metric_layer is False
+
+
+def test_bad_metric_layer_rejected(monkeypatch):
+    """布尔形态坏值走可读契约（与 _env_int/_env_float 同族纪律）。"""
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setenv("QADATA_METRIC_LAYER", "maybe")
+    with pytest.raises(RuntimeError, match="QADATA_METRIC_LAYER"):
+        load_settings()
+
+
+def test_metrics_dir_from_env(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setenv("QADATA_METRICS_DIR", "other_metrics")
+    assert load_settings().metrics_dir == "other_metrics"

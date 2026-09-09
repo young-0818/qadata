@@ -1,18 +1,30 @@
-"""图节点：understand → explore → generate → execute → verify → respond（M2 自纠错）。"""
+"""图节点：understand →〔metric_match〕→ explore → generate → execute → verify → respond。
+
+M5 票 05：metric_match 为可选插入节点（总开关 Settings.metric_layer，默认关＝现状逐行为一致）。"""
 import re
+from datetime import date, datetime
+from pathlib import Path
 
 from qadata.config import FALLBACK_SETTINGS, Settings
 from qadata.graph.intent import parse_understand_response
+from qadata.graph.metrics import (
+    fill_slots,
+    load_registry,
+    match_metric,
+    parse_metric_review,
+    render_sql,
+)
 from qadata.graph.precise import NO_MAJORITY_ERROR, run_precise_batch
 from qadata.graph.prompts import (
     format_failure_history,
+    metric_review_prompt,
     respond_prompt,
     sql_prompt,
     strip_conclusion_prefix,
     understand_prompt,
 )
 from qadata.graph.verify import verify_result
-from qadata.llm.tracing import timed_invoke
+from qadata.llm.tracing import BEIJING, timed_invoke
 from qadata.tools.db import open_readonly
 from qadata.tools.executor import execute_sql
 from qadata.tools.schema import build_schema_context
@@ -21,6 +33,12 @@ from qadata.types import Answer, QueryResult, SqlAttempt
 _FENCE_RE = re.compile(r"```[a-zA-Z]*\n(.*?)```", re.DOTALL)
 
 PREVIEW_ROWS = 10  # 喂给 respond prompt 的结果预览行数（表格与 n= 均由此派生）
+
+
+def _today() -> date:
+    """填槽时钟缝：纯函数 fill_slots 不读钟，由节点注入；测试 monkeypatch 本函数。
+    取北京日历日（与 tracing 时间戳同口径），「去年」等相对词按中国时区解析。"""
+    return datetime.now(BEIJING).date()
 
 
 def extract_sql(text: str) -> str:
@@ -69,6 +87,47 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         question, intent = parse_understand_response(text)
         return {"original_question": state["question"], "question": question, "intent": intent}
 
+    def _registry_for(db_path: str):
+        """按库名寻址注册表（metrics/<db>.yaml）；无文件＝None（该库不进指标层）。
+        存在但损坏＝RegistryError 上抛，由 run_question 外层守护收敛为诚实失败
+        （票 03「不带病运行」——静默跳过会让坏文件冒充「未覆盖」骗过兜底 ≥ 基线条款）。"""
+        p = Path(s.metrics_dir) / f"{Path(db_path).stem}.yaml"
+        return load_registry(p) if p.is_file() else None
+
+    def _miss(reason: str) -> dict:
+        """未命中统一出口：载荷显式清 None（整值覆盖纪律），零额外 LLM 消耗。"""
+        if tracer is not None:
+            tracer.log("metric_match", outcome="miss", reason=reason)
+        return {"matched_metric": None, "metric_note": None}
+
+    def metric_match(state: dict) -> dict:
+        """两级匹配→填槽→渲染（M5 票 05）。命中写 current_sql 直连 execute；
+        任何未命中形态（无注册表/无意图/两级皆空/填槽失败）走兜底，宁漏勿错。"""
+        metrics = _registry_for(state["db_path"])
+        if metrics is None:
+            return _miss("该库无注册表文件（整节点跳过，零调用）")
+        intent = state.get("intent")
+        if not isinstance(intent, dict):
+            # 票面消费契约：解析失败回退态＝全部题判未命中，行为与 metric_layer=False 一致
+            return _miss("意图解析失败回退态（intent=None）")
+        m = match_metric(intent.get("metric_mention"), metrics)
+        level = "L1"
+        if m is None:  # 第一级确定性未中 → 第二级 LLM 复核整表（禁写 SQL，只判身份）
+            level = "L2"
+            text = timed_invoke(llm, metric_review_prompt(state["question"],
+                                                          state.get("evidence", ""), metrics),
+                                "metric_match", tracer, limiter)
+            m = parse_metric_review(text, metrics)
+        if m is None:
+            return _miss("两级匹配未命中（L2 判 NONE 或解析失败）")
+        fill = fill_slots(m, intent, today=_today())
+        if not fill.ok:
+            return _miss(f"{level} 命中 {m.name} 但填槽未过：{fill.reason}")
+        if tracer is not None:
+            tracer.log("metric_match", outcome="hit", metric=m.name, level=level)
+        return {"matched_metric": m.name, "metric_note": None,
+                "current_sql": render_sql(m, fill.params), "last_error": None}
+
     def explore(state: dict) -> dict:
         conn = open_readonly(state["db_path"])
         try:
@@ -76,10 +135,13 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
                                        db_path=state["db_path"], limiter=limiter)
         finally:
             conn.close()
-        return {"db_schema": ctx}
+        # matched_metric 显式清 None：兜底路线（含模板降级后进环）不留命中载荷
+        # ——降级恰好一次的闸在此关闭；metric_note 保留（generate 可见＋respond 标注）
+        return {"db_schema": ctx, "matched_metric": None}
 
     def generate(state: dict) -> dict:
-        history = format_failure_history(state.get("attempts", []), state.get("verify_note"))
+        history = format_failure_history(state.get("attempts", []), state.get("verify_note"),
+                                         state.get("metric_note"))
         prompt = sql_prompt(
             schema=state.get("db_schema", ""),
             evidence=state.get("evidence", ""),
@@ -151,7 +213,12 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         except Exception as e:  # noqa: BLE001 自纠错账本：任何执行失败都要入账供重试
             msg = str(e)
             attempts.append(SqlAttempt(sql=sql, error=msg))
-            return {"attempts": attempts, "result": None, "last_error": msg}
+            out = {"attempts": attempts, "result": None, "last_error": msg}
+            matched = state.get("matched_metric")
+            if matched:
+                # 模板 SQL 失败：入账后降级兜底（路由判 matched_metric → explore）
+                out["metric_note"] = f"指标模板「{matched}」执行失败：{msg.splitlines()[0]}"
+            return out
         attempts.append(SqlAttempt(sql=sql, row_count=res.row_count))
         return {"attempts": attempts, "result": res, "last_error": None}
 
@@ -164,13 +231,28 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
             # 票决不能自证：无多数派一律判可疑（不计正确路线）→ 有预算重试/耗尽带标注
             return {"verify_note": NO_MAJORITY_ERROR}
         verdict = verify_result(state["question"], state.get("current_sql") or "", res)
-        return {"verify_note": None if verdict.passed else verdict.reason}
+        if verdict.passed:
+            return {"verify_note": None}
+        out = {"verify_note": verdict.reason}
+        matched = state.get("matched_metric")
+        if matched:
+            # 命中但结果可疑：留降级原因（进失败历史与 respond 标注），路由经 explore 降回兜底
+            out["metric_note"] = f"指标模板「{matched}」的结果未通过自动校验：{verdict.reason}"
+        return out
 
     def respond(state: dict) -> dict:
         res = state.get("result")
         sql = state.get("current_sql")
         attempts = state.get("attempts", [])
         fallback_note = None
+        # 评测路径字段（票 05）：matched_metric 非空＝模板作答；matched 已清但 metric_note
+        # 在＝模板降级后由兜底作答（fell_back）；二者皆无＝纯兜底。
+        matched = state.get("matched_metric")
+        metric_note = state.get("metric_note")
+        path_name = "metric" if matched else "fallback"
+        fell_back = matched is None and metric_note is not None
+        route_kwargs = {"path": path_name, "metric_name": matched,
+                        "template_fell_back": fell_back}
         if res is None and attempts and attempts[-1].sql and attempts[-1].error:
             # 执行失败耗尽（非提取失败耗尽，后者必须诚实失败——M2 钉死回归）：
             # 回退重执行最近成功候选，答案不丢失；重执行失败则维持原诚实失败路径
@@ -200,6 +282,7 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
                     result=None,
                     failed=True,
                     error_summary=state.get("last_error"),
+                    **route_kwargs,
                 )
             }
         preview = res.rows[:PREVIEW_ROWS]  # 预览行只算一次，表格与 n= 同源派生
@@ -231,10 +314,16 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
             conclusion += f"\n（注意：该结果未通过自动校验：{note}）"
         if fallback_note:  # 回退作答：数据真实，如实标注来源
             conclusion += f"\n（注意：{fallback_note}）"
-        return {"answer": Answer(conclusion=conclusion, sql=sql, result=res, failed=False)}
+        if fell_back and metric_note and not fallback_note:  # 模板降级由兜底 SQL 作答，如实标注
+            # fallback_note 已置＝答案实为 _last_good_sql 复活的（可能是模板本身），
+            # 此时再称"由兜底路径生成"会与实际数据矛盾（数字诚实），交回退标注说明即可
+            conclusion += f"\n（注意：{metric_note}，最终答案由兜底路径生成）"
+        return {"answer": Answer(conclusion=conclusion, sql=sql, result=res, failed=False,
+                                 **route_kwargs)}
 
     return {
         "understand": understand,
+        "metric_match": metric_match,
         "explore": explore,
         "generate": generate,
         "execute": execute,
