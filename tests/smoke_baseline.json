@@ -1,13 +1,13 @@
 {
-  "date": "2026-09-05",
-  "commit": "a11544f",
+  "date": "2026-09-10",
+  "commit": "f16fc7a",
   "question_ids_file": "tests/smoke_ids.json",
-  "accuracy": 0.9,
+  "accuracy": 1.0,
   "by_difficulty": {
     "moderate": 1.0,
-    "simple": 0.8,
+    "simple": 1.0,
     "challenging": 1.0
   },
-  "model": "deepseek-v4-flash-0731",
-  "note": "M4 收尾重建（D 口径规则 5 落地后基线，--skip-respond 参数同 M4 真跑，判分不读结论不构成混杂）。旧基线 0.5（2026-09-03, c3679cb）已失效。唯一失分题 51（B 靶：街道地址选列歧义，B v1 已回滚，已知短板）。基线与模型绑定，换模型须重建。运行产物 runs/eval-m4-smoke.jsonl。"
+  "model": "glm-5.2",
+  "note": "M5 收尾重建（票 08）：understand 链路已变（票 02 载体 A 复活，意图同调抽取；metric_layer 默认关，path 全 fallback）＋端点两度切换（deepseek→kimi→glm），双触发重建纪律。参数同 M4（--skip-respond，判分不读结论不构成混杂），run 8ba9ca739091，产物 runs/eval-m5-smoke.jsonl。旧基线 0.9（2026-09-05, a11544f, deepseek-v4-flash-0731）失效。本轮 51（B 靶选列歧义）也对——如实标注：属模型换绑后的当轮表现，非 B 靶修复证据，短板记录仍在。基线与模型绑定，换模型须重建。满分数码使本闸语义＝链路健康闸（零失败形态）＋端点噪声带参考（kimi 同码 ±5 教训），数字回归判读须配合同时段配对，不以单轮满分宣称提升。"
 }
