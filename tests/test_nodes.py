@@ -196,6 +196,7 @@ def test_respond_success_minimal_three_sections_without_idle():
     """兜底题无口径来源、无标注：三节中该省的省——口径/校验两节整体不出现（不空转）。"""
     llm = ScriptedLLM(["Alice 最好"])
     out = make_nodes(llm)["respond"](_respond_state())
+    assert llm.calls == 1  # 纪律⑤：三节组装不偷偷多烧调用
     c = out["answer"].conclusion
     assert c.startswith("【结论】Alice 最好")
     assert "【数据依据】共取到 1 行（全部列示）；所用表：students" in c
@@ -207,6 +208,7 @@ def test_respond_fallback_caliber_cites_evidence_terms():
     llm = ScriptedLLM(["Alice 最好"])
     state = _respond_state(intent={"evidence_terms": ["全名 = first_name, last_name"]})
     out = make_nodes(llm)["respond"](state)
+    assert llm.calls == 1  # 口径展示零 token：respond 仍只有一次调用
     c = out["answer"].conclusion
     assert "【口径说明】" in c and "全名 = first_name, last_name" in c
     assert "【校验标注】" not in c
@@ -217,6 +219,7 @@ def test_respond_fallback_caliber_omitted_when_terms_empty():
     for intent in ({"evidence_terms": []}, {"evidence_terms": None}, {"metric_mention": "x"}, None):
         llm = ScriptedLLM(["r"])
         out = make_nodes(llm)["respond"](_respond_state(intent=intent))
+        assert llm.calls == 1
         assert "【口径说明】" not in out["answer"].conclusion
 
 
@@ -226,10 +229,11 @@ def test_respond_truncation_and_verify_notes_merged_into_check_section():
     llm = ScriptedLLM(["见明细"])
     state = _respond_state(result=res, verify_note="结果为空")
     out = make_nodes(llm)["respond"](state)
+    assert llm.calls == 1
     c = out["answer"].conclusion
     assert "【校验标注】" in c
     assert "- 该结果未通过自动校验：结果为空" in c
-    assert "- 结果已截断" in c
+    assert "- 结果已截断：结论仅基于前 10 行预览生成" in c  # 不重复行数，只陈述预览覆盖事实
     assert c.index("- 该结果未通过自动校验") < c.index("- 结果已截断")
 
 
@@ -244,7 +248,7 @@ def test_respond_failure_path_honest_sections_and_zero_llm():
              "last_error": "no such column: nope"}
     out = make_nodes(llm)["respond"](state)
     ans = out["answer"]
-    assert ans.failed is True
+    assert llm.calls == 0 and ans.failed is True  # 失败态零 LLM 显式入账
     c = ans.conclusion
     assert "【结论】未能完成查询（共尝试 1 次）" in c
     assert "【数据依据】无成功执行的查询，无可用结果集" in c
@@ -260,6 +264,7 @@ def test_respond_failure_path_carries_template_downgrade_note():
              "last_error": "boom", "matched_metric": None,
              "metric_note": "指标模板「loan_count」执行失败：boom"}
     out = make_nodes(llm)["respond"](state)
+    assert llm.calls == 0  # 降级原因入校验节是纯展示，零 LLM
     c = out["answer"].conclusion
     assert "【校验标注】" in c and "- 指标模板「loan_count」执行失败：boom" in c
 

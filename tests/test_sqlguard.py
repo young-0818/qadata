@@ -102,3 +102,15 @@ def test_used_tables_unparseable_returns_empty_not_raise():
     assert used_tables("SELECT FROM WHERE") == []
     assert used_tables("") == []
     assert used_tables("SELECT 1; SELECT 2") == []  # 非单语句不猜
+
+
+def test_empty_named_table_still_rejected_by_guard():
+    """评审收紧（票 07 双轴）：共用判据重构不得顺手放宽沙箱②层——
+    空名表节点（FROM ''）维持既有「未知表」拒绝。"""
+    with pytest.raises(SqlExecutionError, match="不存在的表"):
+        validate_sql("SELECT * FROM ''", TABLES)
+
+
+def test_used_tables_filters_empty_names_display_side():
+    """显示侧对同一形态诚实省略（认不出来＝空表，不是崩溃也不是怪词）。"""
+    assert used_tables("SELECT * FROM ''") == []

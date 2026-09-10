@@ -18,6 +18,7 @@ from qadata.graph.metrics import (
     RegistryError,
     fill_slots,
     has_extreme_signal,
+    lineage_text,
     load_registry,
     match_metric,
     normalize,
@@ -526,6 +527,16 @@ def test_render_rejects_missing_or_extra_slots():
     with pytest.raises(ValueError):
         render_sql(m, {"time_start": "'x'", "time_end": "'y'",
                        "dimensions": "d", "mystery": "1"})
+
+
+def test_lineage_text_fields_verbatim_single_line():
+    """票 07 评审收紧（Feature Envy）：血缘文本契约归 metrics.py（纯拼装零 token，
+    不碰 LLM 不碰图）——六要素字段原样、respond 不再伸手进 Metric 内部。"""
+    m = _parse_one()
+    assert lineage_text(m) == ("命中指标「贷款违约率」（loan_default_rate）；"
+                               "口径：违约＝loan.status='B'；分母＝全部结束合同；血缘表：loan")
+    multi = _parse_one(name="x", source_tables=["loan", "account", "district"])
+    assert "血缘表：loan、account、district" in lineage_text(multi)
 
 
 def test_render_escapes_injected_quotes():

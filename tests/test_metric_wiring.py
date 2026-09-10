@@ -192,6 +192,7 @@ def test_fallback_path_caliber_cites_evidence_terms(fin_env):
     ])
     ans = run_question(db, "客户平均余额是多少", llm=llm, settings=_S(reg))
     assert ans.path == "fallback"
+    assert llm.calls == 4  # understand + L2 + generate + respond（口径展示零新增调用）
     assert "【口径说明】口径依据（题面摘录）：平均余额 = AVG(loan.amount)" in ans.conclusion
 
 
@@ -206,6 +207,7 @@ def test_metric_layer_off_still_shows_evidence_caliber(fin_env):
     ])
     ans = run_question(db, "1995年贷款笔数是多少", llm=llm, settings=_S(reg, layer=False))
     assert ans.path == "fallback"
+    assert llm.calls == 3  # understand + generate + respond（关态调用形态不变）
     assert "【数据依据】" in ans.conclusion
     assert "【口径说明】口径依据（题面摘录）：笔数 = COUNT(loan_id)" in ans.conclusion
 
@@ -265,6 +267,39 @@ def test_real_financial_registry_hit_end_to_end(monkeypatch):
     assert ans.path == "metric" and ans.metric_name == "loan_default_rate"
     assert ans.result is not None and not ans.failed
     assert llm.calls == 2  # understand + respond（generate/explore 未进）
+
+
+@pytest.mark.parametrize("drift", ["entry_gone", "corrupt"])
+def test_hit_lineage_drift_honest_omission_answer_survives(fin_env, drift):
+    """评审收紧（票 07 双轴）：命中后注册表条目消失/文件损坏——血缘诚实省略、
+    真实数据不受连累（数字诚实），evidence 命中项接住口径节；绝不炸答案。
+    （手动节点链模拟「metric_match 与 respond 之间文件变了」的窗口，run_question 缝够不着。）"""
+    from pathlib import Path
+
+    from qadata.graph.nodes import make_nodes
+    db, reg = fin_env
+    llm = ScriptedLLM([
+        _understand_json("1995年贷款笔数", mention="贷款笔数", filters=["1995"],
+                         ev_terms=["笔数 = COUNT(loan_id)"]),
+        "3 笔",  # respond
+    ])
+    nodes = make_nodes(llm, settings=_S(reg))
+    state = {"db_path": db, "question": "1995年贷款笔数是多少", "evidence": ""}
+    state.update(nodes["understand"](state))
+    state.update(nodes["metric_match"](state))
+    assert state["matched_metric"] == "loan_count"  # 命中时注册表尚好
+    Path(reg, "financial.yaml").write_text(
+        "metrics: []\n" if drift == "entry_gone" else "metrics: {bad: yaml: [\n",
+        encoding="utf-8")
+    state.update(nodes["execute"](state))
+    out = nodes["respond"](state)
+    ans = out["answer"]
+    assert llm.calls == 2  # 血缘重载零 LLM（文件 IO 而已）
+    assert ans.failed is False and ans.result.rows == [(3,)]
+    c = ans.conclusion
+    assert "命中指标" not in c  # 查无此条/损坏→不谎称血缘
+    assert "【口径说明】口径依据（题面摘录）：笔数 = COUNT(loan_id)" in c
+    assert "【数据依据】" in c
 
 
 def test_gate9_blocks_extreme_form_via_l1(fin_env):

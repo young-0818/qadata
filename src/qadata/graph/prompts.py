@@ -1,4 +1,6 @@
 """提示词。纪律：SYSTEM_RULES 永远位于 prompt 最前端（吃前缀缓存，见设计文档优化 #7）。"""
+from collections.abc import Sequence
+
 from qadata.graph.error_hints import error_hint
 from qadata.graph.precise import NO_MAJORITY_ERROR
 
@@ -135,7 +137,7 @@ def respond_prompt(question: str, sql: str, rows_table: str, total: int, n: int)
 
 
 def compose_conclusion(conclusion: str, basis: str = "", caliber: str = "",
-                       notes=()) -> str:
+                       notes: Sequence[str] = ()) -> str:
     """E1 三节答案组装（票 07，纯函数零 token）：结论 → 数据依据 → 口径说明 → 校验标注。
 
     只有【结论】来自 LLM，其余各节由状态与注册表确定性派生、原样接入（永不编造）；

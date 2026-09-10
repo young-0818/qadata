@@ -1,6 +1,7 @@
 """图节点：understand →〔metric_match〕→ explore → generate → execute → verify → respond。
 
-M5 票 05：metric_match 为可选插入节点（总开关 Settings.metric_layer，默认关＝现状逐行为一致）。"""
+M5 票 05：metric_match 为可选插入节点（总开关 Settings.metric_layer，默认关＝现状在
+路由/调用数/账本/评测字段上逐行为一致；票 07 三节展示属两态共用的展示层）。"""
 import re
 from datetime import date, datetime
 from pathlib import Path
@@ -11,6 +12,7 @@ from qadata.graph.metrics import (
     RegistryError,
     fill_slots,
     has_extreme_signal,
+    lineage_text,
     load_registry,
     match_metric,
     parse_metric_review,
@@ -358,8 +360,7 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
                 registry = None  # 运行中途注册表损坏：已取回的真实数据不受连累，血缘诚实省略
             m = next((x for x in (registry or []) if x.name == matched), None)
             if m is not None:
-                caliber = (f"命中指标「{m.display_name}」（{m.name}）；"
-                           f"口径：{m.definition}；血缘表：{'、'.join(m.source_tables)}")
+                caliber = lineage_text(m)
         if not caliber:
             caliber = _evidence_caliber(state)
         notes = []
@@ -367,8 +368,9 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         if note:  # 可疑但预算耗尽：数据真实，如实呈现＋标注（不是假失败）
             notes.append(f"该结果未通过自动校验：{note}")
         if res.truncated:  # 截断标注并入校验节（票 07 条款④：不另开新节）
-            notes.append(f"结果已截断：完整结果共 {res.row_count} 行，"
-                         f"本答案仅覆盖前 {len(res.rows)} 行")
+            # 不重复数据依据节的行数（评审收紧：同一事实两处表述会漂移）——
+            # 本条只陈述数据依据给不了的事实：结论实际只看了预览行
+            notes.append(f"结果已截断：结论仅基于前 {len(preview)} 行预览生成")
         if fallback_note:  # 回退作答：数据真实，如实标注来源
             notes.append(fallback_note)
         if fell_back and metric_note and not fallback_note:  # 模板降级由兜底 SQL 作答，如实标注

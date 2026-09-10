@@ -47,10 +47,14 @@ def validate_sql(sql: str, allowed_tables: list[str]) -> str:
 
 
 def _referenced_tables(ast) -> set[str]:
-    """语句引用的物理表名（排除 CTE 别名、保留原写法）——表校验与血缘展示共用一份判据。"""
+    """语句引用的物理表名（排除 CTE 别名、保留原写法）——表校验与血缘展示共用一份判据。
+
+    空名节点不在此滤除：validate_sql 历史上把空名表判为未知表拒绝，沙箱②层的
+    既有拒绝语义不许被展示需求顺手放宽；显示侧过滤归 used_tables。
+    """
     cte_names = {c.alias.lower() for c in ast.find_all(exp.CTE)}
     return {t.name for t in ast.find_all(exp.Table)
-            if t.name and t.name.lower() not in cte_names}
+            if t.name.lower() not in cte_names}
 
 
 def used_tables(sql: str) -> list[str]:
@@ -65,4 +69,4 @@ def used_tables(sql: str) -> list[str]:
         return []
     if len(stmts) != 1 or stmts[0] is None:
         return []
-    return sorted(_referenced_tables(stmts[0]), key=str.lower)
+    return sorted((t for t in _referenced_tables(stmts[0]) if t), key=str.lower)

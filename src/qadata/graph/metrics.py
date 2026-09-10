@@ -509,6 +509,16 @@ def fill_slots(metric: Metric, intent: dict | None, *,
 # ── 模板渲染（命名占位符；产物保持单语句 SELECT 形态交给沙箱）───────
 
 
+def lineage_text(metric: Metric) -> str:
+    """命中血缘一行文本（票 07 respond 口径说明：指标名＋口径＋血缘表）。
+
+    注册表字段的展示契约归本模块（纯拼装零 token，不碰 LLM 不碰图）——
+    respond 不再伸手进 Metric 内部。
+    """
+    return (f"命中指标「{metric.display_name}」（{metric.name}）；"
+            f"口径：{metric.definition}；血缘表：{'、'.join(metric.source_tables)}")
+
+
 def render_sql(metric: Metric, params: dict[str, str]) -> str:
     """{槽名} → 参数值（值已由填槽产出为字面量/列清单，本函数只做替换）。
 
