@@ -125,9 +125,13 @@ question → understand →〔metric_match〕→ explore → generate → execut
   如实标注为换绑当轮表现、非 B 靶修复证据（见 `tests/smoke_baseline.json`）。
 - 分路径报告：`qadata report --baseline runs/eval-m5-track1-off.jsonl --current runs/eval-m5-track1-on.jsonl --types runs/m5-track1-types.jsonl --paths`；
   跑分脚本 `runs/m5-track1-pair.sh`。
-- 成本：**~¥5.8 / ¥10**（影子折算口径——百炼 coding plan 订阅逐行无现金实付可计，按唯一价格锚 ~¥3.9/M tokens 折算，
-  逐行总账与收尾对账 `runs/m5-budget.md`）；单次 ≤¥3 红线全行满足、砍线规则未触发；④判负省回炉配对 ~¥1.3-2.6，
-  B v2（票 09）经余量裁决留白未启动。
+- 成本：**~¥5.9 / ¥10**（影子折算口径——百炼 coding plan 订阅逐行无现金实付可计，按唯一价格锚 ~¥3.9/M tokens 折算，
+  逐行总账与收尾对账 `runs/m5-budget.md`）；单次 ≤¥3 红线全行满足、砍线规则未触发；④判负省回炉配对 ~¥1.3-2.6。
+- B v2 条件化取值注入（票 09）**存在性探针砍线、wontfix 成文**（用户批准，¥0.08，glm 三靶裸跑＋三端点历史轮交叉验证）：
+  51 靶消失（kimi/glm 连对）；326 病灶迁移（模型已用 TRIM 正确处理取值形态，真死因＝JOIN 语义——「同分子共存」vs「直接相连」，
+  取值样例救不了）；407 某轮已写出与 gold 同构 SQL、只因加 DISTINCT 削掉 gold 重复行被判错（判分形态问题，判分器不动＝M5 既定裁决）。
+  **三靶 0/3 命中「看不见取值」的设计前提**→ 未进入注入实现与配对，弹性线预算分文未花。两案例（gold 含重复行的 DISTINCT 判负、
+  evidence 谎报取值形态）入 gold/注释可靠性记录，供「评测基准自身有噪声」叙事引用。
 - 复现：`.env` 设 `QADATA_METRIC_LAYER=1` 后
   `qadata eval --questions data/bird/dev/dev.json --db-dir data/bird/dev/dev_databases --ids tests/m5_financial_ids.json --out runs/eval-m5-track1-on.jsonl`，
   对照轮去开关；判卷表自动复算（判卷数字绑实跑模型——本段为 kimi 轮，换端点须同时段重配对方可解读）。
