@@ -60,7 +60,7 @@ def test_precise_graph_round_counts_as_single_ledger_entry(fixture_db):
     assert len(final["attempts"]) == 1
     assert final["attempts"][0].sql == "SELECT name FROM students WHERE id = 1"
     assert final["answer"].failed is False
-    assert final["answer"].conclusion == "Alice 最好"
+    assert final["answer"].conclusion.startswith("【结论】Alice 最好")  # 票 07 三节形态
 
 
 def test_precise_no_majority_forced_suspicious_with_annotation(fixture_db):

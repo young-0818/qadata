@@ -1,6 +1,6 @@
 import pytest
 
-from qadata.tools.sqlguard import validate_sql
+from qadata.tools.sqlguard import used_tables, validate_sql
 from qadata.types import SqlExecutionError
 
 TABLES = ["students", "scores"]
@@ -73,3 +73,32 @@ def test_unknown_table_in_join_rejected():
 def test_unknown_table_in_subquery_rejected():
     with pytest.raises(SqlExecutionError, match="hallucinated"):
         validate_sql("SELECT * FROM (SELECT * FROM hallucinated)", TABLES)
+
+
+# ── used_tables（票 07：respond 数据依据节的确定性表名提取）──────────
+
+
+def test_used_tables_join_sorted_unique():
+    sql = ("SELECT s.name FROM students s JOIN scores sc ON s.id = sc.student_id "
+           "JOIN scores x ON x.student_id = s.id")
+    assert used_tables(sql) == ["scores", "students"]
+
+
+def test_used_tables_excludes_cte_alias():
+    assert used_tables("WITH t AS (SELECT 1) SELECT * FROM t") == []
+
+
+def test_used_tables_cte_over_real_table():
+    sql = "WITH t AS (SELECT id FROM students) SELECT * FROM t JOIN scores ON 1=1"
+    assert used_tables(sql) == ["scores", "students"]
+
+
+def test_used_tables_subquery_and_union():
+    assert used_tables("SELECT * FROM (SELECT a FROM x) UNION SELECT b FROM y") == ["x", "y"]
+
+
+def test_used_tables_unparseable_returns_empty_not_raise():
+    """显示辅助而非沙箱闸：解析不了返回空表，绝不抛（拒绝语义归 validate_sql）。"""
+    assert used_tables("SELECT FROM WHERE") == []
+    assert used_tables("") == []
+    assert used_tables("SELECT 1; SELECT 2") == []  # 非单语句不猜

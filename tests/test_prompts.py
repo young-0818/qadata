@@ -1,5 +1,6 @@
 from qadata.graph.prompts import (
     SYSTEM_RULES,
+    compose_conclusion,
     format_failure_history,
     respond_prompt,
     sql_prompt,
@@ -42,6 +43,40 @@ def test_respond_prompt_contains_all_parts():
     p = respond_prompt(question="Q", sql="SELECT 1", rows_table="| a |", total=5, n=2)
     for part in ("Q", "SELECT 1", "| a |", "5"):
         assert part in p
+
+
+def test_respond_prompt_asks_only_one_line_conclusion():
+    """票 07：数据依据/口径说明/校验标注改由代码确定性拼接，模型只出一句话结论。"""
+    p = respond_prompt(question="Q", sql="SELECT 1", rows_table="| a |", total=5, n=2)
+    assert "一句话结论" in p
+    assert "简述数据依据" not in p  # 勿再索要——模型代劳数据依据会掺编造
+
+
+# ── M5 票 07：E1 三节组装（纯函数）────────────────────────────────
+
+
+def test_compose_conclusion_three_sections_in_order():
+    t = compose_conclusion("Alice 最好",
+                           basis="共取到 2 行（全部列示）；所用表：students、scores",
+                           caliber="命中指标「贷款笔数」（loan_count）；口径：按批准日期计条",
+                           notes=["该结果未通过自动校验：结果为空"])
+    assert t.startswith("【结论】Alice 最好")
+    for head in ("【数据依据】", "【口径说明】", "【校验标注】"):
+        assert head in t
+    assert (t.index("【结论】") < t.index("【数据依据】")
+            < t.index("【口径说明】") < t.index("【校验标注】"))
+    assert "- 该结果未通过自动校验：结果为空" in t  # 校验标注逐条列、原样接入
+
+
+def test_compose_conclusion_omits_empty_sections_no_idle():
+    """空节省略不空转：校验标注全 None 时连节头都不出（票面条款）。"""
+    t = compose_conclusion("q", basis="共取到 1 行")
+    assert "【数据依据】" in t
+    assert "【口径说明】" not in t and "【校验标注】" not in t
+
+
+def test_compose_conclusion_bare_conclusion():
+    assert compose_conclusion("就一句话") == "【结论】就一句话"
 
 
 def test_sql_prompt_static_prefix_preserved_with_history():

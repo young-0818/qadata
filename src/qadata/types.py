@@ -28,7 +28,9 @@ class QueryResult:
 
 @dataclass
 class Answer:
-    """最终答案。failed=True 时 conclusion 为诚实的失败说明。"""
+    """最终答案。respond 产出的 conclusion 为票 07 三节组装文本（【结论】→【数据依据】→
+    【口径说明】→【校验标注】，空节省略；判分在结果集层，不读此文本）。failed=True 时为
+    诚实失败说明；最外层守护（run_question 兜裸异常）不经 respond，保持单段纯文本。"""
 
     conclusion: str
     sql: str | None = None

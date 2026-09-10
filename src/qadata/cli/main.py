@@ -16,7 +16,9 @@ console = Console()
 def _print_answer(answer) -> None:
     console.rule("问数")
     style = "red" if answer.failed else "green"
-    console.print(f"[{style}]结论：{answer.conclusion}[/{style}]")
+    # 票 07：conclusion 即三节组装成品（【结论】【数据依据】【口径说明】【校验标注】），原样输出；
+    # 截断标注已并入校验节，不再单列黄字（避免同一事实两处表述漂移）
+    console.print(answer.conclusion, style=style, markup=False)
     if answer.result is not None:
         t = Table(show_header=True, header_style="bold")
         for c in answer.result.columns:
@@ -24,8 +26,6 @@ def _print_answer(answer) -> None:
         for row in answer.result.rows[:10]:
             t.add_row(*[str(v) for v in row])
         console.print(t)
-        if answer.result.truncated:
-            console.print("[yellow]结果已截断（仅显示前若干行）[/yellow]")
     if answer.sql:
         console.print(f"SQL：{answer.sql}", style="dim")
 

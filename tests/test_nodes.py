@@ -4,6 +4,7 @@ from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from qadata.graph.nodes import extract_sql, format_rows, make_nodes
 from qadata.types import QueryResult
 from tests.conftest import RecorderLLM
+from tests.fakes import ScriptedLLM
 
 
 def test_extract_sql_strips_fences():
@@ -92,7 +93,9 @@ def test_nodes_happy_path(fixture_db):
     state.update(nodes["respond"](state))
     ans = state["answer"]
     assert ans.failed is False
-    assert ans.conclusion == "Alice 的成绩最好"
+    # 票 07：三节组装——LLM 文本进【结论】节，数据依据确定性派生
+    assert ans.conclusion.startswith("【结论】Alice 的成绩最好")
+    assert "所用表：students" in ans.conclusion
     assert ans.sql == "SELECT name FROM students WHERE id = 1"
 
 
@@ -170,6 +173,95 @@ def test_respond_notes_truncation():
     prompt = recorder.prompts[0]
     assert "结果已截断" in prompt  # 提示模型如实措辞，勿把截断当全量
     assert "前 10 行" in prompt  # n 由 PREVIEW_ROWS 派生
+
+
+# ── M5 票 07：E1 三节组装（respond 节点）───────────────────────────
+
+
+def _ok_result(rows=(("Alice",),), row_count=None, truncated=False):
+    return QueryResult(columns=["name"], rows=list(rows),
+                       row_count=row_count if row_count is not None else len(rows),
+                       truncated=truncated, elapsed_ms=1)
+
+
+def _respond_state(**over):
+    state = {"db_path": "unused", "question": "q",
+             "current_sql": "SELECT name FROM students WHERE id = 1",
+             "result": _ok_result(), "last_error": None}
+    state.update(over)
+    return state
+
+
+def test_respond_success_minimal_three_sections_without_idle():
+    """兜底题无口径来源、无标注：三节中该省的省——口径/校验两节整体不出现（不空转）。"""
+    llm = ScriptedLLM(["Alice 最好"])
+    out = make_nodes(llm)["respond"](_respond_state())
+    c = out["answer"].conclusion
+    assert c.startswith("【结论】Alice 最好")
+    assert "【数据依据】共取到 1 行（全部列示）；所用表：students" in c
+    assert "【口径说明】" not in c and "【校验标注】" not in c
+
+
+def test_respond_fallback_caliber_cites_evidence_terms():
+    """兜底路径口径说明＝evidence 命中项（载体 A evidence_terms 原样摘录，零 prompt）。"""
+    llm = ScriptedLLM(["Alice 最好"])
+    state = _respond_state(intent={"evidence_terms": ["全名 = first_name, last_name"]})
+    out = make_nodes(llm)["respond"](state)
+    c = out["answer"].conclusion
+    assert "【口径说明】" in c and "全名 = first_name, last_name" in c
+    assert "【校验标注】" not in c
+
+
+def test_respond_fallback_caliber_omitted_when_terms_empty():
+    """宁空勿造的另一面：intent 在但 evidence_terms 空/null → 口径节省略。"""
+    for intent in ({"evidence_terms": []}, {"evidence_terms": None}, {"metric_mention": "x"}, None):
+        llm = ScriptedLLM(["r"])
+        out = make_nodes(llm)["respond"](_respond_state(intent=intent))
+        assert "【口径说明】" not in out["answer"].conclusion
+
+
+def test_respond_truncation_and_verify_notes_merged_into_check_section():
+    """截断标注与校验可疑并入【校验标注】节，逐条列、不另开新节（票面条款④）。"""
+    res = _ok_result(rows=[(f"r{i}",) for i in range(12)], row_count=12, truncated=True)
+    llm = ScriptedLLM(["见明细"])
+    state = _respond_state(result=res, verify_note="结果为空")
+    out = make_nodes(llm)["respond"](state)
+    c = out["answer"].conclusion
+    assert "【校验标注】" in c
+    assert "- 该结果未通过自动校验：结果为空" in c
+    assert "- 结果已截断" in c
+    assert c.index("- 该结果未通过自动校验") < c.index("- 结果已截断")
+
+
+def test_respond_failure_path_honest_sections_and_zero_llm():
+    """失败态：respond 不调 LLM（ScriptedLLM 空脚本＝超脚本即炸），仍出三节诚实形态。"""
+    from qadata.types import SqlAttempt
+
+    llm = ScriptedLLM([])
+    state = {"db_path": "unused", "question": "q", "current_sql": None, "result": None,
+             "attempts": [SqlAttempt(sql="SELECT nope FROM students",
+                                     error="no such column: nope")],
+             "last_error": "no such column: nope"}
+    out = make_nodes(llm)["respond"](state)
+    ans = out["answer"]
+    assert ans.failed is True
+    c = ans.conclusion
+    assert "【结论】未能完成查询（共尝试 1 次）" in c
+    assert "【数据依据】无成功执行的查询，无可用结果集" in c
+
+
+def test_respond_failure_path_carries_template_downgrade_note():
+    """失败态校验标注接入模板降级原因（原样、零 LLM）。"""
+    from qadata.types import SqlAttempt
+
+    llm = ScriptedLLM([])
+    state = {"db_path": "unused", "question": "q", "current_sql": None, "result": None,
+             "attempts": [SqlAttempt(sql="SELECT 1", error="boom")],
+             "last_error": "boom", "matched_metric": None,
+             "metric_note": "指标模板「loan_count」执行失败：boom"}
+    out = make_nodes(llm)["respond"](state)
+    c = out["answer"].conclusion
+    assert "【校验标注】" in c and "- 指标模板「loan_count」执行失败：boom" in c
 
 
 def test_last_good_sql_derived_from_attempts():

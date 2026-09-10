@@ -8,6 +8,7 @@ from pathlib import Path
 from qadata.config import FALLBACK_SETTINGS, Settings
 from qadata.graph.intent import parse_understand_response
 from qadata.graph.metrics import (
+    RegistryError,
     fill_slots,
     has_extreme_signal,
     load_registry,
@@ -17,6 +18,7 @@ from qadata.graph.metrics import (
 )
 from qadata.graph.precise import NO_MAJORITY_ERROR, run_precise_batch
 from qadata.graph.prompts import (
+    compose_conclusion,
     format_failure_history,
     metric_review_prompt,
     respond_prompt,
@@ -29,6 +31,7 @@ from qadata.llm.tracing import BEIJING, timed_invoke
 from qadata.tools.db import open_readonly
 from qadata.tools.executor import execute_sql
 from qadata.tools.schema import build_schema_context
+from qadata.tools.sqlguard import used_tables
 from qadata.types import Answer, QueryResult, SqlAttempt
 
 _FENCE_RE = re.compile(r"```[a-zA-Z]*\n(.*?)```", re.DOTALL)
@@ -70,6 +73,31 @@ def _format_preview(columns: list[str], rows: list[tuple]) -> str:
 
 def format_rows(result: QueryResult, limit: int = PREVIEW_ROWS) -> str:
     return _format_preview(result.columns, result.rows[:limit])
+
+
+def _basis_line(res: QueryResult, sql: str | None) -> str:
+    """数据依据节（票 07）：行数/展示范围/所用表——全部确定性派生，零 token。"""
+    shown = len(res.rows)
+    if res.row_count > shown:
+        line = f"共取到 {res.row_count} 行，本答案仅列示前 {shown} 行"
+    elif shown:
+        line = f"共取到 {shown} 行（全部列示）"
+    else:
+        line = "共取到 0 行（未查询到数据）"
+    tables = used_tables(sql or "")
+    if tables:  # 认不出来就省略该字段（诚实，不猜）
+        line += f"；所用表：{'、'.join(tables)}"
+    return line
+
+
+def _evidence_caliber(state: dict) -> str:
+    """兜底/失败态的口径说明：引用 evidence 命中项（载体 A evidence_terms，
+    题面明示才有的原样摘录）。零 prompt——intent 只作展示消费，喂 prompt 纪律不破
+    （test_generate_never_reads_intent 仍钉死 generate）。无命中项＝空串（节省略）。"""
+    intent = state.get("intent")
+    terms = intent.get("evidence_terms") if isinstance(intent, dict) else None
+    terms = [str(t) for t in (terms or []) if str(t).strip()]
+    return f"口径依据（题面摘录）：{'；'.join(terms)}" if terms else ""
 
 
 def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
@@ -273,6 +301,7 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
                     pass
         if res is None:
             # 永不编造：失败路径不调 LLM；汇报全部尝试（比 M1 单错误版信息量更高）
+            # 票 07：仍按三节组装——数据依据如实记无结果集，模板降级原因进校验节
             if attempts:
                 lines = [f"未能完成查询（共尝试 {len(attempts)} 次）："]
                 for i, a in enumerate(attempts, 1):
@@ -281,9 +310,14 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
                 conclusion = "\n".join(lines)
             else:
                 conclusion = f"未能完成查询：{state.get('last_error') or '未知错误'}"
+            notes = [metric_note] if metric_note else []
+            # 失败态不走命中指标口径（模板没答出来，展示其口径会误导"已由该口径作答"）
             return {
                 "answer": Answer(
-                    conclusion=conclusion,
+                    conclusion=compose_conclusion(
+                        conclusion,
+                        basis="无成功执行的查询，无可用结果集（尝试明细见结论）",
+                        caliber=_evidence_caliber(state), notes=notes),
                     sql=sql,
                     result=None,
                     failed=True,
@@ -315,17 +349,35 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
                 limiter,
             )
             conclusion = strip_conclusion_prefix(str(text))
+        # 口径说明节（票 07）：命中→注册表零 token 引用口径与血缘；查不到→evidence 命中项
+        caliber = ""
+        if matched:
+            try:
+                registry = _registry_for(state["db_path"])
+            except RegistryError:
+                registry = None  # 运行中途注册表损坏：已取回的真实数据不受连累，血缘诚实省略
+            m = next((x for x in (registry or []) if x.name == matched), None)
+            if m is not None:
+                caliber = (f"命中指标「{m.display_name}」（{m.name}）；"
+                           f"口径：{m.definition}；血缘表：{'、'.join(m.source_tables)}")
+        if not caliber:
+            caliber = _evidence_caliber(state)
+        notes = []
         note = state.get("verify_note")
         if note:  # 可疑但预算耗尽：数据真实，如实呈现＋标注（不是假失败）
-            conclusion += f"\n（注意：该结果未通过自动校验：{note}）"
+            notes.append(f"该结果未通过自动校验：{note}")
+        if res.truncated:  # 截断标注并入校验节（票 07 条款④：不另开新节）
+            notes.append(f"结果已截断：完整结果共 {res.row_count} 行，"
+                         f"本答案仅覆盖前 {len(res.rows)} 行")
         if fallback_note:  # 回退作答：数据真实，如实标注来源
-            conclusion += f"\n（注意：{fallback_note}）"
+            notes.append(fallback_note)
         if fell_back and metric_note and not fallback_note:  # 模板降级由兜底 SQL 作答，如实标注
             # fallback_note 已置＝答案实为 _last_good_sql 复活的（可能是模板本身），
             # 此时再称"由兜底路径生成"会与实际数据矛盾（数字诚实），交回退标注说明即可
-            conclusion += f"\n（注意：{metric_note}，最终答案由兜底路径生成）"
-        return {"answer": Answer(conclusion=conclusion, sql=sql, result=res, failed=False,
-                                 **route_kwargs)}
+            notes.append(f"{metric_note}，最终答案由兜底路径生成")
+        return {"answer": Answer(
+            conclusion=compose_conclusion(conclusion, _basis_line(res, sql), caliber, notes),
+            sql=sql, result=res, failed=False, **route_kwargs)}
 
     return {
         "understand": understand,

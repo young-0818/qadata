@@ -38,13 +38,31 @@ def validate_sql(sql: str, allowed_tables: list[str]) -> str:
         raise SqlExecutionError(f"SQL 安全检查未通过：只允许 SELECT/WITH 查询，收到 {kind}")
 
     # 4. 引用表校验（排除 CTE 别名；大小写不敏感，报错保留原写法）
-    cte_names = {c.alias.lower() for c in ast.find_all(exp.CTE)}
     allowed = {t.lower() for t in allowed_tables}
-    unknown = sorted(
-        {t.name for t in ast.find_all(exp.Table)
-         if t.name.lower() not in allowed and t.name.lower() not in cte_names},
-        key=str.lower,
-    )
+    unknown = sorted((t for t in _referenced_tables(ast) if t.lower() not in allowed),
+                     key=str.lower)
     if unknown:
         raise SqlExecutionError(f"SQL 安全检查未通过：引用了不存在的表 {', '.join(unknown)}")
     return text
+
+
+def _referenced_tables(ast) -> set[str]:
+    """语句引用的物理表名（排除 CTE 别名、保留原写法）——表校验与血缘展示共用一份判据。"""
+    cte_names = {c.alias.lower() for c in ast.find_all(exp.CTE)}
+    return {t.name for t in ast.find_all(exp.Table)
+            if t.name and t.name.lower() not in cte_names}
+
+
+def used_tables(sql: str) -> list[str]:
+    """SQL 所用表集合（票 07 respond 数据依据节：确定性、零 token）。
+
+    显示辅助而非沙箱闸：解析失败/非单语句返回空表、绝不抛——拒绝语义归
+    validate_sql，此处只诚实回答「我认不出来」（调用方省略该字段即可）。
+    """
+    try:
+        stmts = sqlglot.parse(sql, dialect="sqlite", error_level=sqlglot.ErrorLevel.RAISE)
+    except sqlglot.errors.ParseError:
+        return []
+    if len(stmts) != 1 or stmts[0] is None:
+        return []
+    return sorted(_referenced_tables(stmts[0]), key=str.lower)

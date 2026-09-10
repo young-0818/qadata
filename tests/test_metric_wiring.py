@@ -38,14 +38,14 @@ metrics:
 """
 
 
-def _understand_json(question, mention=None, filters=None, dims=None):
+def _understand_json(question, mention=None, filters=None, dims=None, ev_terms=None):
     intent = {
         "metric_mention": mention,
         "dimensions": dims,
         "filters": filters,
         "output_form": None,
         "format_constraint": None,
-        "evidence_terms": None,
+        "evidence_terms": ev_terms,
     }
     return json.dumps({"question": question, "intent": intent}, ensure_ascii=False)
 
@@ -157,6 +157,72 @@ def test_template_exec_failure_downgrades_once(fin_env):
     # generate prompt 必须带模板 SQL 失败账（attempts 含模板记录）＋降级说明段
     gen_prompt = llm.prompts[1]
     assert "nope_col" in gen_prompt and "指标模板降级" in gen_prompt
+
+
+# ── M5 票 07：E1 三节组装 × 指标层（命中血缘 / 兜底 evidence 口径）────
+
+
+def test_hit_path_caliber_shows_registry_lineage_zero_token(fin_env):
+    """命中题口径说明节直出指标名＋口径＋血缘（注册表零 token 引用，不新增调用）。"""
+    db, reg = fin_env
+    llm = ScriptedLLM([
+        _understand_json("1995年贷款笔数", mention="贷款笔数", filters=["1995"]),
+        "1995年共 3 笔贷款",  # respond
+    ])
+    ans = run_question(db, "1995年贷款笔数是多少", llm=llm, settings=_S(reg))
+    assert ans.path == "metric"
+    c = ans.conclusion
+    assert "【结论】1995年共 3 笔贷款" in c
+    assert "【口径说明】命中指标「贷款笔数」（loan_count）" in c
+    assert "口径：以 loan.date 落入时间范围计条" in c  # 注册表原文，非模型转述
+    assert "血缘表：loan" in c
+    assert "【数据依据】" in c and "所用表：loan" in c
+    assert llm.calls == 2  # 血缘组装零 token
+
+
+def test_fallback_path_caliber_cites_evidence_terms(fin_env):
+    """兜底题口径说明引用 evidence 命中项（intent.evidence_terms 原样，零 prompt 注入）。"""
+    db, reg = fin_env
+    llm = ScriptedLLM([
+        _understand_json("客户平均余额", mention="平均余额",
+                         ev_terms=["平均余额 = AVG(loan.amount)"]),
+        "NONE",  # L2 判未命中 → 兜底
+        "SELECT COUNT(loan_id) FROM loan",  # generate
+        "4 笔",  # respond
+    ])
+    ans = run_question(db, "客户平均余额是多少", llm=llm, settings=_S(reg))
+    assert ans.path == "fallback"
+    assert "【口径说明】口径依据（题面摘录）：平均余额 = AVG(loan.amount)" in ans.conclusion
+
+
+def test_metric_layer_off_still_shows_evidence_caliber(fin_env):
+    """开关关（产品默认态）：E1 三节照常——口径说明是展示层，不依赖指标层。"""
+    db, reg = fin_env
+    llm = ScriptedLLM([
+        _understand_json("1995年贷款笔数", mention="贷款笔数", filters=["1995"],
+                         ev_terms=["笔数 = COUNT(loan_id)"]),
+        "SELECT COUNT(loan_id) FROM loan",  # generate（不省——关态无命中路径）
+        "4 笔",  # respond
+    ])
+    ans = run_question(db, "1995年贷款笔数是多少", llm=llm, settings=_S(reg, layer=False))
+    assert ans.path == "fallback"
+    assert "【数据依据】" in ans.conclusion
+    assert "【口径说明】口径依据（题面摘录）：笔数 = COUNT(loan_id)" in ans.conclusion
+
+
+def test_metric_layer_off_success_text_parity_shape(fin_env):
+    """关态回归护栏补强：metric_layer=False 时行为与现状一致的语义不变——
+    path/calls/判分字段零变化；仅 conclusion 文本换三节形态（E1 属展示层，票 07）。"""
+    db, reg = fin_env
+    off = ScriptedLLM([
+        _understand_json("1995年贷款笔数", mention="贷款笔数", filters=["1995"]),
+        "SELECT COUNT(loan_id) FROM loan",
+        "4 笔",
+    ])
+    ans = run_question(db, "1995年贷款笔数是多少", llm=off, settings=_S(reg, layer=False))
+    assert ans.path == "fallback" and ans.metric_name is None
+    assert ans.template_fell_back is False
+    assert off.calls == 3  # understand + generate + respond（与票 05 关态基线同数）
 
 
 def test_metric_layer_off_full_parity(fin_env):

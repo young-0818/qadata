@@ -67,7 +67,7 @@ _SQL_TMPL = SYSTEM_RULES + """
 {history}
 输出一条 SQL："""
 
-_RESPOND_TMPL = """你是数据分析助手。请根据查询结果用中文给出一句话结论，并简述数据依据。若结果为空，请如实说明未查询到数据，禁止编造。
+_RESPOND_TMPL = """你是数据分析助手。请根据查询结果用中文给出一句话结论；只写结论本身，不要解释、不要列数据明细（数据依据与口径由系统另行标注）。若结果为空，请如实说明未查询到数据，禁止编造。
 ## 用户问题
 {question}
 ## 所用 SQL
@@ -132,3 +132,20 @@ def strip_conclusion_prefix(text: str) -> str:
 
 def respond_prompt(question: str, sql: str, rows_table: str, total: int, n: int) -> str:
     return _RESPOND_TMPL.format(question=question, sql=sql, rows_table=rows_table, total=total, n=n)
+
+
+def compose_conclusion(conclusion: str, basis: str = "", caliber: str = "",
+                       notes=()) -> str:
+    """E1 三节答案组装（票 07，纯函数零 token）：结论 → 数据依据 → 口径说明 → 校验标注。
+
+    只有【结论】来自 LLM，其余各节由状态与注册表确定性派生、原样接入（永不编造）；
+    空节省略不空转——校验标注全 None 时连节头都不出现（票 07 条款③）。
+    """
+    parts = [f"【结论】{conclusion}"]
+    if basis:
+        parts.append(f"【数据依据】{basis}")
+    if caliber:
+        parts.append(f"【口径说明】{caliber}")
+    if notes:
+        parts.append("【校验标注】\n" + "\n".join(f"- {n}" for n in notes))
+    return "\n".join(parts)

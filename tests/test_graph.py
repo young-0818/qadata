@@ -10,7 +10,10 @@ def test_happy_path(fixture_db):
     llm = ScriptedLLM(["改写", "SELECT name FROM students WHERE id = 2", "Bob 的数学 88 分"])
     ans = run_question(fixture_db, "Bob 成绩如何", llm=llm, settings=_S)
     assert ans.failed is False
-    assert ans.conclusion == "Bob 的数学 88 分"
+    assert ans.conclusion.startswith("【结论】Bob 的数学 88 分")  # 票 07：LLM 文本入结论节
+    assert "【数据依据】" in ans.conclusion and "所用表：students" in ans.conclusion
+    assert "【口径说明】" not in ans.conclusion  # 无口径来源→节省略（不空转）
+    assert "【校验标注】" not in ans.conclusion  # 无标注→省略
     assert ans.result.rows == [("Bob",)]
     assert llm.calls == 3  # understand + generate + respond（explore/verify 不烧 token）
 
@@ -24,7 +27,7 @@ def test_execute_error_then_retry_success(fixture_db):
         "Alice 成绩最好",
     ])
     ans = run_question(fixture_db, "谁成绩最好", llm=llm, settings=_S)
-    assert ans.failed is False and ans.conclusion == "Alice 成绩最好"
+    assert ans.failed is False and ans.conclusion.startswith("【结论】Alice 成绩最好")
     assert llm.calls == 4
     # 轮 2 的 generate prompt 必须带失败历史（上下文工程真正生效的证据）
     assert "之前的失败尝试" in llm.prompts[2] and "no such column" in llm.prompts[2]

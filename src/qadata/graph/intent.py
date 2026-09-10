@@ -8,8 +8,10 @@
 
 2026-09-09 票 02 条款④判负裁决（owner 签字）：三约束字段「注入 generate 尾段」的
 软用途验效不过（翻转不可复现、注入信号 ≤ 载体 A 改写漂移噪声带，见 02 票判卷结论），
-该注入线已拆除不再恢复；意图六字段保留，唯一消费者＝metric_match 填槽（票 05，
-验收门改判为轨道①命中路径直检契约）。
+该注入线已拆除不再恢复；意图六字段保留，prompt 消费者唯一＝metric_match 填槽（票 05，
+验收门改判为轨道①命中路径直检契约）。票 07 起新增一个**展示消费者**：respond 兜底
+口径说明引用 evidence_terms——只进答案文本组装、零 prompt 注入，「勿再喂 prompt」纪律
+不破（test_generate_never_reads_intent 仍钉死）。
 """
 import json
 import re
