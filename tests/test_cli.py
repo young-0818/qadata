@@ -33,10 +33,9 @@ def test_serve_shell_delegates_to_run_server(monkeypatch):
     seen = {}
     monkeypatch.setattr(serve_mod, "run_server",
                         lambda **kw: seen.update(kw))
-    code = cli_main.main(["serve", "--host", "0.0.0.0", "--port", "9", "--db-dir", "d"])
+    code = cli_main.main(["serve", "--host", "0.0.0.0", "--port", "9"])
     assert code == 0
-    assert seen == {"host": "0.0.0.0", "port": 9, "db_dir": "d",
-                    "registry": "dbs.yaml", "import_dir": "data/web_imports"}
+    assert seen == {"host": "0.0.0.0", "port": 9, "agents_dir": "data/agents"}
 
 
 def test_missing_args_exit_nonzero():

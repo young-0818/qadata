@@ -1,12 +1,12 @@
-"""M7 票 01/02 web 薄壳：应用工厂＋DI（假模型/库注册表注入）＋前端同源服务。
+"""M7-rev2 票 02.5 web 薄壳：应用工厂＋DI＋智能体面＋前端同源服务。
 
 唯一入口不破：/api/ask 只经 run_question（沙箱四层无旁路），本模块不建模型、
-不读密钥、不碰 sqlite——llm/settings 由调用方注入（`qadata serve` 或测试的
-ScriptedLLM）。票 02 双轨：A 预置注册表经 dbs 参数注入（装配归 serve）；
-B 导入轨——上传落盘 web_imports／本地路径直连，两入口都进列表、可起别名。
-导入只做文件搬运与登记，从不建连接（唯一入口钉测见 tests/test_web_api.py：
-本包 AST 级禁 sqlite3，导入路径问答仍走 open_readonly＋URI 转义）。
-契约形状由 tests/test_web_api.py 钉死（spec：/api/ask 12 字段改形状＝跨票改卷）。
+不读密钥、不碰 sqlite——llm/settings/agents（AgentStore）由调用方注入（serve
+或测试的 ScriptedLLM＋tmp 存储）。智能体＝一只目录（data/agents/<id>/），
+数据源上传唯一路、业务知识引用态读取期派生；schema 摘要经 open_readonly
+只读打开（导入落盘零建连、读取展示走沙箱①层——三层钉测见契约测试）。
+/api/ask 响应 12 字段冻结不动（spec 响应契约：改形状＝跨票改卷；session_id
+恒 null 至票 04）。
 """
 from pathlib import Path
 from typing import Any
@@ -18,13 +18,14 @@ from pydantic import BaseModel, Field
 
 from qadata.config import Settings
 from qadata.graph.build import run_question
+from qadata.tools.db import open_readonly
+from qadata.tools.schema import list_tables
 from qadata.types import Answer
-from qadata.web.dbs import (
-    DbEntry,
-    DbRegistryError,
-    sanitize_alias,
-    store_upload,
-    validate_import_path,
+from qadata.web.agents import (
+    AgentMeta,
+    AgentNotFound,
+    AgentStore,
+    AgentStoreError,
 )
 
 # 前端未构建时的诚实占位页（侦察笔记：别白屏，写明构建命令）
@@ -34,7 +35,7 @@ _PLACEHOLDER_PAGE = """<!doctype html>
 <title>问数 · 前端未构建</title>
 <body style="font-family: system-ui; max-width: 40rem; margin: 4rem auto">
 <h1>前端尚未构建</h1>
-<p>API 已在服务（<code>GET /api/dbs</code> / <code>POST /api/ask</code>）。要看到对话页面，请在仓库根目录执行：</p>
+<p>API 已在服务（<code>GET /api/agents</code> / <code>POST /api/ask</code>）。要看到页面，请在仓库根目录执行：</p>
 <pre style="background:#f4f4f5; padding:.75rem; border-radius:.6rem"><code>cd web
 npm install
 npm run build</code></pre>
@@ -45,14 +46,23 @@ npm run build</code></pre>
 
 
 class AskRequest(BaseModel):
-    db: str
+    agent_id: str
     question: str = Field(min_length=1)
     evidence: str = ""
 
 
-class LocalImportRequest(BaseModel):
-    path: str = Field(min_length=1)
-    alias: str = ""
+class AgentCreateRequest(BaseModel):
+    name: str
+    description: str = ""
+
+
+class AgentPatchRequest(BaseModel):
+    # 全部可选：PATCH 只动显式传入的字段（model_fields_set 即"传了哪些"）
+    name: str | None = None
+    description: str | None = None
+    evidence: str | None = None
+    metrics_ref: str | None = None
+    preset_questions: list[str] | None = None
 
 
 def answer_to_payload(answer: Answer) -> dict[str, Any]:
@@ -77,85 +87,130 @@ def answer_to_payload(answer: Answer) -> dict[str, Any]:
     }
 
 
-def _entry_payload(entry: DbEntry) -> dict[str, str]:
-    return {"name": entry.name, "evidence": entry.evidence, "source": entry.source}
-
-
-def create_app(llm=None, settings: Settings | None = None,
-               dbs: dict[str, str | DbEntry] | None = None,
+def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
                static_dir: str | Path | None = None,
-               tracer=None,
-               import_dir: str | Path | None = None) -> FastAPI:
-    """应用工厂：llm/dbs/settings/static_dir/tracer/import_dir 全部由调用方注入——
-    契约测试不碰网、不碰真实数据目录；库装配（YAML/目录发现/web_imports 重扫）
-    是 serve 的责任，工厂不摸文件系统做发现。
+               tracer=None) -> FastAPI:
+    """应用工厂：agents（AgentStore）必填、llm/settings/static_dir/tracer 注入——
+    契约测试注 tmp 存储＋假模型，工厂不摸文件系统做装配（评审收紧：删 None 兜底，
+    不给"自己造真目录 store"留后路）。
 
-    dbs 值可为裸路径 str（无默认口径的预置库）或 DbEntry。import_dir＝上传轨
-    落盘目录；None 时上传端点诚实拒绝（直连轨不受影响）。
     llm=None 时逐题经 run_question 内部 build_llm（需密钥）；生产路径由 serve 注入
-    共享实例（与 eval 多线程共享单实例同构）。settings/tracer 一并透传 run_question。
-    static_dir 默认 web/dist 沿仓库根 cwd 约定（与 metrics_dir、TRACE_PATH 同款）。
+    共享实例。static_dir 默认 web/dist 沿仓库根 cwd 约定（与 TRACE_PATH 同款）。
     """
-    # 单进程单用户 demo（spec 会话节同款约定）：闭包字典被端点读写，
-    # _register 查后设的竞态在本卷接受，公网部署触发器另案。
-    registry: dict[str, DbEntry] = {
-        name: (v if isinstance(v, DbEntry) else DbEntry(name=name, path=v))
-        for name, v in (dbs or {}).items()
-    }
-    uploads_to = Path(import_dir) if import_dir is not None else None
+    store = agents
     dist = Path(static_dir) if static_dir is not None else Path("web/dist")
     app = FastAPI(title="qadata-web", docs_url=None, redoc_url=None)
 
-    def _register(entry: DbEntry) -> None:
-        if entry.name in registry:
-            raise HTTPException(status_code=409, detail=f"别名已存在：{entry.name}")
-        registry[entry.name] = entry
+    def _bad(e: AgentStoreError) -> HTTPException:
+        if isinstance(e, AgentNotFound):
+            return HTTPException(status_code=404, detail=str(e))
+        return HTTPException(status_code=400, detail=str(e))
 
-    @app.get("/api/dbs")
-    def list_dbs() -> dict[str, list[dict[str, str]]]:
-        # 票 02 起条目含默认口径与来源轨（前端预填/徽标）；/api/ask 12 字段不动
-        return {"dbs": [_entry_payload(registry[n]) for n in sorted(registry)]}
-
-    @app.post("/api/dbs/upload")
-    async def upload_db(request: Request,
-                        name: str = Query(..., description="原始文件名（仅 basename）"),
-                        alias: str = Query("", description="列表展示别名，缺省取文件名主干")) -> dict[str, str]:
-        if uploads_to is None:
-            raise HTTPException(status_code=400, detail="本服务未开启上传（import_dir 未配置）")
+    def _datasource_info(meta: AgentMeta) -> dict[str, Any]:
+        path = store.datasource_path(meta)
+        if path is None:
+            return {"has_file": False, "table_count": None, "error": None}
         try:
-            final_alias = sanitize_alias(alias or Path(name).stem)
-            # 落盘名以别名为准——重启后 discover_imports 按文件名主干恢复，别名不丢
-            target = uploads_to / f"{final_alias}{Path(name).suffix.lower()}"
-            if target.exists():
-                raise HTTPException(status_code=409, detail=f"同名导入库已存在：{target.name}")
-            dest = store_upload(uploads_to, await request.body(), target.name)
-        except DbRegistryError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from None
-        entry = DbEntry(name=final_alias, path=str(dest), source="import")
-        _register(entry)
-        return _entry_payload(entry)
+            conn = open_readonly(str(path))  # 沙箱①层：摘要展示也走唯一只读入口
+            try:
+                return {"has_file": True, "table_count": len(list_tables(conn)),
+                        "error": None}
+            finally:
+                conn.close()
+        except Exception as e:  # noqa: BLE001 摘要展示层：打不开一律如实上报不装正常
+            # （含 sqlite3 系异常——web 包 import 纪律不引 sqlite3，捕获面在此宽为有意为之）
+            return {"has_file": True, "table_count": None, "error": str(e)}
 
-    @app.post("/api/dbs/local")
-    def import_local(req: LocalImportRequest) -> dict[str, str]:
-        # 只登记路径，不建连接：能不能打开交给问一题时的沙箱唯一入口如实回答
+    def _detail(meta: AgentMeta) -> dict[str, Any]:
         try:
-            resolved = validate_import_path(req.path)
-            final_alias = sanitize_alias(req.alias or Path(resolved).stem)
-        except DbRegistryError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from None
-        entry = DbEntry(name=final_alias, path=resolved, source="import")
-        _register(entry)
-        return _entry_payload(entry)
+            kb, kb_err = store.effective_evidence(meta), None
+        except AgentStoreError as e:
+            kb, kb_err = "", str(e)
+        return {"id": meta.id, "name": meta.name, "description": meta.description,
+                "evidence": meta.evidence, "metrics_ref": meta.metrics_ref,
+                "business_knowledge": kb, "business_knowledge_error": kb_err,
+                "preset_questions": list(meta.preset_questions),
+                "datasource": _datasource_info(meta)}
+
+    # ── 模型配置：只读卡（可写化＝后手裁决；.env 是模型唯一真源）──────
+
+    @app.get("/api/model")
+    def model_card() -> dict[str, Any]:
+        return {"model": settings.model if settings else None,
+                "source": "环境 .env → QADATA_MODEL", "writable": False}
+
+    @app.get("/api/metrics-registries")
+    def metric_registries() -> dict[str, list[str]]:
+        return {"registries": store.registries()}
+
+    # ── 智能体 CRUD（真空启动：初始为空列表）────────────────────────
+
+    @app.get("/api/agents")
+    def list_agents() -> dict[str, list[dict[str, Any]]]:
+        try:
+            metas = store.all()
+        except AgentStoreError as e:
+            raise _bad(e) from None
+        return {"agents": [{"id": m.id, "name": m.name, "description": m.description,
+                            "has_datasource": store.datasource_path(m) is not None}
+                           for m in metas]}
+
+    @app.post("/api/agents")
+    def create_agent(req: AgentCreateRequest) -> dict[str, Any]:
+        try:
+            meta = store.create(req.name, req.description)
+        except AgentStoreError as e:
+            raise _bad(e) from None
+        return _detail(meta)
+
+    @app.get("/api/agents/{agent_id}")
+    def get_agent(agent_id: str) -> dict[str, Any]:
+        try:
+            return _detail(store.get(agent_id))
+        except AgentStoreError as e:
+            raise _bad(e) from None
+
+    @app.patch("/api/agents/{agent_id}")
+    def patch_agent(agent_id: str, req: AgentPatchRequest) -> dict[str, Any]:
+        try:
+            return _detail(store.patch(agent_id, **req.model_dump(exclude_unset=True)))
+        except AgentStoreError as e:
+            raise _bad(e) from None
+
+    @app.delete("/api/agents/{agent_id}")
+    def delete_agent(agent_id: str) -> dict[str, bool]:
+        try:
+            store.delete(agent_id)
+        except AgentStoreError as e:
+            raise _bad(e) from None
+        return {"ok": True}
+
+    @app.post("/api/agents/{agent_id}/datasource")
+    async def upload_datasource(agent_id: str, request: Request,
+                                name: str = Query(..., description="原始文件名（仅用于扩展名白名单）"),
+                                ) -> dict[str, bool]:
+        # 只搬字节进智能体目录：本端点全程零建连（连 _detail 都不走），
+        # 库能不能打开由详情摘要/问答链路经 open_readonly 如实回答
+        try:
+            store.store_datasource(agent_id, await request.body(), name)
+        except AgentStoreError as e:
+            raise _bad(e) from None
+        return {"ok": True}
+
+    # ── 问数：唯一入口，智能体定位数据源与默认业务知识 ───────────────
 
     @app.post("/api/ask")
     def ask(req: AskRequest) -> dict[str, Any]:
-        entry = registry.get(req.db)
-        if entry is None:
-            # 注册表外拒在调模型之前：web 面不提供更名数据库的旁路
-            raise HTTPException(status_code=404, detail=f"未知数据库：{req.db}")
-        # 口径单一来源：请求未显式给口径时用库默认（预置 YAML/指标派生），空则如实空
-        evidence = req.evidence.strip() or entry.evidence
-        answer = run_question(entry.path, req.question, evidence=evidence,
+        try:
+            meta = store.get(req.agent_id)
+            path = store.datasource_path(meta)
+            if path is None:
+                raise HTTPException(status_code=400,
+                                    detail=f"智能体「{meta.name}」未配置数据源（详情页上传 .sqlite 后再问）")
+            evidence = req.evidence.strip() or store.effective_evidence(meta)
+        except AgentStoreError as e:
+            raise _bad(e) from None
+        answer = run_question(str(path), req.question, evidence=evidence,
                               llm=llm, settings=settings, tracer=tracer)
         return answer_to_payload(answer)
 

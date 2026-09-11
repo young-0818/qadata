@@ -1,6 +1,6 @@
 // 与后端 Python 侧契约测试（tests/test_web_api.py）同构的响应形状。
-// 票 01 冻结 /api/ask 12 字段；票 02 起 /api/dbs 条目含默认口径与来源轨。
-// 改形状＝跨票改卷。
+// 票 01 冻结 /api/ask 12 字段（rev2 请求体 db→agent_id，响应形状不动）；
+// 智能体面（CRUD/数据源/业务知识/模型只读卡）由票 02.5 钉死。改形状＝跨票改卷。
 export interface AskResponse {
   conclusion: string;
   sql: string | null;
@@ -16,10 +16,35 @@ export interface AskResponse {
   session_id: null; // 票 04 起才有真值
 }
 
-export interface DbOption {
+export interface ModelCard {
+  model: string | null;
+  source: string;
+  writable: boolean; // 恒 false：模型真源是 .env，UI 只读（票 02.5 裁）
+}
+
+export interface AgentSummary {
+  id: string;
   name: string;
-  evidence: string; // 默认口径（预置 YAML/指标派生；导入库恒空）
-  source: "preset" | "import";
+  description: string;
+  has_datasource: boolean;
+}
+
+export interface DatasourceInfo {
+  has_file: boolean;
+  table_count: number | null;
+  error: string | null; // 库打不开如实上报，不装正常
+}
+
+export interface AgentDetail {
+  id: string;
+  name: string;
+  description: string;
+  evidence: string; // 手动业务知识（后端字段名沿用 evidence，UI 叫业务知识）
+  metrics_ref: string; // 非空＝引用态：业务读取期派生，手动编辑被后端拒绝
+  business_knowledge: string; // 实际生效的业务知识（引用态＝派生文本）
+  business_knowledge_error: string | null;
+  preset_questions: string[];
+  datasource: DatasourceInfo;
 }
 
 // 非 2xx 时把后端诚实的 detail 文案取出来展示（永不编造错误说明）
@@ -33,37 +58,79 @@ async function errorText(res: Response, fallback: string): Promise<string> {
   return `${fallback}（HTTP ${res.status}）`;
 }
 
-export async function listDbs(): Promise<DbOption[]> {
-  const res = await fetch("/api/dbs");
-  if (!res.ok) throw new Error(await errorText(res, "/api/dbs 失败"));
-  const body = (await res.json()) as { dbs: DbOption[] };
-  return body.dbs;
+async function getJson<T>(path: string): Promise<T> {
+  const res = await fetch(path);
+  if (!res.ok) throw new Error(await errorText(res, `${path} 失败`));
+  return (await res.json()) as T;
 }
 
-export async function ask(
-  db: string,
-  question: string,
-  evidence: string,
-): Promise<AskResponse> {
-  const res = await fetch("/api/ask", {
+async function sendJson<T>(path: string, init: RequestInit): Promise<T> {
+  const res = await fetch(path, init);
+  if (!res.ok) throw new Error(await errorText(res, `${path} 失败`));
+  return (await res.json()) as T;
+}
+
+export function getModel(): Promise<ModelCard> {
+  return getJson<ModelCard>("/api/model");
+}
+
+export function listRegistries(): Promise<string[]> {
+  return getJson<{ registries: string[] }>("/api/metrics-registries").then(
+    (b) => b.registries,
+  );
+}
+
+export function listAgents(): Promise<AgentSummary[]> {
+  return getJson<{ agents: AgentSummary[] }>("/api/agents").then((b) => b.agents);
+}
+
+export function getAgent(id: string): Promise<AgentDetail> {
+  return getJson<AgentDetail>(`/api/agents/${id}`);
+}
+
+export function createAgent(name: string, description: string): Promise<AgentDetail> {
+  return sendJson<AgentDetail>("/api/agents", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ db, question, evidence }),
+    body: JSON.stringify({ name, description }),
   });
-  if (res.status === 404) throw new Error("未知数据库（404）");
-  if (!res.ok) throw new Error(await errorText(res, "/api/ask 失败"));
-  return (await res.json()) as AskResponse;
 }
 
-// B 轨上传：raw-body 字节流（spec 冻结依赖，不走 multipart），名/别名在查询串。
-// 后端另有 POST /api/dbs/local（路径直连）——票面双入口归契约测试，UI 按 owner 裁只留上传。
-export async function uploadDb(file: File, alias: string): Promise<DbOption> {
+// 部分更新：只发显式字段（PATCH 语义由后端 model_fields_set 钉）
+export function patchAgent(
+  id: string,
+  fields: Partial<Pick<AgentDetail, "name" | "description" | "evidence" | "metrics_ref" | "preset_questions">>,
+): Promise<AgentDetail> {
+  return sendJson<AgentDetail>(`/api/agents/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(fields),
+  });
+}
+
+export async function deleteAgent(id: string): Promise<void> {
+  const res = await fetch(`/api/agents/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await errorText(res, "删除失败"));
+}
+
+// 数据源上传：raw-body 字节流（spec 冻结依赖，不走 multipart），原始名仅供扩展名校验
+export async function uploadDatasource(id: string, file: File): Promise<void> {
   const params = new URLSearchParams({ name: file.name });
-  if (alias.trim()) params.set("alias", alias.trim());
-  const res = await fetch(`/api/dbs/upload?${params.toString()}`, {
+  const res = await fetch(`/api/agents/${id}/datasource?${params.toString()}`, {
     method: "POST",
     body: file,
   });
   if (!res.ok) throw new Error(await errorText(res, "上传失败"));
-  return (await res.json()) as DbOption;
+}
+
+export async function ask(
+  agentId: string,
+  question: string,
+  evidence: string,
+): Promise<AskResponse> {
+  return sendJson<AskResponse>("/api/ask", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agent_id: agentId, question, evidence }),
+  });
 }
