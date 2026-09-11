@@ -57,11 +57,16 @@ def main(argv: list[str] | None = None) -> int:
                         help="预算账本 markdown：轮末自动追加一行（题数×调用/tokens 实测；"
                              "估算成本与累计两列留待填由人折算），如 runs/m5-budget.md")
 
-    p_serve = sub.add_parser("serve", help="本地起问数 web demo（M7 票 01）：API＋前端同源")
+    p_serve = sub.add_parser("serve", help="本地起问数 web demo（M7 票 01/02）：API＋前端同源＋双轨连库")
     p_serve.add_argument("--host", default="127.0.0.1")
     p_serve.add_argument("--port", type=int, default=8000)
     p_serve.add_argument("--db-dir", default=None,
-                         help="预置库根目录（BIRD 风格 <name>/<name>.sqlite；默认 data/bird/dev/dev_databases）")
+                         help="预置库回退根目录（BIRD 风格 <name>/<name>.sqlite；"
+                              "仅当 --registry 的 YAML 缺失时生效）")
+    p_serve.add_argument("--registry", default="dbs.yaml",
+                         help="A 轨预置库 YAML 注册表（名→路径→默认 evidence；默认 dbs.yaml）")
+    p_serve.add_argument("--import-dir", default="data/web_imports",
+                         help="B 轨上传落盘目录（重启自动重扫恢复；默认 data/web_imports）")
 
     p_report = sub.add_parser("report", help="两轮评测对比：qadata report --baseline A --current B")
     p_report.add_argument("--baseline", required=True)
@@ -121,7 +126,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "serve":
         from qadata.web.serve import run_server  # 薄壳：逻辑全在包内
 
-        run_server(host=args.host, port=args.port, db_dir=args.db_dir)
+        run_server(host=args.host, port=args.port, db_dir=args.db_dir,
+                   registry=args.registry, import_dir=args.import_dir)
         return 0
     if args.cmd == "report":
         from qadata.eval.report import (

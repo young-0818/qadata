@@ -22,8 +22,8 @@ qadata eval --questions data/bird/dev/dev.json --db-dir data/bird/dev/dev_databa
 # M4 真跑统一参数（并发＋限速＋省 1 次调用/题；模型一律用 .env 的 QADATA_MODEL——2026-09-09 用户裁决，废弃 M4 脚本内嵌 export 锁模型做法；跑分记录须注明实跑模型）：
 #   --concurrency 5 --qps 8 --skip-respond --budget runs/m5-budget.md
 qadata report --baseline runs/A.jsonl --current runs/B.jsonl --types runs/m4-attribution.jsonl  # 两轮 diff＋题型切片
-# M7 web demo（票 01 曳光弹）：先 cd web && npm install && npm run build（产物 web/dist 由后端同源服务；未构建时 "/" 出诚实占位页），再：
-qadata serve --port 8000   # 单进程起 API＋页面；预置库自动发现 BIRD 风格目录（--db-dir 可覆盖，默认 data/bird/dev/dev_databases）
+# M7 web demo（票 01/02）：先 cd web && npm install && npm run build（产物 web/dist 由后端同源服务；未构建时 "/" 出诚实占位页），再：
+qadata serve --port 8000   # 单进程起 API＋页面；A 轨预置库读仓库根 dbs.yaml（缺文件回退 --db-dir 目录发现，默认 data/bird/dev/dev_databases）；B 轨上传落盘 --import-dir（默认 data/web_imports，重启自动重扫恢复）
 # M5 指标层（票 05，默认关）：QADATA_METRIC_LAYER=1 开命中路径（ask/eval 共用，注册表按库名寻址 metrics/<db>.yaml）；
 # 关时与纯 Text-to-SQL 现状**在路由/调用数/账本/评测字段上**逐行为一致（评测 path 恒 fallback；
 # 票 07 E1 三节展示形态与开关无关、两态共用，判分在结果集层不读 conclusion）。轨道① on/off 配对须同模型同时段。
@@ -64,7 +64,7 @@ question → understand →〔metric_match〕→ explore → generate → execut
 - `eval/`：`bird.py` 跑分器（逐题异常隔离，`--ids` 固定题集，`--out`/`--resume` 断点续跑，逐题 flush；记录含 `gold_sql`/`gold_failed`/`error_class`；M4：`--concurrency` 每题独立分片＋主线程单写者收口合并、非续跑先清遗留分片、`--skip-respond` 评测模式省调用）；`qtypes.py` 题型标签器（规则六类，词边界防误命中，题面优先）；`match.py` 判分 = 顺序无关多重集匹配，`_sort_key` 类型分层是为修 None/数值混排崩溃的假阴性 bug——勿动，回归测试钉死；`report.py` 两轮 diff/变体对比；`variants.py` 变体矩阵驱动（variants.yaml）。
 - `llm/`：OpenAI 兼容网关（temperature=0；精准模式候选>1 时 `build_llm` 切 `precise_temperature`）＋ `invoke_with_backoff`（429/5xx/连接错指数退避重试，鉴权错立即失败）＋ `ratelimit.py` 全局限速器（`--qps`，多线程共享单实例）＋自建 JSONL tracing（不用 LangSmith）。注意：取回复用 `.content`（`timed_invoke` 语义），`str(AIMessage)` 的 repr 转义引号会炸 sqlglot 提取。
 - `cli/main.py`：argparse+rich 薄壳，核心逻辑全在包内；`run_question` 顶层导入以便 monkeypatch；`ask --evidence` 透传业务口径；`serve` 只做参数转交（真逻辑在 `web/serve.py`：load_settings→build_llm 共享实例→create_app）。
-- `web/`（M7 票 01）：`app.py::create_app(llm, settings, dbs, static_dir, tracer)` 应用工厂（DI 接缝——契约测试 TestClient＋ScriptedLLM 不碰网/不碰真实数据目录）；`GET /api/dbs`＋`POST /api/ask`（薄壳唯一入口：只经 `run_question`，注册表外 404 拒在调模型之前）；`answer_to_payload` 冻结 12 字段契约（session_id 恒 null 至票 04，改形状＝跨票改卷）；`dbs.py::discover_dbs` BIRD 风格目录发现（`<name>/<name>.sqlite`，宁缺勿错）；构建产物 `web/dist` 同源服务（index＋/assets 挂载在 API 路由之后，未构建时 "/" 出占位页）。前端 `web/`（Vite＋React＋TS，node_modules/dist 不入库）：单页聊天气泡、三节答案按 compose_conclusion 排版解析渲染、textContent 纪律（全文件禁 dangerouslySetInnerHTML）；不立前端测试（壳不判卷，CI 保持纯 Python）。
+- `web/`（M7 票 01/02）：`app.py::create_app(llm, settings, dbs, static_dir, tracer, import_dir)` 应用工厂（DI 接缝——契约测试 TestClient＋ScriptedLLM 不碰网/不碰真实数据目录；dbs 值＝裸路径或 DbEntry，工厂归一）；`GET /api/dbs`（票 02 起条目 name/evidence/source）＋`POST /api/ask`（薄壳唯一入口：只经 `run_question`，注册表外 404 拒在调模型之前；口径应用顺序＝请求显式>库默认>空）＋双轨导入端点 `POST /api/dbs/upload`（raw-body 字节流落盘 web_imports——spec 冻结依赖不走 multipart）/`POST /api/dbs/local`（路径直连只登记不建连）；`answer_to_payload` 冻结 12 字段契约（session_id 恒 null 至票 04，改形状＝跨票改卷）；`dbs.py` 双轨注册表纯函数——`load_preset_registry`（dbs.yaml 名→路径→默认 evidence，缺文件回退 `discover_dbs` BIRD 风格目录发现）、**口径单一来源护栏**（有 `metrics/<db>.yaml` 的库 YAML 再写 evidence＝加载期拒绝；口径由 `metric_evidence_text` 确定性派生并注明"演示摘录，非第二真源"）、导入输入面（scheme 正则拒引擎串/远程 URL——单字母盘符豁免不误杀 `D:/…`、sqlite 扩展名白名单、别名消毒含文件系统保留字符，撞名 409 不静默改名；双写护栏按库名寻址、绕护栏＝人审职责如实声明；权限校验层 owner 裁暂缓）、`discover_imports` 重启恢复；**唯一入口三层钉测**＝AST 禁 web 包 import sqlite3＋导入阶段 connect 即炸行为测＋恶意文件名端到端走 as_uri 转义。构建产物 `web/dist` 同源服务（index＋/assets 挂载在 API 路由之后，未构建时 "/" 出占位页）。前端 `web/`（Vite＋React＋TS，node_modules/dist 不入库）：单页聊天气泡、三节答案按 compose_conclusion 排版解析渲染、切库预填该库默认口径、导入面板（上传＋直连，拒绝文案原样展示）、textContent 纪律（全文件禁 dangerouslySetInnerHTML）；不立前端测试（壳不判卷，CI 保持纯 Python）。
 
 ## 项目纪律（非一般性建议，均源自设计文档与 M2 实践）
 
