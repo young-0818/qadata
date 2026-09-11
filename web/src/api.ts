@@ -55,7 +55,8 @@ export async function ask(
   return (await res.json()) as AskResponse;
 }
 
-// B 轨上传：raw-body 字节流（spec 冻结依赖，不走 multipart），名/别名在查询串
+// B 轨上传：raw-body 字节流（spec 冻结依赖，不走 multipart），名/别名在查询串。
+// 后端另有 POST /api/dbs/local（路径直连）——票面双入口归契约测试，UI 按 owner 裁只留上传。
 export async function uploadDb(file: File, alias: string): Promise<DbOption> {
   const params = new URLSearchParams({ name: file.name });
   if (alias.trim()) params.set("alias", alias.trim());
@@ -64,16 +65,5 @@ export async function uploadDb(file: File, alias: string): Promise<DbOption> {
     body: file,
   });
   if (!res.ok) throw new Error(await errorText(res, "上传失败"));
-  return (await res.json()) as DbOption;
-}
-
-// B 轨本地路径直连：只登记路径，打开仍走后端只读沙箱唯一入口
-export async function importLocalPath(path: string, alias: string): Promise<DbOption> {
-  const res = await fetch("/api/dbs/local", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path, alias: alias.trim() }),
-  });
-  if (!res.ok) throw new Error(await errorText(res, "直连失败"));
   return (await res.json()) as DbOption;
 }

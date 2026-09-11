@@ -238,12 +238,8 @@ header h1 {
   min-width: 0;
 }
 
-.import-row input[placeholder^="本机"] {
-  flex: 1;
-}
-
 .import-row input[placeholder^="别名"] {
-  width: 11rem;
+  width: 13rem;
 }
 
 .import-row button {

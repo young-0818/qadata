@@ -1,12 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import {
-  AskResponse,
-  DbOption,
-  ask,
-  importLocalPath,
-  listDbs,
-  uploadDb,
-} from "./api";
+import { AskResponse, DbOption, ask, listDbs, uploadDb } from "./api";
 
 // 渲染纪律（spec）：结果值一律走 React 文本插值（＝textContent），
 // 全文件禁止 dangerouslySetInnerHTML。
@@ -92,36 +85,34 @@ function AnswerBubble({ resp }: { resp: AskResponse }) {
   );
 }
 
-// 票 02 B 轨：上传 .sqlite 落盘服务器 web_imports，或本机路径直连登记——
-// 两入口都进库列表、可起别名；打开仍走后端只读沙箱唯一入口。
+// 票 02 B 轨：上传 .sqlite 落盘服务器 web_imports，进库列表、可起别名；
+// 打开仍走后端只读沙箱唯一入口。路径直连端点保留在 API（契约测试钉着），
+// UI 不暴露——owner 裁：导入只要选文件这一个入口。
 function ImportPanel({ onImported }: { onImported: (entry: DbOption) => void }) {
   const [file, setFile] = useState<File | null>(null);
   const [fileAlias, setFileAlias] = useState("");
-  const [path, setPath] = useState("");
-  const [pathAlias, setPathAlias] = useState("");
-  const [busy, setBusy] = useState<"" | "upload" | "local">("");
+  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [ok, setOk] = useState("");
   const [fileKey, setFileKey] = useState(0); // 非受控 file input：靠重挂载清空
 
-  async function run(kind: "upload" | "local", fn: () => Promise<DbOption>) {
-    setBusy(kind);
+  async function runUpload() {
+    if (!file) return;
+    setBusy(true);
     setErr("");
     setOk("");
     try {
-      const entry = await fn();
+      const entry = await uploadDb(file, fileAlias);
       setOk(`已导入：${entry.name}`);
       setFile(null);
       setFileKey((k) => k + 1);
       setFileAlias("");
-      setPath("");
-      setPathAlias("");
       onImported(entry);
     } catch (e) {
-      // 永不编造：拒绝理由（引擎串/非 sqlite/撞名…）原样展示后端诚实文案
+      // 永不编造：拒绝理由（非 sqlite/撞名/别名非法…）原样展示后端诚实文案
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy("");
+      setBusy(false);
     }
   }
 
@@ -139,33 +130,10 @@ function ImportPanel({ onImported }: { onImported: (entry: DbOption) => void }) 
           value={fileAlias}
           onChange={(e) => setFileAlias(e.target.value)}
         />
-        <button
-          type="button"
-          disabled={!file || busy !== ""}
-          onClick={() => file && run("upload", () => uploadDb(file, fileAlias))}
-        >
-          {busy === "upload" ? "上传中…" : "上传导入"}
+        <button type="button" disabled={!file || busy} onClick={runUpload}>
+          {busy ? "上传中…" : "上传导入"}
         </button>
         {file && <span className="import-hint">{file.name}</span>}
-      </div>
-      <div className="import-row">
-        <input
-          placeholder="本机 sqlite 文件路径，如 D:/data/my.db"
-          value={path}
-          onChange={(e) => setPath(e.target.value)}
-        />
-        <input
-          placeholder="别名（选填）"
-          value={pathAlias}
-          onChange={(e) => setPathAlias(e.target.value)}
-        />
-        <button
-          type="button"
-          disabled={!path.trim() || busy !== ""}
-          onClick={() => run("local", () => importLocalPath(path.trim(), pathAlias))}
-        >
-          {busy === "local" ? "登记中…" : "路径直连"}
-        </button>
       </div>
       {err && <div className="note">导入被拒：{err}</div>}
       {ok && <div className="note">{ok}（口径默认为空，可在上方选填）</div>}
