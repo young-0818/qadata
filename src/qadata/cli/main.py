@@ -8,7 +8,7 @@ from rich.console import Console
 from rich.table import Table
 
 from qadata import run_question  # 顶层导入（模块全局），便于测试 monkeypatch
-from qadata.llm.tracing import TraceLogger
+from qadata.llm.tracing import TRACE_PATH, TraceLogger
 
 console = Console()
 
@@ -57,6 +57,12 @@ def main(argv: list[str] | None = None) -> int:
                         help="预算账本 markdown：轮末自动追加一行（题数×调用/tokens 实测；"
                              "估算成本与累计两列留待填由人折算），如 runs/m5-budget.md")
 
+    p_serve = sub.add_parser("serve", help="本地起问数 web demo（M7 票 01）：API＋前端同源")
+    p_serve.add_argument("--host", default="127.0.0.1")
+    p_serve.add_argument("--port", type=int, default=8000)
+    p_serve.add_argument("--db-dir", default=None,
+                         help="预置库根目录（BIRD 风格 <name>/<name>.sqlite；默认 data/bird/dev/dev_databases）")
+
     p_report = sub.add_parser("report", help="两轮评测对比：qadata report --baseline A --current B")
     p_report.add_argument("--baseline", required=True)
     p_report.add_argument("--current", required=True)
@@ -70,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.cmd == "ask":
-        tracer = TraceLogger("runs/traces.jsonl")
+        tracer = TraceLogger(TRACE_PATH)
         answer = run_question(args.db_path, args.question, evidence=args.evidence, tracer=tracer)
         _print_answer(answer)
         return 0
@@ -111,6 +117,11 @@ def main(argv: list[str] | None = None) -> int:
             skip_respond=args.skip_respond,
             budget_path=args.budget,
         )
+        return 0
+    if args.cmd == "serve":
+        from qadata.web.serve import run_server  # 薄壳：逻辑全在包内
+
+        run_server(host=args.host, port=args.port, db_dir=args.db_dir)
         return 0
     if args.cmd == "report":
         from qadata.eval.report import (

@@ -15,10 +15,12 @@ dependencies = [
     "rich>=13.0",
     "sqlglot>=30",
     "pyyaml>=6.0",
+    "fastapi>=0.110",   # M7 票 01：web 薄壳 API＋静态同源服务
+    "uvicorn>=0.29",    # M7 票 01：qadata serve 单进程启动器
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "ruff==0.16.5"]
+dev = ["pytest>=8.0", "ruff==0.16.5", "httpx>=0.27"]  # httpx＝TestClient 所需（M7 契约测试）
 
 [project.scripts]
 qadata = "qadata.cli.main:main"

@@ -14,11 +14,10 @@ from rich.table import Table
 
 from qadata.eval.match import results_match
 from qadata.graph.build import run_question
-from qadata.llm.tracing import TraceLogger, now_beijing
+from qadata.llm.tracing import TRACE_PATH, TraceLogger, now_beijing
 from qadata.tools.db import open_readonly
 
 console = Console()
-TRACE_PATH = "runs/traces.jsonl"
 
 
 def load_questions(path: str, sample: int | None = None, seed: int = 42,

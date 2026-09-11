@@ -26,6 +26,18 @@ def test_ask_failure_returns_zero_but_honest(fixture_db, monkeypatch, capsys):
     assert code == 0 and "未能完成查询" in capsys.readouterr().out
 
 
+def test_serve_shell_delegates_to_run_server(monkeypatch):
+    """CLI 薄壳：serve 参数原样交给包内 run_server，不碰 uvicorn。"""
+    import qadata.web.serve as serve_mod
+
+    seen = {}
+    monkeypatch.setattr(serve_mod, "run_server",
+                        lambda **kw: seen.update(kw))
+    code = cli_main.main(["serve", "--host", "0.0.0.0", "--port", "9", "--db-dir", "d"])
+    assert code == 0
+    assert seen == {"host": "0.0.0.0", "port": 9, "db_dir": "d"}
+
+
 def test_missing_args_exit_nonzero():
     with pytest.raises(SystemExit) as e:
         cli_main.main(["ask"])
