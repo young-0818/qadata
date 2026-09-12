@@ -1,18 +1,23 @@
-"""M7-rev2 票 02.5 web 薄壳：应用工厂＋DI＋智能体面＋前端同源服务。
+"""M7-rev2 票 02.5/03 web 薄壳：应用工厂＋DI＋智能体面＋进度流＋前端同源服务。
 
-唯一入口不破：/api/ask 只经 run_question（沙箱四层无旁路），本模块不建模型、
-不读密钥、不碰 sqlite——llm/settings/agents（AgentStore）由调用方注入（serve
-或测试的 ScriptedLLM＋tmp 存储）。智能体＝一只目录（data/agents/<id>/），
-数据源上传唯一路、业务知识引用态读取期派生；schema 摘要经 open_readonly
-只读打开（导入落盘零建连、读取展示走沙箱①层——三层钉测见契约测试）。
-/api/ask 响应 12 字段冻结不动（spec 响应契约：改形状＝跨票改卷；session_id
-恒 null 至票 04）。
+唯一入口不破：/api/ask 与 /api/ask/stream 只经 run_question（沙箱四层无旁路），
+本模块不建模型、不读密钥、不碰 sqlite——llm/settings/agents（AgentStore）由
+调用方注入（serve 或测试的 ScriptedLLM＋tmp 存储）。智能体＝一只目录
+（data/agents/<id>/），数据源上传唯一路、业务知识引用态读取期派生；schema 摘要
+经 open_readonly 只读打开（导入落盘零建连、读取展示走沙箱①层——三层钉测见契约
+测试）。/api/ask 响应 12 字段冻结不动（spec 响应契约：改形状＝跨票改卷；
+session_id 恒 null 至票 04）。票 03：/api/ask/stream 以 SSE 直播节点级进度帧
+（node/attempt/status 三字段起步）＋末帧 event:answer（即 12 字段契约本体）；
+agent 级在途锁两端点共用（同问在途＝409）。
 """
+import json
+import queue
+import threading
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -198,9 +203,27 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
         return {"ok": True}
 
     # ── 问数：唯一入口，智能体定位数据源与默认业务知识 ───────────────
+    # 在途锁（票 03）：agent 级、/api/ask 与 /api/ask/stream 共用一把——防阻塞×流式
+    # 交错。单进程单用户约定（与上传闭包竞态同款，M7 spec）；票 04 会话制落地后
+    # 键升为 session_id（票面"同会话并发"），本票先按智能体粒度拒。
+    _inflight: set[str] = set()
+    _inflight_guard = threading.Lock()
 
-    @app.post("/api/ask")
-    def ask(req: AskRequest) -> dict[str, Any]:
+    def _acquire_or_409(agent_id: str, name: str) -> None:
+        with _inflight_guard:
+            if agent_id in _inflight:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"智能体「{name}」正在回答上一个问题，等进度流收口后再问")
+            _inflight.add(agent_id)
+
+    def _release(agent_id: str) -> None:
+        with _inflight_guard:
+            _inflight.discard(agent_id)
+
+    def _resolve_ask_target(req: AskRequest) -> tuple[str, str, str]:
+        """定位数据源＋口径优先级（请求显式 > 智能体业务知识 > 空）。
+        阻塞与流式两端点共用＝拒绝文案与顺序严格一致（流式端点不得自创一套）。"""
         try:
             meta = store.get(req.agent_id)
             path = store.datasource_path(meta)
@@ -210,9 +233,61 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
             evidence = req.evidence.strip() or store.effective_evidence(meta)
         except AgentStoreError as e:
             raise _bad(e) from None
-        answer = run_question(str(path), req.question, evidence=evidence,
-                              llm=llm, settings=settings, tracer=tracer)
+        return str(path), evidence, meta.name
+
+    @app.post("/api/ask")
+    def ask(req: AskRequest) -> dict[str, Any]:
+        path, evidence, agent_name = _resolve_ask_target(req)
+        _acquire_or_409(req.agent_id, agent_name)
+        try:
+            answer = run_question(path, req.question, evidence=evidence,
+                                  llm=llm, settings=settings, tracer=tracer)
+        finally:
+            _release(req.agent_id)
         return answer_to_payload(answer)
+
+    # ── 票 03：进度流直播（SSE）——治"黑盒感"的主治通道 ──────────────
+
+    @app.post("/api/ask/stream")
+    def ask_stream(req: AskRequest) -> StreamingResponse:
+        """前置拒绝与 /api/ask 同序同文案（400/404/409 走普通 JSON 错误，不起流）；
+        起流后：进度帧＝data: {node,attempt,status}\n\n，末帧＝event: answer＋
+        12 字段契约本体（形状与 /api/ask 同源，不另造）。run_question 仍是最外层
+        守护——任何失败都以诚实失败答案收口成末帧，流永不裸断。
+        桥接：worker 线程跑阻塞图（on_event＝入队），同步生成器逐帧取队 yield
+        （starlette 自动 threadpool 迭代）。在途＝run_question 计算在途：放锁挂在
+        runner 的 finally（评审收紧·双轴同指），断流/生成器未启动等一切投递路径
+        都不构成泄漏窗口；计算跑完前队列缓冲、跑完即弃（单进程单用户尾差）。"""
+        path, evidence, agent_name = _resolve_ask_target(req)
+        _acquire_or_409(req.agent_id, agent_name)
+        events: queue.Queue = queue.Queue()
+        box: dict[str, Answer] = {}
+        sentinel = object()
+
+        def _runner() -> None:
+            try:
+                box["answer"] = run_question(path, req.question, evidence=evidence,
+                                             llm=llm, settings=settings, tracer=tracer,
+                                             on_event=events.put)
+            finally:
+                events.put(sentinel)
+                _release(req.agent_id)  # 在途＝计算在途：投递侧任何路径不持锁
+
+        threading.Thread(target=_runner, daemon=True).start()
+
+        def _frames():
+            while True:
+                item = events.get()
+                if item is sentinel:
+                    break
+                yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
+            answer = box.get("answer") or Answer(  # worker 被 BaseException 掀翻也不裸断
+                conclusion="流式查询异常中断", failed=True, error_summary="流式查询异常中断")
+            payload = json.dumps(answer_to_payload(answer), ensure_ascii=False)
+            yield f"event: answer\ndata: {payload}\n\n"
+
+        return StreamingResponse(_frames(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache"})
 
     if (dist / "index.html").is_file():
         # 构建产物同源服务（spec：零 CORS）；挂载放在 API 路由之后，不吃 /api/*

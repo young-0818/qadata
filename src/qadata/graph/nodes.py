@@ -7,6 +7,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from qadata.config import FALLBACK_SETTINGS, Settings
+from qadata.graph.error_hints import error_hint
 from qadata.graph.intent import parse_understand_response
 from qadata.graph.metrics import (
     RegistryError,
@@ -67,6 +68,14 @@ def _last_good_sql(attempts: list[SqlAttempt]) -> str | None:
     return None
 
 
+def _exec_fail_status(msg: str) -> str:
+    """execute 失败帧文案（票 03）：错误首行＋中文修复建议（有才带，宁缺毋滥）。
+    与建议同源＝error_hints（generate 重试历史吃的就是它，页面所见即模型下轮所读）。"""
+    status = f"执行失败：{msg.splitlines()[0]}"
+    hint = error_hint(msg)
+    return f"{status}；修复建议：{hint}" if hint else status
+
+
 def _format_preview(columns: list[str], rows: list[tuple]) -> str:
     head = " | ".join(columns)
     body = "\n".join(" | ".join(str(v) for v in r) for r in rows)
@@ -103,11 +112,30 @@ def _evidence_caliber(state: dict) -> str:
 
 
 def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
-               skip_respond: bool = False):
+               skip_respond: bool = False, on_event=None):
     """节点工厂：闭包注入 llm/tracer/settings/limiter，便于测试时替换假模型与配置。
     skip_respond：评测模式——成功路径不生成结论文本（判分只读 answer.sql 的执行结果），
-    失败诚实汇报与回退重执行不受影响。产品路径（ask/Web）默认 False，全家桶保留。"""
+    失败诚实汇报与回退重执行不受影响。产品路径（ask/Web）默认 False，全家桶保留。
+    on_event（票 03）：节点级进度回调，帧＝{node, attempt, status}——attempt 为该时刻
+    已入账的 SQL 尝试数（本轮未入账则停在上一计数，重试环上单调递增）；status 为
+    后端单源生成的一行中文（start＝开跑，其余＝该步结果与人读细节，如执行失败带
+    修复建议）。缺省 None 零发射、零包装，与现状逐行为一致。"""
     s = settings or FALLBACK_SETTINGS
+
+    def _emit(node: str, attempt: int, status: str) -> None:
+        if on_event is not None:
+            on_event({"node": node, "attempt": attempt, "status": status})
+
+    def _wrap(name: str, fn):
+        """start 帧统一由包装层发（少一处节点内样板）；关态直接返回原函数。"""
+        if on_event is None:
+            return fn
+
+        def wrapped(state: dict) -> dict:
+            _emit(name, len(state.get("attempts", [])), "start")
+            return fn(state)
+
+        return wrapped
 
     def understand(state: dict) -> dict:
         # 载体 A（M5 票 02）：改写＋六字段意图同调产出，零新增调用；意图只入状态供
@@ -116,6 +144,11 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         text = timed_invoke(llm, understand_prompt(state["question"], state.get("evidence", "")),
                             "understand", tracer, limiter)
         question, intent = parse_understand_response(text)
+        attempt = len(state.get("attempts", []))
+        if intent is None:
+            _emit("understand", attempt, "解析失败，按原问题作答")
+        else:
+            _emit("understand", attempt, "理解完成")
         return {"original_question": state["question"], "question": question, "intent": intent}
 
     def _registry_for(db_path: str):
@@ -125,10 +158,11 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         p = Path(s.metrics_dir) / f"{Path(db_path).stem}.yaml"
         return load_registry(p) if p.is_file() else None
 
-    def _miss(reason: str) -> dict:
+    def _miss(state: dict, reason: str) -> dict:
         """未命中统一出口：载荷显式清 None（整值覆盖纪律），零额外 LLM 消耗。"""
         if tracer is not None:
             tracer.log("metric_match", outcome="miss", reason=reason)
+        _emit("metric_match", len(state.get("attempts", [])), f"未命中：{reason}")
         return {"matched_metric": None, "metric_note": None}
 
     def metric_match(state: dict) -> dict:
@@ -136,11 +170,11 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         任何未命中形态（无注册表/无意图/两级皆空/填槽失败）走兜底，宁漏勿错。"""
         metrics = _registry_for(state["db_path"])
         if metrics is None:
-            return _miss("该库无注册表文件（整节点跳过，零调用）")
+            return _miss(state, "该库无注册表文件（整节点跳过，零调用）")
         intent = state.get("intent")
         if not isinstance(intent, dict):
             # 票面消费契约：解析失败回退态＝全部题判未命中，行为与 metric_layer=False 一致
-            return _miss("意图解析失败回退态（intent=None）")
+            return _miss(state, "意图解析失败回退态（intent=None）")
         m = match_metric(intent.get("metric_mention"), metrics)
         level = "L1"
         if m is None:  # 第一级确定性未中 → 第二级 LLM 复核整表（禁写 SQL，只判身份）
@@ -150,17 +184,18 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
                                 "metric_match", tracer, limiter)
             m = parse_metric_review(text, metrics)
         if m is None:
-            return _miss("两级匹配未命中（L2 判 NONE 或解析失败）")
+            return _miss(state, "两级匹配未命中（L2 判 NONE 或解析失败）")
         # ⑨ 闸·机制版（票 06）：极值/比较题形在 L1/L2 任一级命中都撤销——
         # 「谁最大」要的是明细排序答案，不是聚合口径；L2 指令只守得住 L2 那道门。
         if has_extreme_signal(state.get("original_question"), state.get("question"),
                               intent.get("metric_mention"), intent.get("output_form")):
-            return _miss(f"⑨ 闸：题形含具名极值/比较，撤销 {m.name} 命中走兜底")
+            return _miss(state, f"⑨ 闸：题形含具名极值/比较，撤销 {m.name} 命中走兜底")
         fill = fill_slots(m, intent, today=_today())
         if not fill.ok:
-            return _miss(f"{level} 命中 {m.name} 但填槽未过：{fill.reason}")
+            return _miss(state, f"{level} 命中 {m.name} 但填槽未过：{fill.reason}")
         if tracer is not None:
             tracer.log("metric_match", outcome="hit", metric=m.name, level=level)
+        _emit("metric_match", len(state.get("attempts", [])), f"命中：{m.name}")
         return {"matched_metric": m.name, "metric_note": None,
                 "current_sql": render_sql(m, fill.params), "last_error": None}
 
@@ -171,6 +206,7 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
                                        db_path=state["db_path"], limiter=limiter)
         finally:
             conn.close()
+        _emit("explore", len(state.get("attempts", [])), "取到 Schema")
         # matched_metric 显式清 None：兜底路线（含模板降级后进环）不留命中载荷
         # ——降级恰好一次的闸在此关闭；metric_note 保留（generate 可见＋respond 标注）
         return {"db_schema": ctx, "matched_metric": None}
@@ -200,8 +236,10 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
                 err = f"精准模式 {s.precise_candidates} 次采样均未提取出合法 SQL"
                 attempts = list(state.get("attempts", []))
                 attempts.append(SqlAttempt(sql="", error=err))
+                _emit("generate", len(attempts), f"提取失败：{err}")
                 return {"current_sql": None, "last_error": err, "attempts": attempts,
                         "precise_candidates": None}
+            _emit("generate", len(state.get("attempts", [])), "生成 SQL")
             return {"current_sql": sqls[0], "last_error": None, "precise_candidates": sqls}
         text = timed_invoke(llm, prompt, "generate", tracer, limiter)
         try:
@@ -209,7 +247,9 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         except ValueError as e:
             attempts = list(state.get("attempts", []))
             attempts.append(SqlAttempt(sql="", error=str(e)))
+            _emit("generate", len(attempts), f"提取失败：{str(e).splitlines()[0]}")
             return {"current_sql": None, "last_error": str(e), "attempts": attempts}
+        _emit("generate", len(state.get("attempts", [])), "生成 SQL")
         return {"current_sql": sql, "last_error": None}
 
     def execute(state: dict) -> dict:
@@ -225,13 +265,19 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
                 if outcome.fail_excerpt:
                     err += f"：{outcome.fail_excerpt}"
                 attempts.append(SqlAttempt(sql="", error=err))
+                _emit("execute", len(attempts), _exec_fail_status(err))
                 return {"attempts": attempts, "result": None, "last_error": err,
                         "precise_candidates": None}
             if outcome.no_majority:
                 attempts.append(SqlAttempt(sql="", error=NO_MAJORITY_ERROR))
+                # 票决不能自证＝谈不上"执行成功"（评审收紧）：帧如实说"代表待强判"
+                _emit("execute", len(attempts),
+                      f"票决无多数派，取最大组代表 {outcome.winner_result.row_count} 行待校验")
             else:
                 attempts.append(SqlAttempt(sql=outcome.winner_sql,
                                            row_count=outcome.winner_result.row_count))
+                _emit("execute", len(attempts),
+                      f"执行成功：{outcome.winner_result.row_count} 行")
             return {"attempts": attempts, "current_sql": outcome.winner_sql,
                     "result": outcome.winner_result, "last_error": None,
                     "precise_candidates": None}
@@ -239,6 +285,7 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         if not sql:
             # generate 阶段已失败：显式清掉上一轮残留的 result（整值覆盖语义下
             # "清除"必须显式返回），否则条件边①会拿陈旧 result 误走 verify 路径
+            _emit("execute", len(state.get("attempts", [])), "无可执行 SQL，转重试")
             return {"result": None}
         attempts = list(state.get("attempts", []))
         try:
@@ -249,6 +296,7 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         except Exception as e:  # noqa: BLE001 自纠错账本：任何执行失败都要入账供重试
             msg = str(e)
             attempts.append(SqlAttempt(sql=sql, error=msg))
+            _emit("execute", len(attempts), _exec_fail_status(msg))
             out = {"attempts": attempts, "result": None, "last_error": msg}
             matched = state.get("matched_metric")
             if matched:
@@ -256,19 +304,26 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
                 out["metric_note"] = f"指标模板「{matched}」执行失败：{msg.splitlines()[0]}"
             return out
         attempts.append(SqlAttempt(sql=sql, row_count=res.row_count))
+        _emit("execute", len(attempts), f"执行成功：{res.row_count} 行")
         return {"attempts": attempts, "result": res, "last_error": None}
 
     def verify(state: dict) -> dict:
         res = state.get("result")
         if res is None:
-            return {"verify_note": None}  # 执行已失败：路由直接走兜底，无需校验
+            # 执行已失败：路由直接走兜底，无需校验（防御分支——现路由不可达，帧照发不悬停）
+            _emit("verify", len(state.get("attempts", [])), "跳过校验（无结果）")
+            return {"verify_note": None}
         last = state.get("attempts", [])[-1] if state.get("attempts") else None
+        attempt = len(state.get("attempts", []))
         if last is not None and not last.sql and last.error == NO_MAJORITY_ERROR:
             # 票决不能自证：无多数派一律判可疑（不计正确路线）→ 有预算重试/耗尽带标注
+            _emit("verify", attempt, f"可疑：{NO_MAJORITY_ERROR}")
             return {"verify_note": NO_MAJORITY_ERROR}
         verdict = verify_result(state["question"], state.get("current_sql") or "", res)
         if verdict.passed:
+            _emit("verify", attempt, "校验通过")
             return {"verify_note": None}
+        _emit("verify", attempt, f"可疑：{verdict.reason}")
         out = {"verify_note": verdict.reason}
         matched = state.get("matched_metric")
         if matched:
@@ -314,6 +369,7 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
                 conclusion = f"未能完成查询：{state.get('last_error') or '未知错误'}"
             notes = [metric_note] if metric_note else []
             # 失败态不走命中指标口径（模板没答出来，展示其口径会误导"已由该口径作答"）
+            _emit("respond", len(attempts), "如实报失败")
             return {
                 "answer": Answer(
                     conclusion=compose_conclusion(
@@ -377,16 +433,17 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
             # fallback_note 已置＝答案实为 _last_good_sql 复活的（可能是模板本身），
             # 此时再称"由兜底路径生成"会与实际数据矛盾（数字诚实），交回退标注说明即可
             notes.append(f"{metric_note}，最终答案由兜底路径生成")
+        _emit("respond", len(attempts), "作答完成")
         return {"answer": Answer(
             conclusion=compose_conclusion(conclusion, _basis_line(res, sql), caliber, notes),
             sql=sql, result=res, failed=False, **route_kwargs)}
 
     return {
-        "understand": understand,
-        "metric_match": metric_match,
-        "explore": explore,
-        "generate": generate,
-        "execute": execute,
-        "verify": verify,
-        "respond": respond,
+        "understand": _wrap("understand", understand),
+        "metric_match": _wrap("metric_match", metric_match),
+        "explore": _wrap("explore", explore),
+        "generate": _wrap("generate", generate),
+        "execute": _wrap("execute", execute),
+        "verify": _wrap("verify", verify),
+        "respond": _wrap("respond", respond),
     }

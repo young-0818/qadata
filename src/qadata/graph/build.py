@@ -49,9 +49,10 @@ def _route_after_verify(state: dict, budget: int) -> str:
 
 
 def build_graph(llm, tracer=None, settings: Settings | None = None, limiter=None,
-                skip_respond: bool = False):
+                skip_respond: bool = False, on_event=None):
     s = settings or FALLBACK_SETTINGS
-    nodes = make_nodes(llm, tracer, settings=s, limiter=limiter, skip_respond=skip_respond)
+    nodes = make_nodes(llm, tracer, settings=s, limiter=limiter, skip_respond=skip_respond,
+                       on_event=on_event)
     g = StateGraph(AgentState)
     for name in ("understand", "metric_match", "explore", "generate", "execute",
                  "verify", "respond"):
@@ -86,13 +87,16 @@ def build_graph(llm, tracer=None, settings: Settings | None = None, limiter=None
 
 def run_question(db_path: str, question: str, evidence: str = "", llm=None,
                  tracer=None, settings: Settings | None = None, limiter=None,
-                 skip_respond: bool = False) -> Answer:
+                 skip_respond: bool = False, on_event=None) -> Answer:
+    """跑一题到底。on_event（票 03）＝节点级进度回调 `Callable[[dict], None]`，
+    帧形如 {node, attempt, status}；缺省 None 时与现状逐行为一致（CLI/eval 调用面
+    零改动，专测钉死于 tests/test_on_event.py）。"""
     try:
         if llm is None:
             settings = settings or load_settings()
             llm = build_llm(settings)
         graph = build_graph(llm, tracer, settings=settings, limiter=limiter,
-                            skip_respond=skip_respond)
+                            skip_respond=skip_respond, on_event=on_event)
         final = graph.invoke({"db_path": db_path, "question": question, "evidence": evidence})
         return final["answer"]
     except Exception as e:  # noqa: BLE001 run_question 是最外层守护：有意收敛一切裸异常

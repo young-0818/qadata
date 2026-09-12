@@ -1,10 +1,11 @@
-import { FormEvent, ReactNode, useEffect, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useRef, useState } from "react";
 import {
   AgentDetail,
   AgentSummary,
   AskResponse,
   ModelCard,
-  ask,
+  ProgressEvent,
+  askStream,
   createAgent,
   deleteAgent,
   getAgent,
@@ -29,8 +30,33 @@ type View =
 
 type Msg =
   | { role: "user"; text: string }
-  | { role: "agent"; resp: AskResponse }
-  | { role: "error"; text: string };
+  | { role: "agent"; resp: AskResponse; trail: ProgressEvent[] }
+  | { role: "error"; text: string; trail: ProgressEvent[] };
+
+// 票 03 进度流行头标签（展示层稳定映射）：status 文案后端单源，未知节点名直显
+// 不硬翻译（永不编造纪律的展示面）
+const NODE_LABELS: Record<string, string> = {
+  understand: "理解问题",
+  metric_match: "指标匹配",
+  explore: "探查库表",
+  generate: "生成 SQL",
+  execute: "执行 SQL",
+  verify: "校验结果",
+  respond: "组织答案",
+};
+
+function ProgressRow({ ev }: { ev: ProgressEvent }) {
+  const running = ev.status === "start";
+  return (
+    <div className="progress-row">
+      <b>{NODE_LABELS[ev.node] ?? ev.node}</b>
+      <span className={running ? "running" : undefined}>
+        {running ? "进行中…" : ev.status}
+      </span>
+      {ev.attempt > 0 && <i>已试 {ev.attempt} 次</i>}
+    </div>
+  );
+}
 
 interface Section {
   title: string;
@@ -56,7 +82,7 @@ function parseSections(conclusion: string): Section[] {
   return out;
 }
 
-function AnswerBubble({ resp }: { resp: AskResponse }) {
+function AnswerBubble({ resp, trail }: { resp: AskResponse; trail: ProgressEvent[] }) {
   const sections = parseSections(resp.conclusion);
   return (
     <div className={`bubble agent${resp.failed ? " failed" : ""}`}>
@@ -105,6 +131,15 @@ function AnswerBubble({ resp }: { resp: AskResponse }) {
         {/* 票 01 恒单轮（session_id 恒 null）；票 04 多轮落地时换成会话标识 */}
         {resp.session_id === null && <span>· 单轮</span>}
       </div>
+      {/* 票 03：当场看过的自纠错不随答案落地而蒸发——收成折叠留档 */}
+      {trail.length > 0 && (
+        <details className="trail">
+          <summary>自纠错过程（{trail.length} 步）</summary>
+          {trail.map((ev, i) => (
+            <ProgressRow key={i} ev={ev} />
+          ))}
+        </details>
+      )}
     </div>
   );
 }
@@ -447,8 +482,10 @@ function AgentPage({
 function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
   const [agent, setAgent] = useState<AgentDetail | null>(null);
   const [question, setQuestion] = useState("");
-  const [pending, setPending] = useState(false);
+  const [pending, setPending] = useState(false); // 在途锁前端侧：流式未结束锁一切发送
+  const busyRef = useRef(false); // 同帧双发防呆：setPending 是异步的，闭包 pending 会失效
   const [msgs, setMsgs] = useState<Msg[]>([]);
+  const [progress, setProgress] = useState<ProgressEvent[]>([]);
   const [err, setErr] = useState("");
 
   useEffect(() => {
@@ -457,19 +494,27 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
 
   async function send(text: string) {
     const q = text.trim();
-    if (!q || pending) return;
+    if (!q || busyRef.current) return;
+    busyRef.current = true;
     setQuestion("");
     setMsgs((m) => [...m, { role: "user", text: q }]);
     setPending(true);
+    setProgress([]);
+    const trail: ProgressEvent[] = [];
     try {
       // evidence 恒空＝智能体业务知识兜底（会话级口径叠加框在票 04）
-      const resp = await ask(id, q, "");
-      setMsgs((m) => [...m, { role: "agent", resp }]);
+      const resp = await askStream(id, q, "", (ev) => {
+        trail.push(ev);
+        setProgress([...trail]);
+      });
+      setMsgs((m) => [...m, { role: "agent", resp, trail: [...trail] }]);
     } catch (e) {
-      // 永不编造：链路错误如实展示，不伪装成答案
-      setMsgs((m) => [...m, { role: "error", text: errMsg(e) }]);
+      // 永不编造：链路错误如实展示，不伪装成答案；半截进度也如实留在错误里
+      setMsgs((m) => [...m, { role: "error", text: errMsg(e), trail: [...trail] }]);
     } finally {
+      busyRef.current = false;
       setPending(false);
+      setProgress([]);
     }
   }
 
@@ -517,13 +562,28 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
           ) : m.role === "error" ? (
             <div className="bubble agent failed" key={i}>
               请求失败：{m.text}
+              {/* 断流前的半截进度不蒸发（与 catch 注释同真：治黑盒的反面是装干净） */}
+              {m.trail.length > 0 && (
+                <details className="trail">
+                  <summary>中断前的进度（{m.trail.length} 步）</summary>
+                  {m.trail.map((ev, j) => (
+                    <ProgressRow key={j} ev={ev} />
+                  ))}
+                </details>
+              )}
             </div>
           ) : (
-            <AnswerBubble resp={m.resp} key={i} />
+            <AnswerBubble resp={m.resp} trail={m.trail} key={i} />
           ),
         )}
         {pending && (
-          <div className="bubble agent pending">查询中…（生成 SQL → 沙箱执行 → 校验）</div>
+          <div className="bubble agent progress-live">
+            {progress.length === 0 ? (
+              <div className="progress-row">连接进度流…</div>
+            ) : (
+              progress.map((ev, i) => <ProgressRow key={i} ev={ev} />)
+            )}
+          </div>
         )}
         <form
           className="composer"
@@ -535,8 +595,14 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
           <input
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
-            placeholder={agent ? `向 ${agent.name} 提问…` : "加载中…"}
-            disabled={!agent}
+            placeholder={
+              pending
+                ? "正在回答上一个问题…"
+                : agent
+                  ? `向 ${agent.name} 提问…`
+                  : "加载中…"
+            }
+            disabled={!agent || pending}
           />
           <button type="submit" disabled={!agent || pending || !question.trim()}>
             提问

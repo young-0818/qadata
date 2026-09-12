@@ -123,14 +123,57 @@ export async function uploadDatasource(id: string, file: File): Promise<void> {
   if (!res.ok) throw new Error(await errorText(res, "上传失败"));
 }
 
-export async function ask(
+// 票 03：进度流帧（node/attempt/status 三字段，文案后端单源，前端只贴标签）
+export interface ProgressEvent {
+  node: string;
+  attempt: number; // 该时刻已入账的 SQL 尝试数（重试环上单调递增）
+  status: string; // "start"＝该步开跑，其余＝该步结果一行中文
+}
+
+// 票 03 问数主通道：POST /api/ask/stream（SSE）。EventSource 不支持 POST，
+// 故 fetch＋ReadableStream 手解帧——不引新依赖（状态路由同款纪律）。
+// onProgress 逐帧回调；末帧 event:answer resolve；非 2xx 拒在起流前如实抛出。
+export async function askStream(
   agentId: string,
   question: string,
   evidence: string,
+  onProgress: (ev: ProgressEvent) => void,
 ): Promise<AskResponse> {
-  return sendJson<AskResponse>("/api/ask", {
+  const res = await fetch("/api/ask/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ agent_id: agentId, question, evidence }),
   });
+  if (!res.ok) throw new Error(await errorText(res, "问数失败"));
+  if (!res.body) throw new Error("当前浏览器不支持流式读取");
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let answer: AskResponse | null = null;
+  const consume = (block: string) => {
+    let event: string | null = null;
+    let data: string | null = null;
+    for (const line of block.split("\n")) {
+      if (line.startsWith("event: ")) event = line.slice(7);
+      else if (line.startsWith("data: ")) data = line.slice(6);
+    }
+    // 契约＝后端每帧必带 data 行；缺 data 属形状违规，不静默吞（解析即炸→如实报错）
+    if (event === "answer") answer = JSON.parse(data as string) as AskResponse;
+    else onProgress(JSON.parse(data as string) as ProgressEvent);
+  };
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let sep: number;
+    while ((sep = buf.indexOf("\n\n")) >= 0) {
+      const block = buf.slice(0, sep);
+      buf = buf.slice(sep + 2);
+      if (block.trim()) consume(block);
+    }
+  }
+  buf += decoder.decode();
+  if (buf.trim()) consume(buf); // 后端每帧带 \n\n 收口，此为尾帧防御
+  if (!answer) throw new Error("进度流已断，未收到答案——以上方失败说明为准");
+  return answer;
 }

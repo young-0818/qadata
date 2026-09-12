@@ -382,9 +382,57 @@ button:disabled {
   background: #fff5f5;
 }
 
-.bubble.agent.pending {
+/* ── 票 03：进度流直播（在途气泡＋折叠留档）──────────────────── */
+
+.progress-live {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.progress-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: #48484e;
+}
+
+.progress-row b {
+  color: #1c1c1e;
+  flex-shrink: 0;
+}
+
+.progress-row i {
   color: #86868b;
-  font-style: italic;
+  font-style: normal;
+  font-size: 0.72rem;
+}
+
+/* start 帧＝该步正在跑：呼吸感提示，不引 spinner 库 */
+.progress-row .running {
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.trail {
+  margin-top: 0.5rem;
+  font-size: 0.78rem;
+  color: #48484e;
+}
+
+.trail summary {
+  cursor: pointer;
+  color: #2f6feb;
+}
+
+.trail .progress-row {
+  padding: 0.15rem 0 0 0.5rem;
 }
 
 .section {
