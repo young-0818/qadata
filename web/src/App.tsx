@@ -18,6 +18,7 @@ import {
 
 // 渲染纪律（spec）：一律 React 文本插值（＝textContent），全文件禁 dangerouslySetInnerHTML。
 // M7-rev2 票 02.5：三视图状态路由（首页/智能体详情/对话页），不引 router 依赖。
+// 对话页于 2026-09-12 改版为通高侧栏＋中栏滚动的 agent 布局（首页/详情页仍窄版）。
 
 // 后端拒绝理由一律原样展示（永不编造错误说明）
 const errMsg = (e: unknown): string =>
@@ -477,7 +478,9 @@ function AgentPage({
   );
 }
 
-// ── 对话页：左栏壳（会话历史＝票 04）＋右对话 ──────────────────────
+// ── 对话页：通高侧栏（返回/新建会话/历史占位＝票 05 落点）＋中栏对话 ──
+// owner 2026-09-12 改版：业务知识块删除（只活在详情页）、预设 pill 入坞到
+// 输入框上方且仅空对话显示、欢迎大字个性化、视口分区本地滚动（agent 布局）。
 
 function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
   const [agent, setAgent] = useState<AgentDetail | null>(null);
@@ -487,10 +490,21 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [progress, setProgress] = useState<ProgressEvent[]>([]);
   const [err, setErr] = useState("");
+  const tailRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     getAgent(id).then(setAgent).catch((e: Error) => setErr(e.message));
   }, [id]);
+
+  // 对话产品常识行为：新消息/新进度自动滚到最新一条
+  useEffect(() => {
+    tailRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [msgs, progress, pending]);
+
+  function newConversation() {
+    if (busyRef.current) return; // 在途期间不清场（锁的展示面）
+    setMsgs([]);
+  }
 
   async function send(text: string) {
     const q = text.trim();
@@ -519,95 +533,109 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
   }
 
   return (
-    <div className="chatlayout">
-      <aside className="sidebar">
-        <button className="back" type="button" onClick={onHome}>
-          ← 所有智能体
+    <div className="chatshell">
+      <aside className="rail">
+        <button className="rail-back" type="button" onClick={onHome} title="返回智能体列表">
+          ←
         </button>
-        <div className="side-agent">
-          <b>{agent?.name ?? "加载中…"}</b>
-          {agent?.description && <span className="sub">{agent.description}</span>}
-        </div>
-        {agent && agent.preset_questions.length > 0 && (
-          <div className="side-block">
-            <h4>预设问题</h4>
-            {agent.preset_questions.map((q, i) => (
-              <button key={i} type="button" className="chip" disabled={pending} onClick={() => send(q)}>
-                {q}
-              </button>
-            ))}
-          </div>
-        )}
+        <button
+          className="rail-new"
+          type="button"
+          onClick={newConversation}
+          disabled={pending || msgs.length === 0}
+          title={msgs.length === 0 ? "当前已是新会话" : "清空当前对话回到欢迎态"}
+        >
+          ＋ 新建会话
+        </button>
         <div className="side-block">
           <h4>历史会话</h4>
           <span className="sub">多轮会话（票 04）落地后在这里出现。</span>
         </div>
-        {agent && agent.business_knowledge && (
-          <div className="side-block">
-            <h4>业务知识</h4>
-            <span className="sub kb-note">{agent.business_knowledge.slice(0, 200)}</span>
-          </div>
-        )}
       </aside>
-      <main className="chat">
+      <main className="chatmain">
         {err && <div className="note">加载失败：{err}</div>}
-        {msgs.length === 0 && !pending && (
-          <div className="hint center">用自然语言提问，或点左侧预设问题。</div>
-        )}
-        {msgs.map((m, i) =>
-          m.role === "user" ? (
-            <div className="bubble user" key={i}>
-              {m.text}
-            </div>
-          ) : m.role === "error" ? (
-            <div className="bubble agent failed" key={i}>
-              请求失败：{m.text}
-              {/* 断流前的半截进度不蒸发（与 catch 注释同真：治黑盒的反面是装干净） */}
-              {m.trail.length > 0 && (
-                <details className="trail">
-                  <summary>中断前的进度（{m.trail.length} 步）</summary>
-                  {m.trail.map((ev, j) => (
-                    <ProgressRow key={j} ev={ev} />
-                  ))}
-                </details>
-              )}
-            </div>
-          ) : (
-            <AnswerBubble resp={m.resp} trail={m.trail} key={i} />
-          ),
-        )}
-        {pending && (
-          <div className="bubble agent progress-live">
-            {progress.length === 0 ? (
-              <div className="progress-row">连接进度流…</div>
-            ) : (
-              progress.map((ev, i) => <ProgressRow key={i} ev={ev} />)
+        <div className="chatscroll">
+          <div className="chatcol">
+            {msgs.length === 0 && !pending &&
+              (agent ? (
+                <div className="welcome">
+                  <h2>有什么想问「{agent.name}」的？</h2>
+                  {agent.description && <p className="sub">{agent.description}</p>}
+                </div>
+              ) : (
+                <div className="welcome">
+                  <p className="sub">加载中…</p>
+                </div>
+              ))}
+            {msgs.map((m, i) =>
+              m.role === "user" ? (
+                <div className="bubble user" key={i}>
+                  {m.text}
+                </div>
+              ) : m.role === "error" ? (
+                <div className="bubble agent failed" key={i}>
+                  请求失败：{m.text}
+                  {/* 断流前的半截进度不蒸发（与 catch 注释同真：治黑盒的反面是装干净） */}
+                  {m.trail.length > 0 && (
+                    <details className="trail">
+                      <summary>中断前的进度（{m.trail.length} 步）</summary>
+                      {m.trail.map((ev, j) => (
+                        <ProgressRow key={j} ev={ev} />
+                      ))}
+                    </details>
+                  )}
+                </div>
+              ) : (
+                <AnswerBubble resp={m.resp} trail={m.trail} key={i} />
+              ),
             )}
+            {pending && (
+              <div className="bubble agent progress-live">
+                {progress.length === 0 ? (
+                  <div className="progress-row">连接进度流…</div>
+                ) : (
+                  progress.map((ev, i) => <ProgressRow key={i} ev={ev} />)
+                )}
+              </div>
+            )}
+            <div ref={tailRef} />
           </div>
-        )}
-        <form
-          className="composer"
-          onSubmit={(e: FormEvent) => {
-            e.preventDefault();
-            send(question);
-          }}
-        >
-          <input
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
-            placeholder={
-              pending
-                ? "正在回答上一个问题…"
-                : agent
-                  ? `向 ${agent.name} 提问…`
-                  : "加载中…"
-            }
-            disabled={!agent || pending}
-          />
-          <button type="submit" disabled={!agent || pending || !question.trim()}>
-            提问
-          </button>
-        </form>
+        </div>
+        <div className="dock">
+          {/* 预设 pill＝仅空对话（owner 裁 A1）；点击发送逻辑零改动、零新通道 */}
+          {agent && msgs.length === 0 && !pending && agent.preset_questions.length > 0 && (
+            <div className="presets">
+              {agent.preset_questions.map((q, i) => (
+                <button key={i} type="button" className="preset-pill" onClick={() => send(q)}>
+                  {q}
+                </button>
+              ))}
+            </div>
+          )}
+          <form
+            className="composer"
+            onSubmit={(e: FormEvent) => {
+              e.preventDefault();
+              send(question);
+            }}
+          >
+            <input
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              placeholder={
+                pending
+                  ? "正在回答上一个问题…"
+                  : agent
+                    ? `向 ${agent.name} 提问…`
+                    : "加载中…"
+              }
+              disabled={!agent || pending}
+            />
+            <button type="submit" disabled={!agent || pending || !question.trim()}>
+              提问
+            </button>
+          </form>
+        </div>
       </main>
     </div>
   );
@@ -615,6 +643,11 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
 
 export default function App() {
   const [view, setView] = useState<View>({ page: "home" });
+
+  if (view.page === "chat") {
+    // 对话页＝通高沉浸（无顶部标题栏、无 52rem 容器），owner 2026-09-12 裁
+    return <ChatPage id={view.id} onHome={() => setView({ page: "home" })} />;
+  }
 
   let body: ReactNode;
   if (view.page === "home") {
@@ -624,7 +657,7 @@ export default function App() {
         onChat={(id) => setView({ page: "chat", id })}
       />
     );
-  } else if (view.page === "agent") {
+  } else {
     body = (
       <AgentPage
         id={view.id}
@@ -632,8 +665,6 @@ export default function App() {
         onHome={() => setView({ page: "home" })}
       />
     );
-  } else {
-    body = <ChatPage id={view.id} onHome={() => setView({ page: "home" })} />;
   }
 
   return (
