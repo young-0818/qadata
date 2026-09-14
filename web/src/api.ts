@@ -1,6 +1,7 @@
 // 与后端 Python 侧契约测试（tests/test_web_api.py）同构的响应形状。
 // 票 01 冻结 /api/ask 12 字段（rev2 请求体 db→agent_id，响应形状不动）；
-// 智能体面（CRUD/数据源/业务知识/模型只读卡）由票 02.5 钉死。改形状＝跨票改卷。
+// 票 04 经 owner 裁决新增可选字段 chart（其余形状仍＝跨票改卷）；
+// 智能体面（CRUD/数据源/业务知识/模型只读卡）由票 02.5 钉死。
 export interface AskResponse {
   conclusion: string;
   sql: string | null;
@@ -13,7 +14,16 @@ export interface AskResponse {
   path: "metric" | "fallback"; // 与 Answer.path 取值域对齐（M5 票 05）
   metric_name: string | null;
   template_fell_back: boolean;
-  session_id: null; // 票 04 起才有真值
+  session_id: null; // 多轮（票 05）起才有真值
+  chart: ChartSpec | null; // 票 04：后端规则纯函数判定的图型，null＝表格
+}
+
+// 票 04 图型判定契约（web/charts.py::decide_chart）：列下标寻址 columns/rows
+// （SQL 列名可重复，当不了键）；前端只管画，不自判形状。
+export interface ChartSpec {
+  type: "line" | "bar" | "number";
+  x: number | null; // x 轴列下标（大数卡为 null）
+  series: number[]; // 数值系列列下标（大数卡即单值所在列）
 }
 
 export interface ModelCard {

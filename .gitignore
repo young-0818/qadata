@@ -30,6 +30,7 @@ Thumbs.db
 # 测试与工具缓存
 .pytest_cache/
 .ruff_cache/
+*.tsbuildinfo
 .mypy_cache/
 .coverage
 htmlcov/

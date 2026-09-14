@@ -1,6 +1,7 @@
 """M7-rev2 票 02.5 契约测试：TestClient＋ScriptedLLM＋tmp AgentStore——不碰网、不碰真实目录。
 
-/api/ask 响应 12 字段冻结不动（spec 响应契约：改形状＝跨票改卷）；智能体面
+/api/ask 响应 12 字段冻结不动＋票 04 经 owner 裁决新增可选字段 chart（共 13，
+spec 响应契约：改形状＝跨票改卷，本票修订段见 spec）；智能体面
 CRUD／数据源上传／业务知识双态／模型只读卡由本文件钉死。
 happy path 恰好 3 次 LLM 调用（understand/generate/respond），纪律⑤ calls 断言照旧。
 """
@@ -15,6 +16,7 @@ from qadata.config import Settings
 from qadata.types import Answer
 from qadata.web import agents as web_agents
 from qadata.web import app as web_app
+from qadata.web import charts as web_charts
 from qadata.web import serve as web_serve
 from qadata.web.agents import AgentStore
 from qadata.web.app import create_app
@@ -23,11 +25,11 @@ from tests.web_shared import ONE_METRIC_YAML
 
 _S = Settings(api_key="", base_url="", model="test-model", retry_budget=3)
 
-# 契约字段全集（票 01 冻结）——多一个少一个都算改卷
+# 契约字段全集（票 01 冻结 12＋票 04 新增可选 chart）——多一个少一个都算改卷
 _CONTRACT_KEYS = {
     "conclusion", "sql", "columns", "rows", "truncated", "elapsed_ms",
     "failed", "error_summary", "path", "metric_name", "template_fell_back",
-    "session_id",
+    "session_id", "chart",
 }
 
 _HAPPY_SCRIPT = ["改写", "SELECT name FROM students WHERE id = 2", "Bob 的数学 88 分"]
@@ -243,6 +245,7 @@ def test_ask_success_contract(store, fixture_db):
     assert body["rows"] == [["Bob"]]
     assert body["truncated"] is False and isinstance(body["elapsed_ms"], int)
     assert body["path"] == "fallback" and body["session_id"] is None
+    assert body["chart"] is None  # 单格文本非标量数值→其余→表格（null）
     assert llm.calls == 3
 
 
@@ -292,9 +295,41 @@ def test_ask_failure_path_has_error_summary(store, fixture_db):
     body = res.json()
     assert body["failed"] is True and body["error_summary"]
     assert "no such column" in body["conclusion"]
-    for k in ("columns", "rows", "truncated", "elapsed_ms"):
-        assert body[k] is None  # 无结果集时如实 null，不编造空表
+    for k in ("columns", "rows", "truncated", "elapsed_ms", "chart"):
+        assert body[k] is None  # 无结果集时如实 null，不编造空表/图型
     assert llm.calls == 4
+
+
+# ── 票 04：chart 可选字段经 /api/ask 的三形态（判定矩阵归 test_web_charts）──
+
+
+def _ask(store, agent, sql, concl="结论"):
+    llm = ScriptedLLM(["改写", sql, concl])
+    body = _client(llm, store).post(
+        "/api/ask", json={"agent_id": agent.id, "question": "问"}).json()
+    assert body["failed"] is False and llm.calls == 3
+    return body
+
+
+def test_ask_chart_number_card(store, fixture_db):
+    a = _agent_with_datasource(store, fixture_db)
+    body = _ask(store, a, "SELECT COUNT(*) AS n FROM students")
+    assert body["chart"] == {"type": "number", "x": None, "series": [0]}
+
+
+def test_ask_chart_bar_category_numeric(store, fixture_db):
+    a = _agent_with_datasource(store, fixture_db)
+    body = _ask(store, a, "SELECT subject, score FROM scores")
+    assert body["rows"] == [["math", 95.5], ["math", 88.0], ["english", 90.0]]
+    assert body["chart"] == {"type": "bar", "x": 0, "series": [1]}
+
+
+def test_ask_chart_line_time_series(store, fixture_db):
+    a = _agent_with_datasource(store, fixture_db)
+    sql = ("SELECT '1993-02' AS month, 5.5 AS v "
+           "UNION ALL SELECT '1993-03', 6.5")
+    body = _ask(store, a, sql)
+    assert body["chart"] == {"type": "line", "x": 0, "series": [1]}
 
 
 def test_ask_empty_question_422(store, fixture_db):
@@ -309,9 +344,9 @@ def test_ask_empty_question_422(store, fixture_db):
 
 
 def test_web_package_never_imports_sqlite3():
-    """AST 级 import 纪律（metrics 先例同款）：web 三包禁 sqlite3/引擎驱动——
-    连接唯一入口是 tools/db.open_readonly，存储层只搬文件。"""
-    for mod in (web_app, web_agents, web_serve):
+    """AST 级 import 纪律（metrics 先例同款）：web 四包禁 sqlite3/引擎驱动——
+    连接唯一入口是 tools/db.open_readonly，存储层只搬文件，图型判定只算纯函数。"""
+    for mod in (web_app, web_agents, web_charts, web_serve):
         parsed = ast.parse(inspect.getsource(mod))
         imported: set[str] = set()
         for node in ast.walk(parsed):

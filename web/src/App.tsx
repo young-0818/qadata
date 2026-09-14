@@ -15,6 +15,7 @@ import {
   patchAgent,
   uploadDatasource,
 } from "./api";
+import { ResultChart } from "./Chart";
 
 // 渲染纪律（spec）：一律 React 文本插值（＝textContent），全文件禁 dangerouslySetInnerHTML。
 // M7-rev2 票 02.5：三视图状态路由（首页/智能体详情/对话页），不引 router 依赖。
@@ -67,6 +68,10 @@ interface Section {
 // 对齐 compose_conclusion（票 07）排版：每节以【节头】起行
 const SECTION_RE = /^【(.+?)】(.*)$/;
 
+// 票 04 分节折叠：结论与校验标注常开（诚实信息不打折），数据依据/口径说明可折
+// （支撑细节收起来让答案可读）；未知节头一律常开渲染——折叠名单之外的内容不许消失。
+const FOLD_SECTIONS = new Set(["数据依据", "口径说明"]);
+
 function parseSections(conclusion: string): Section[] {
   const out: Section[] = [];
   let cur: Section = { title: "", body: "" };
@@ -83,43 +88,75 @@ function parseSections(conclusion: string): Section[] {
   return out;
 }
 
+function ResultTable({ columns, rows }: { columns: string[]; rows: unknown[][] }) {
+  return (
+    <table className="result-table">
+      <thead>
+        <tr>
+          {columns.map((c, i) => (
+            <th key={i}>{String(c)}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row, i) => (
+          <tr key={i}>
+            {row.map((v, j) => (
+              <td key={j}>{v === null ? "NULL" : String(v)}</td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 function AnswerBubble({ resp, trail }: { resp: AskResponse; trail: ProgressEvent[] }) {
   const sections = parseSections(resp.conclusion);
+  // 单一守卫：图型判定存在且行列在场才画（answer_to_payload 失败态三者同 null，
+  // 此处只兜形状完整性，不做第二处复测）
+  const viz =
+    resp.chart && resp.columns && resp.rows
+      ? { spec: resp.chart, columns: resp.columns, rows: resp.rows }
+      : null;
   return (
     <div className={`bubble agent${resp.failed ? " failed" : ""}`}>
+      {/* 票 04：校验旗标以徽标呈现（label 承载语义，不靠颜色单传） */}
+      {(resp.failed || resp.template_fell_back || resp.truncated) && (
+        <div className="badges">
+          {resp.failed && <span className="badge danger">✗ 失败</span>}
+          {resp.template_fell_back && <span className="badge warn">⚠ 模板降级</span>}
+          {resp.truncated && <span className="badge warn">⚠ 已截断</span>}
+        </div>
+      )}
       {sections.map((s, i) =>
-        s.title ? (
-          <div className="section" key={i}>
-            <span className="section-title">{s.title}</span>
-            <span className="section-body">{s.body}</span>
-          </div>
-        ) : (
+        !s.title ? (
           <div className="section-body" key={i}>
             {s.body}
           </div>
+        ) : FOLD_SECTIONS.has(s.title) ? (
+          <details className="section-fold" key={i}>
+            <summary>{s.title}</summary>
+            <div className="section-body">{s.body}</div>
+          </details>
+        ) : (
+          <div className={`section${s.title === "校验标注" ? " warn" : ""}`} key={i}>
+            <span className="section-title">{s.title}</span>
+            <span className="section-body">{s.body}</span>
+          </div>
         ),
       )}
-      {resp.columns && resp.rows && (
-        <table className="result-table">
-          <thead>
-            <tr>
-              {resp.columns.map((c, i) => (
-                <th key={i}>{String(c)}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {resp.rows.map((row, i) => (
-              <tr key={i}>
-                {row.map((v, j) => (
-                  <td key={j}>{v === null ? "NULL" : String(v)}</td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-      {resp.truncated && <div className="note">结果已截断（仅展示部分行）</div>}
+      {viz && <ResultChart {...viz} />}
+      {resp.columns && resp.rows &&
+        (viz ? (
+          // 有图时表格收进折叠：图是首读，表是查证通道（判分与不信任者都走它）
+          <details className="section-fold">
+            <summary>数据表格</summary>
+            <ResultTable columns={resp.columns} rows={resp.rows} />
+          </details>
+        ) : (
+          <ResultTable columns={resp.columns} rows={resp.rows} />
+        ))}
       {resp.sql && (
         <pre className="sql">
           <code>{resp.sql}</code>
@@ -129,7 +166,7 @@ function AnswerBubble({ resp, trail }: { resp: AskResponse; trail: ProgressEvent
         <span>{resp.path === "metric" ? "指标命中" : "兜底路线"}</span>
         {resp.metric_name && <span>· {resp.metric_name}</span>}
         {resp.elapsed_ms !== null && <span>· {resp.elapsed_ms} ms</span>}
-        {/* 票 01 恒单轮（session_id 恒 null）；票 04 多轮落地时换成会话标识 */}
+        {/* 票 01 恒单轮（session_id 恒 null）；多轮（票 05）落地时换成会话标识 */}
         {resp.session_id === null && <span>· 单轮</span>}
       </div>
       {/* 票 03：当场看过的自纠错不随答案落地而蒸发——收成折叠留档 */}
@@ -516,7 +553,7 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
     setProgress([]);
     const trail: ProgressEvent[] = [];
     try {
-      // evidence 恒空＝智能体业务知识兜底（会话级口径叠加框在票 04）
+      // evidence 恒空＝智能体业务知识兜底（会话级口径叠加框在多轮票 05）
       const resp = await askStream(id, q, "", (ev) => {
         trail.push(ev);
         setProgress([...trail]);
@@ -549,7 +586,7 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
         </button>
         <div className="side-block">
           <h4>历史会话</h4>
-          <span className="sub">多轮会话（票 04）落地后在这里出现。</span>
+          <span className="sub">多轮会话（票 05）落地后在这里出现。</span>
         </div>
       </aside>
       <main className="chatmain">

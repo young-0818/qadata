@@ -6,9 +6,11 @@
 （data/agents/<id>/），数据源上传唯一路、业务知识引用态读取期派生；schema 摘要
 经 open_readonly 只读打开（导入落盘零建连、读取展示走沙箱①层——三层钉测见契约
 测试）。/api/ask 响应 12 字段冻结不动（spec 响应契约：改形状＝跨票改卷；
-session_id 恒 null 至票 04）。票 03：/api/ask/stream 以 SSE 直播节点级进度帧
-（node/attempt/status 三字段起步）＋末帧 event:answer（即 12 字段契约本体）；
-agent 级在途锁两端点共用（同问在途＝409）。
+session_id 恒 null 至多轮票 05）；票 04 经 owner 裁决**新增可选字段 chart**
+（图型判定＝web/charts.py 规则纯函数，一判双达两端点）——共 13 字段。
+票 03：/api/ask/stream 以 SSE 直播节点级进度帧（node/attempt/status 三字段
+起步）＋末帧 event:answer（即契约本体，与 /api/ask 同源）；agent 级在途锁
+两端点共用（同问在途＝409）。
 """
 import json
 import queue
@@ -32,6 +34,7 @@ from qadata.web.agents import (
     AgentStore,
     AgentStoreError,
 )
+from qadata.web.charts import decide_chart
 
 # 前端未构建时的诚实占位页（侦察笔记：别白屏，写明构建命令）
 _PLACEHOLDER_PAGE = """<!doctype html>
@@ -71,16 +74,21 @@ class AgentPatchRequest(BaseModel):
 
 
 def answer_to_payload(answer: Answer) -> dict[str, Any]:
-    """Answer/QueryResult → 契约 JSON（票 01 冻结 12 字段；无结果集时行列如实 null）。
+    """Answer/QueryResult → 契约 JSON（票 01 冻结 12 字段＋票 04 新增可选 chart，
+    共 13 字段；无结果集时行列与图型如实 null）。
 
-    session_id 恒 null——多轮在票 04，届时才有真值。
+    session_id 恒 null——多轮在票 05，届时才有真值。
+    chart＝decide_chart 规则纯函数对结果集形态的一次裁决（折线/柱/大数卡，
+    判不了即 null＝表格）；两端点同经本函数，一判双达不漂移。
     """
     res = answer.result
+    columns = list(res.columns) if res else None
+    rows = [list(row) for row in res.rows] if res else None
     return {
         "conclusion": answer.conclusion,
         "sql": answer.sql,
-        "columns": list(res.columns) if res else None,
-        "rows": [list(row) for row in res.rows] if res else None,
+        "columns": columns,
+        "rows": rows,
         "truncated": res.truncated if res else None,
         "elapsed_ms": res.elapsed_ms if res else None,
         "failed": answer.failed,
@@ -89,6 +97,7 @@ def answer_to_payload(answer: Answer) -> dict[str, Any]:
         "metric_name": answer.metric_name,
         "template_fell_back": answer.template_fell_back,
         "session_id": None,
+        "chart": decide_chart(columns or [], rows or []) if res else None,
     }
 
 
@@ -204,8 +213,8 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
 
     # ── 问数：唯一入口，智能体定位数据源与默认业务知识 ───────────────
     # 在途锁（票 03）：agent 级、/api/ask 与 /api/ask/stream 共用一把——防阻塞×流式
-    # 交错。单进程单用户约定（与上传闭包竞态同款，M7 spec）；票 04 会话制落地后
-    # 键升为 session_id（票面"同会话并发"），本票先按智能体粒度拒。
+    # 交错。单进程单用户约定（与上传闭包竞态同款，M7 spec）；多轮票 05 会话制落地后
+    # 键升为 session_id（票面"同会话并发"），先按智能体粒度拒。
     _inflight: set[str] = set()
     _inflight_guard = threading.Lock()
 
@@ -252,7 +261,8 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
     def ask_stream(req: AskRequest) -> StreamingResponse:
         """前置拒绝与 /api/ask 同序同文案（400/404/409 走普通 JSON 错误，不起流）；
         起流后：进度帧＝data: {node,attempt,status}\n\n，末帧＝event: answer＋
-        12 字段契约本体（形状与 /api/ask 同源，不另造）。run_question 仍是最外层
+        契约本体（含票 04 chart 字段，与 /api/ask 同源 answer_to_payload，不另造）。
+        run_question 仍是最外层
         守护——任何失败都以诚实失败答案收口成末帧，流永不裸断。
         桥接：worker 线程跑阻塞图（on_event＝入队），同步生成器逐帧取队 yield
         （starlette 自动 threadpool 迭代）。在途＝run_question 计算在途：放锁挂在

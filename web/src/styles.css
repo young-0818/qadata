@@ -518,6 +518,86 @@ button:disabled {
   font-weight: 600;
 }
 
+/* ── 票 04：三节分节折叠＋校验徽标＋规则图表 ───────────────────── */
+
+/* 折叠节（数据依据/口径说明/数据表格）：节头即摘要行，内容 textContent 照旧 */
+.section-fold {
+  margin: 0.3rem 0;
+  font-size: 0.8rem;
+  color: #48484e;
+}
+
+.section-fold summary {
+  cursor: pointer;
+  display: inline-block;
+  padding: 0 0.35rem;
+  border-radius: 0.3rem;
+  background: #ececf1;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #48484e;
+}
+
+/* 校验标注节：常开＋琥珀提示（徽标同款纪律：颜色不单传，节头文字承载语义） */
+.section.warn .section-title {
+  background: #fdf3d7;
+  color: #8a6d1a;
+}
+
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.4rem;
+}
+
+.badge {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+}
+
+.badge.danger {
+  background: #fbe4e4;
+  color: #b3261e;
+}
+
+.badge.warn {
+  background: #fdf3d7;
+  color: #8a6d1a;
+}
+
+.chart-wrap {
+  margin-top: 0.5rem;
+}
+
+/* 大数卡：单标量结果的头条形态（值原样呈现，UI 不格式化数字） */
+.number-card {
+  margin: 0.5rem 0 0.2rem;
+  padding: 0.7rem 0.9rem;
+  background: #f5f5f7;
+  border: 1px solid #e3e3e8;
+  border-radius: 0.7rem;
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  max-width: 100%;
+}
+
+.number-value {
+  font-size: 2rem;
+  font-weight: 650;
+  line-height: 1.15;
+  color: #1c1c1e;
+  overflow-wrap: anywhere;
+}
+
+.number-label {
+  font-size: 0.75rem;
+  color: #86868b;
+}
+
 .result-table {
   margin-top: 0.5rem;
   border-collapse: collapse;

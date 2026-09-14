@@ -1,11 +1,12 @@
 """M7 票 03 契约测试：`POST /api/ask/stream`（SSE 进度帧）＋在途锁。
 
 帧形状＝node/attempt/status 三字段（spec 响应契约"三字段起步"，此处即全集）；
-末帧 event:answer ＝ /api/ask 12 字段契约本体（同源 answer_to_payload，两端点
-不得漂移）。完整失败→重试→成功帧序列在 tests/test_on_event.py 逐帧钉死，本
-文件钉传输面：happy 全序列＋自纠错故事在帧流里可见＋前置拒绝与 /api/ask 同序
-同文案（拒在起流与调模型前）。在途锁＝agent 级共用一把：门控假 LLM＋双
-TestClient 同 app 模拟并发（票面"后端拒同会话并发请求"，会话制在票 04）。
+末帧 event:answer ＝ /api/ask 契约本体（含票 04 chart 字段；同源
+answer_to_payload，两端点不得漂移）。完整失败→重试→成功帧序列在
+tests/test_on_event.py 逐帧钉死，本文件钉传输面：happy 全序列＋自纠错故事在帧流里
+可见＋前置拒绝与 /api/ask 同序同文案（拒在起流与调模型前）。在途锁＝agent 级共用
+一把：门控假 LLM＋双 TestClient 同 app 模拟并发（票面"后端拒同会话并发请求"，
+会话制在多轮票 05）。
 """
 import json
 import threading
@@ -75,7 +76,7 @@ def test_stream_happy_frames_and_answer_contract(store, fixture_db):
     assert res.headers["content-type"].startswith("text/event-stream")
     frames = _parse(res.text)
     assert frames[-1][0] == "answer"
-    assert set(frames[-1][1]) == _CONTRACT_KEYS  # 末帧即 12 字段契约，一字节不多不少
+    assert set(frames[-1][1]) == _CONTRACT_KEYS  # 末帧即 13 字段契约，一字节不多不少
     assert frames[-1][1]["failed"] is False and llm.calls == 3
     assert _progress(frames) == [
         {"node": "understand", "attempt": 0, "status": "start"},
@@ -119,6 +120,19 @@ def test_stream_answer_matches_blocking_endpoint(store, fixture_db):
     ev, data = _parse(stream.text)[-1]
     assert ev == "answer"
     assert data == blocking
+
+
+def test_stream_answer_carries_chart_field(store, fixture_db):
+    """票 04：chart 非 null 路径也要钉在流上（happy 全序列走的是文本单格＝null 形）——
+    两端点同源不漂移测试只证相等，此测钉"相等且真有值"。"""
+    a = _agent_with_datasource(store, fixture_db)
+    llm = ScriptedLLM(["改写", "SELECT COUNT(*) AS n FROM students", "共 2 人"])
+    res = _client(llm, store).post(
+        "/api/ask/stream", json={"agent_id": a.id, "question": "有几名学生"})
+    ev, data = _parse(res.text)[-1]
+    assert ev == "answer"
+    assert data["chart"] == {"type": "number", "x": None, "series": [0]}
+    assert llm.calls == 3
 
 
 # ── 前置拒绝：与 /api/ask 同序同文案，拒在起流与调模型前 ────────────
