@@ -1,6 +1,7 @@
 // 与后端 Python 侧契约测试（tests/test_web_api.py）同构的响应形状。
 // 票 01 冻结 /api/ask 12 字段（rev2 请求体 db→agent_id，响应形状不动）；
 // 票 04 经 owner 裁决新增可选字段 chart（其余形状仍＝跨票改卷）；
+// 票 05 会话轮 session_id 出真值（单轮请求照旧 null）；
 // 智能体面（CRUD/数据源/业务知识/模型只读卡）由票 02.5 钉死。
 export interface AskResponse {
   conclusion: string;
@@ -14,7 +15,7 @@ export interface AskResponse {
   path: "metric" | "fallback"; // 与 Answer.path 取值域对齐（M5 票 05）
   metric_name: string | null;
   template_fell_back: boolean;
-  session_id: null; // 多轮（票 05）起才有真值
+  session_id: string | null; // 票 05：带会话即回显请求所带 sid；单轮＝null
   chart: ChartSpec | null; // 票 04：后端规则纯函数判定的图型，null＝表格
 }
 
@@ -140,19 +141,71 @@ export interface ProgressEvent {
   status: string; // "start"＝该步开跑，其余＝该步结果一行中文
 }
 
+// 票 05：会话面（tests/test_web_sessions.py 同构）。sid＝客户端生成的 hex12，
+// 懒建档——"＋ 新建会话"＝换新 sid、下一问开新档；列表只认有轮次的会话。
+export interface SessionHead {
+  id: string;
+  title: string; // 首轮问题（展示名，无第二真源）
+  updated: string; // 末轮落盘时刻（北京时区 ISO，排序键）
+  turn_count: number;
+}
+
+export interface SessionTurn {
+  question: string;
+  failed: boolean;
+  ts: string | null;
+  answer: AskResponse; // 契约 payload 原样回放（trail 属现场观察，不入档）
+}
+
+export interface SessionDetail {
+  id: string;
+  overlay: string;
+  fresh_topic: boolean;
+  turns: SessionTurn[];
+}
+
+export function listSessions(agentId: string): Promise<SessionHead[]> {
+  return getJson<{ sessions: SessionHead[] }>(`/api/agents/${agentId}/sessions`).then(
+    (b) => b.sessions,
+  );
+}
+
+export function getSession(agentId: string, sid: string): Promise<SessionDetail> {
+  return getJson<SessionDetail>(`/api/agents/${agentId}/sessions/${sid}`);
+}
+
+export function patchSession(
+  agentId: string,
+  sid: string,
+  fields: { overlay?: string; fresh_topic?: boolean },
+): Promise<{ ok: boolean; overlay: string; fresh_topic: boolean }> {
+  return sendJson(`/api/agents/${agentId}/sessions/${sid}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(fields),
+  });
+}
+
 // 票 03 问数主通道：POST /api/ask/stream（SSE）。EventSource 不支持 POST，
 // 故 fetch＋ReadableStream 手解帧——不引新依赖（状态路由同款纪律）。
 // onProgress 逐帧回调；末帧 event:answer resolve；非 2xx 拒在起流前如实抛出。
+// sessionId（票 05）＝当前会话号：带即装载三层记忆并落盘，缺省单轮。
 export async function askStream(
   agentId: string,
   question: string,
   evidence: string,
   onProgress: (ev: ProgressEvent) => void,
+  sessionId?: string,
 ): Promise<AskResponse> {
   const res = await fetch("/api/ask/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ agent_id: agentId, question, evidence }),
+    body: JSON.stringify({
+      agent_id: agentId,
+      question,
+      evidence,
+      session_id: sessionId ?? null,
+    }),
   });
   if (!res.ok) throw new Error(await errorText(res, "问数失败"));
   if (!res.body) throw new Error("当前浏览器不支持流式读取");

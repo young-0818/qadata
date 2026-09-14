@@ -23,6 +23,8 @@ from qadata.graph.precise import NO_MAJORITY_ERROR, run_precise_batch
 from qadata.graph.prompts import (
     compose_conclusion,
     format_failure_history,
+    format_session_draft,
+    format_session_history,
     metric_review_prompt,
     respond_prompt,
     sql_prompt,
@@ -140,9 +142,12 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
     def understand(state: dict) -> dict:
         # 载体 A（M5 票 02）：改写＋六字段意图同调产出，零新增调用；意图只入状态供
         # metric_match 消费（票 05），generate 不读它（尾段注入线④判负已拆，见 graph/intent.py）；
-        # 解析失败＝回退纯原文＋intent None，不写 attempts、不烧重试预算（§3.7 既定降级语义）
-        text = timed_invoke(llm, understand_prompt(state["question"], state.get("evidence", "")),
-                            "understand", tracer, limiter)
+        # 解析失败＝回退纯原文＋intent None，不写 attempts、不烧重试预算（§3.7 既定降级语义）。
+        # 票 05：L2 会话历史并进这次改写的 prompt（指代消解复用"补全指代"既有机制，零新增调用）
+        text = timed_invoke(llm, understand_prompt(
+            state["question"], state.get("evidence", ""),
+            format_session_history(state.get("session_context"))),
+            "understand", tracer, limiter)
         question, intent = parse_understand_response(text)
         attempt = len(state.get("attempts", []))
         if intent is None:
@@ -214,11 +219,14 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
     def generate(state: dict) -> dict:
         history = format_failure_history(state.get("attempts", []), state.get("verify_note"),
                                          state.get("metric_note"))
+        # 票 05：L1 上轮 SQL 草稿进尾部（增量改写参考）——仅素材不进路由，
+        # 沙箱/校验/账本三层零改动，草稿写法照走完整 execute＋verify
         prompt = sql_prompt(
             schema=state.get("db_schema", ""),
             evidence=state.get("evidence", ""),
             question=state["question"],
             history=history,
+            draft=format_session_draft(state.get("session_context")),
         )
         if s.precise_candidates > 1:
             # 精准模式：同一 prompt 连打 K 发（temperature 由 build_llm 按候选数切换，

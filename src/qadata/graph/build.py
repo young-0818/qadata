@@ -87,17 +87,23 @@ def build_graph(llm, tracer=None, settings: Settings | None = None, limiter=None
 
 def run_question(db_path: str, question: str, evidence: str = "", llm=None,
                  tracer=None, settings: Settings | None = None, limiter=None,
-                 skip_respond: bool = False, on_event=None) -> Answer:
+                 skip_respond: bool = False, on_event=None, session_context=None) -> Answer:
     """跑一题到底。on_event（票 03）＝节点级进度回调 `Callable[[dict], None]`，
     帧形如 {node, attempt, status}；缺省 None 时与现状逐行为一致（CLI/eval 调用面
-    零改动，专测钉死于 tests/test_on_event.py）。"""
+    零改动，专测钉死于 tests/test_on_event.py）。
+    session_context（票 05）＝三层记忆载荷 {"turns": [...], "draft": ...|None}，
+    仅此透传进初始状态供 understand/generate 消费；缺省 None 时初始状态与本参数
+    存在前逐字节一致（单轮关态钉死于 tests/test_session_context.py）。"""
     try:
         if llm is None:
             settings = settings or load_settings()
             llm = build_llm(settings)
         graph = build_graph(llm, tracer, settings=settings, limiter=limiter,
                             skip_respond=skip_respond, on_event=on_event)
-        final = graph.invoke({"db_path": db_path, "question": question, "evidence": evidence})
+        initial = {"db_path": db_path, "question": question, "evidence": evidence}
+        if session_context is not None:
+            initial["session_context"] = session_context
+        final = graph.invoke(initial)
         return final["answer"]
     except Exception as e:  # noqa: BLE001 run_question 是最外层守护：有意收敛一切裸异常
         # 永不编造（面向 CLI 用户）：收敛图内未兜住的裸异常为诚实失败答案。

@@ -324,6 +324,77 @@ button:disabled {
 
 .rail .side-block {
   margin-top: 0.6rem;
+  min-height: 0;
+  overflow-y: auto; /* 历史会话多了侧栏内滚，不撑破通高栏 */
+}
+
+/* 票 05：侧栏历史会话条目（标题＝首轮问题，超长省略号；当前会话高亮） */
+.hist-item {
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 0.5rem;
+  padding: 0.4rem 0.55rem;
+  font-size: 0.8rem;
+  color: #1c1c1e;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hist-item:hover {
+  background: #f4f4f7;
+}
+
+.hist-item.active {
+  background: #eef3fd;
+  color: #2f6feb;
+}
+
+.hist-item i {
+  font-style: normal;
+  color: #8e8e95;
+  font-size: 0.72rem;
+}
+
+.hist-item:disabled {
+  opacity: 0.55;
+}
+
+/* 票 05：会话级口径叠加框（常驻入坞，存即落盘随会话） */
+.overlay-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+  margin-bottom: 0.6rem;
+}
+
+.overlay-row textarea {
+  flex: 1;
+  min-width: 0;
+  resize: vertical;
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid #e3e3e8;
+  border-radius: 0.6rem;
+  color: #1c1c1e;
+}
+
+.overlay-row button {
+  align-self: flex-end;
+  background: #fff;
+  color: #2f6feb;
+  border: 1px solid #b9c6e8;
+  border-radius: 0.6rem;
+  padding: 0.4rem 0.7rem;
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+.overlay-row button:disabled {
+  color: #b0b0b6;
+  border-color: #e3e3e8;
 }
 
 .side-block {

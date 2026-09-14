@@ -5,14 +5,18 @@ import {
   AskResponse,
   ModelCard,
   ProgressEvent,
+  SessionHead,
   askStream,
   createAgent,
   deleteAgent,
   getAgent,
+  getSession,
   getModel,
   listAgents,
   listRegistries,
+  listSessions,
   patchAgent,
+  patchSession,
   uploadDatasource,
 } from "./api";
 import { ResultChart } from "./Chart";
@@ -20,6 +24,8 @@ import { ResultChart } from "./Chart";
 // 渲染纪律（spec）：一律 React 文本插值（＝textContent），全文件禁 dangerouslySetInnerHTML。
 // M7-rev2 票 02.5：三视图状态路由（首页/智能体详情/对话页），不引 router 依赖。
 // 对话页于 2026-09-12 改版为通高侧栏＋中栏滚动的 agent 布局（首页/详情页仍窄版）。
+// 票 05 多轮：会话号前端自生成（hex12）、懒建档；侧栏历史会话真落点；
+// 新话题按钮＝清 L1 保 L2；口径叠加框随会话落盘（后端确定性合并进 evidence）。
 
 // 后端拒绝理由一律原样展示（永不编造错误说明）
 const errMsg = (e: unknown): string =>
@@ -166,8 +172,8 @@ function AnswerBubble({ resp, trail }: { resp: AskResponse; trail: ProgressEvent
         <span>{resp.path === "metric" ? "指标命中" : "兜底路线"}</span>
         {resp.metric_name && <span>· {resp.metric_name}</span>}
         {resp.elapsed_ms !== null && <span>· {resp.elapsed_ms} ms</span>}
-        {/* 票 01 恒单轮（session_id 恒 null）；多轮（票 05）落地时换成会话标识 */}
-        {resp.session_id === null && <span>· 单轮</span>}
+        {/* 票 05：session_id 出真值＝本轮活在会话里；null＝单轮请求照旧 */}
+        <span>· {resp.session_id === null ? "单轮" : "会话"}</span>
       </div>
       {/* 票 03：当场看过的自纠错不随答案落地而蒸发——收成折叠留档 */}
       {trail.length > 0 && (
@@ -515,12 +521,20 @@ function AgentPage({
   );
 }
 
-// ── 对话页：通高侧栏（返回/新建会话/历史占位＝票 05 落点）＋中栏对话 ──
+// ── 对话页：通高侧栏（返回/新会话/新话题/历史会话＝票 05 真落点）＋中栏对话 ──
 // owner 2026-09-12 改版：业务知识块删除（只活在详情页）、预设 pill 入坞到
 // 输入框上方且仅空对话显示、欢迎大字个性化、视口分区本地滚动（agent 布局）。
+// 票 05：＋新建会话原地升级＝换新会话号（懒建档，下一问开新档）；新话题＝清 L1
+// 保 L2；会话级口径叠加框随会话落盘（后端每轮确定性并入，零 LLM 判定）。
+
+const newSid = () => crypto.randomUUID().replace(/-/g, "").slice(0, 12);
 
 function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
   const [agent, setAgent] = useState<AgentDetail | null>(null);
+  const [sid, setSid] = useState(newSid); // 票 05：会话号前端自生成，进页＝新会话
+  const [sessions, setSessions] = useState<SessionHead[]>([]);
+  const [overlay, setOverlay] = useState("");
+  const [savedOverlay, setSavedOverlay] = useState(""); // 脏判定基线（未保存如实可感）
   const [question, setQuestion] = useState("");
   const [pending, setPending] = useState(false); // 在途锁前端侧：流式未结束锁一切发送
   const busyRef = useRef(false); // 同帧双发防呆：setPending 是异步的，闭包 pending 会失效
@@ -529,8 +543,21 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
   const [err, setErr] = useState("");
   const tailRef = useRef<HTMLDivElement>(null);
 
+  async function refreshSessions() {
+    try {
+      setSessions(await listSessions(id));
+    } catch (e) {
+      setErr(errMsg(e)); // 侧栏读不动如实报（不静默吞坏会话文件——诚实的另一面）
+    }
+  }
+
   useEffect(() => {
+    setSid(newSid()); // 换智能体＝新会话（会话绑智能体，spec 票 05）
+    setMsgs([]);
+    setOverlay("");
+    setSavedOverlay("");
     getAgent(id).then(setAgent).catch((e: Error) => setErr(e.message));
+    refreshSessions();
   }, [id]);
 
   // 对话产品常识行为：新消息/新进度自动滚到最新一条
@@ -540,7 +567,52 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
 
   function newConversation() {
     if (busyRef.current) return; // 在途期间不清场（锁的展示面）
+    setSid(newSid()); // 换会话号：当前会话已在侧栏历史里，下一问开新档
     setMsgs([]);
+    setOverlay("");
+    setSavedOverlay("");
+  }
+
+  async function newTopic() {
+    if (busyRef.current) return;
+    try {
+      // 清 L1 保 L2（票面语义）：下一问不带上一轮 SQL 草稿，历史仍供消解
+      await patchSession(id, sid, { fresh_topic: true });
+      setMsgs([]); // 版面归零，会话继续（区别于"新建会话"的换档）
+      setErr("");
+    } catch (e) {
+      setErr(errMsg(e));
+    }
+  }
+
+  async function openSession(h: SessionHead) {
+    if (busyRef.current) return;
+    try {
+      const d = await getSession(id, h.id);
+      setSid(h.id);
+      setOverlay(d.overlay);
+      setSavedOverlay(d.overlay);
+      // 回放＝问答本体（answer 即契约 payload；trail 属现场观察不入档，owner 裁）
+      setMsgs(
+        d.turns.flatMap((t): Msg[] => [
+          { role: "user", text: t.question },
+          { role: "agent", resp: t.answer, trail: [] },
+        ]),
+      );
+      setErr("");
+    } catch (e) {
+      setErr(errMsg(e));
+    }
+  }
+
+  async function saveOverlay() {
+    try {
+      const r = await patchSession(id, sid, { overlay });
+      setSavedOverlay(r.overlay);
+      setErr("");
+    } catch (e) {
+      setErr(errMsg(e));
+    }
   }
 
   async function send(text: string) {
@@ -553,12 +625,13 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
     setProgress([]);
     const trail: ProgressEvent[] = [];
     try {
-      // evidence 恒空＝智能体业务知识兜底（会话级口径叠加框在多轮票 05）
+      // evidence 恒空＝会话叠加＋智能体业务知识兜底（合并优先级在后端收口）
       const resp = await askStream(id, q, "", (ev) => {
         trail.push(ev);
         setProgress([...trail]);
-      });
+      }, sid);
       setMsgs((m) => [...m, { role: "agent", resp, trail: [...trail] }]);
+      refreshSessions(); // 懒建档：首问落盘后侧栏才有这一档
     } catch (e) {
       // 永不编造：链路错误如实展示，不伪装成答案；半截进度也如实留在错误里
       setMsgs((m) => [...m, { role: "error", text: errMsg(e), trail: [...trail] }]);
@@ -568,6 +641,8 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
       setProgress([]);
     }
   }
+
+  const overlayDirty = overlay !== savedOverlay;
 
   return (
     <div className="chatshell">
@@ -580,17 +655,39 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
           type="button"
           onClick={newConversation}
           disabled={pending || msgs.length === 0}
-          title={msgs.length === 0 ? "当前已是新会话" : "清空当前对话回到欢迎态"}
+          title={msgs.length === 0 ? "当前已是新会话" : "开一个新会话（当前会话存入侧栏历史）"}
         >
           ＋ 新建会话
         </button>
+        <button
+          className="rail-new"
+          type="button"
+          onClick={newTopic}
+          disabled={pending || msgs.length === 0}
+          title="新话题：下一问不带上一轮 SQL 草稿（历史仍供指代消解），会话不换档"
+        >
+          ↺ 新话题
+        </button>
         <div className="side-block">
           <h4>历史会话</h4>
-          <span className="sub">多轮会话（票 05）落地后在这里出现。</span>
+          {sessions.length === 0 && <span className="sub">问过话的会话会出现在这里。</span>}
+          {sessions.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              className={`hist-item${s.id === sid ? " active" : ""}`}
+              disabled={pending}
+              onClick={() => openSession(s)}
+              title={s.title}
+            >
+              {s.title}
+              <i> {s.turn_count} 轮</i>
+            </button>
+          ))}
         </div>
       </aside>
       <main className="chatmain">
-        {err && <div className="note">加载失败：{err}</div>}
+        {err && <div className="note">未完成：{err}</div>}
         <div className="chatscroll">
           <div className="chatcol">
             {msgs.length === 0 && !pending &&
@@ -639,6 +736,26 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
           </div>
         </div>
         <div className="dock">
+          {/* 票 05：会话级口径叠加框——常驻文本每轮并进背景（后端确定性拼接） */}
+          {agent && (
+            <div className="overlay-row">
+              <textarea
+                rows={2}
+                placeholder="会话口径叠加（常驻，每轮并入背景信息；与智能体业务知识拼接，不覆盖）"
+                value={overlay}
+                onChange={(e) => setOverlay(e.target.value)}
+                disabled={pending}
+              />
+              <button
+                type="button"
+                onClick={saveOverlay}
+                disabled={pending || !overlayDirty}
+                title={overlayDirty ? "保存到当前会话" : "已保存"}
+              >
+                存口径
+              </button>
+            </div>
+          )}
           {/* 预设 pill＝仅空对话（owner 裁 A1）；点击发送逻辑零改动、零新通道 */}
           {agent && msgs.length === 0 && !pending && agent.preset_questions.length > 0 && (
             <div className="presets">

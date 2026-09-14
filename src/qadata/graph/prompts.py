@@ -26,7 +26,7 @@ _UNDERSTAND_TMPL = """请把下面的用户问题改写为一句自包含的查�
   "output_form": "题面明示的输出形态（如「百分比」「列出全部」「要输出哪几列」）",
   "format_constraint": "题面明示的格式要求（如「保留两位小数」），未明示则 null",
   "evidence_terms": ["背景信息中以「术语 = 定义」形式明示的条目，原样摘录"]}}}}
-原始问题：{question}
+{history}原始问题：{question}
 背景信息（evidence）：{evidence}"""
 
 # M5 票 05 第二级 LLM 复核（spec「匹配机制」）：整表装入、只判身份、禁写 SQL。
@@ -79,12 +79,57 @@ _RESPOND_TMPL = """你是数据分析助手。请根据查询结果用中文给�
 结论："""
 
 
-def understand_prompt(question: str, evidence: str = "") -> str:
-    return _UNDERSTAND_TMPL.format(question=question, evidence=evidence or "（无）")
+# ── M7 票 05 三层记忆渲染（L2→understand 消解、L1→generate 尾部草稿）──────────
+# 零 LLM 确定性拼装；载荷形状契约见 graph/state.py。空块＝关态/无可用记忆，
+# prompt 与票 04 现状逐字节一致（专测钉死）。错误草稿不传染：failed 轮只留问题
+# 供消解、如实标失败；草稿仅为参考的措辞写进节头，照走完整沙箱＋verify 是代码路径
+# 保证（草稿不改路由/沙箱/校验/账本一分）。
+
+def format_session_history(ctx: dict | None) -> str:
+    """L2 情节记忆段（最近 K 轮，web 层已切窗）：问题/SQL/行数/标量头部。"""
+    if not isinstance(ctx, dict):
+        return ""
+    lines: list[str] = []
+    for t in ctx.get("turns") or []:
+        q = str(t.get("question") or "")
+        if t.get("failed"):
+            lines.append(f"- 问：{q}（该轮查询失败，无可靠结果与 SQL 可参考）")
+            continue
+        entry = [f"- 问：{q}"]
+        if t.get("sql"):
+            entry.append(f"  SQL：{t['sql']}")
+        if t.get("row_count") is not None:
+            head = t.get("head")
+            entry.append(f"  结果：{t['row_count']} 行" + (f"；{head}" if head else ""))
+        lines.append("\n".join(entry))
+    if not lines:
+        return ""
+    return ("## 会话历史（按时间升序，最后一条是上一轮；用于消解「这些/那些/它」等指代与延续主体，"
+            "不要回答历史里的问题）\n" + "\n".join(lines))
 
 
-def sql_prompt(schema: str, evidence: str, question: str, history: str = "") -> str:
-    h = "\n" + history if history else ""
+def format_session_draft(ctx: dict | None) -> str:
+    """L1 工作记忆段（上一轮完整 SQL＋结果头部摘要）——generate 的增量改写草稿。"""
+    if not isinstance(ctx, dict):
+        return ""
+    d = ctx.get("draft")
+    sql = str((d or {}).get("sql") or "") if isinstance(d, dict) else ""
+    if not sql:
+        return ""
+    block = ("## 上一轮 SQL（增量改写的草稿：本题若为其延续（如「这些新生」的定义即写在其中），"
+             "在其结构上改；它仅供参考、不是本题答案，仍须按本题完整生成）\n" + sql)
+    head = str(d.get("head") or "") if isinstance(d, dict) else ""
+    return block + (f"\n上一轮结果摘要：{head}" if head else "")
+
+
+def understand_prompt(question: str, evidence: str = "", session_block: str = "") -> str:
+    h = session_block + "\n" if session_block else ""
+    return _UNDERSTAND_TMPL.format(question=question, evidence=evidence or "（无）", history=h)
+
+
+def sql_prompt(schema: str, evidence: str, question: str, history: str = "",
+               draft: str = "") -> str:
+    h = ("\n" + history if history else "") + ("\n" + draft if draft else "")
     return _SQL_TMPL.format(schema=schema, evidence=evidence or "（无）", question=question, history=h)
 
 

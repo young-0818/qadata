@@ -1,4 +1,4 @@
-"""M7-rev2 票 02.5/03 web 薄壳：应用工厂＋DI＋智能体面＋进度流＋前端同源服务。
+"""M7-rev2 票 02.5/03/05 web 薄壳：应用工厂＋DI＋智能体面＋进度流＋会话＋前端同源服务。
 
 唯一入口不破：/api/ask 与 /api/ask/stream 只经 run_question（沙箱四层无旁路），
 本模块不建模型、不读密钥、不碰 sqlite——llm/settings/agents（AgentStore）由
@@ -6,15 +6,21 @@
 （data/agents/<id>/），数据源上传唯一路、业务知识引用态读取期派生；schema 摘要
 经 open_readonly 只读打开（导入落盘零建连、读取展示走沙箱①层——三层钉测见契约
 测试）。/api/ask 响应 12 字段冻结不动（spec 响应契约：改形状＝跨票改卷；
-session_id 恒 null 至多轮票 05）；票 04 经 owner 裁决**新增可选字段 chart**
-（图型判定＝web/charts.py 规则纯函数，一判双达两端点）——共 13 字段。
+session_id 自票 05 出真值——请求带会话则回显，单轮请求照旧 null）；票 04 经
+owner 裁决**新增可选字段 chart**（图型判定＝web/charts.py 规则纯函数，一判双达
+两端点）——共 13 字段。
 票 03：/api/ask/stream 以 SSE 直播节点级进度帧（node/attempt/status 三字段
-起步）＋末帧 event:answer（即契约本体，与 /api/ask 同源）；agent 级在途锁
-两端点共用（同问在途＝409）。
+起步）＋末帧 event:answer（即契约本体，与 /api/ask 同源）。
+票 05：多轮会话落盘（web/sessions.py，owner 裁决 2026-09-14 推翻"内存态"）——
+请求可选 session_id 装载三层记忆（图侧零新增调用）、问完落盘一轮；会话级口径
+叠加框随会话存（优先级＝请求显式 > 叠加＋智能体业务知识拼接 > 空，确定性合并
+零 LLM 判定）；在途锁键升格 session_id（单轮请求维持 agent 级）；历史会话端点
+供侧栏列表与重开回放（回放＝问答本体，自纠错 trail 属现场观察不入档）。
 """
 import json
 import queue
 import threading
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +41,14 @@ from qadata.web.agents import (
     AgentStoreError,
 )
 from qadata.web.charts import decide_chart
+from qadata.web.sessions import (
+    Session,
+    SessionNotFound,
+    SessionStore,
+    SessionStoreError,
+    append_turn,
+    build_session_context,
+)
 
 # 前端未构建时的诚实占位页（侦察笔记：别白屏，写明构建命令）
 _PLACEHOLDER_PAGE = """<!doctype html>
@@ -57,6 +71,14 @@ class AskRequest(BaseModel):
     agent_id: str
     question: str = Field(min_length=1)
     evidence: str = ""
+    # 票 05：会话 id（客户端生成 hex12，懒建档——"＋ 新建会话"＝换 id、下一问开新档）；
+    # 缺省 None＝单轮关态（三层记忆零注入，与票 04 逐行为一致）
+    session_id: str | None = None
+
+
+class SessionPatchRequest(BaseModel):
+    overlay: str | None = None  # 会话级口径叠加文本（常驻，每轮并进 evidence）
+    fresh_topic: bool | None = None  # 新话题闸：True＝下一问清 L1 保 L2
 
 
 class AgentCreateRequest(BaseModel):
@@ -73,11 +95,11 @@ class AgentPatchRequest(BaseModel):
     preset_questions: list[str] | None = None
 
 
-def answer_to_payload(answer: Answer) -> dict[str, Any]:
+def answer_to_payload(answer: Answer, session_id: str | None = None) -> dict[str, Any]:
     """Answer/QueryResult → 契约 JSON（票 01 冻结 12 字段＋票 04 新增可选 chart，
     共 13 字段；无结果集时行列与图型如实 null）。
 
-    session_id 恒 null——多轮在票 05，届时才有真值。
+    session_id（票 05）＝请求所带会话 id 的回显；单轮请求（无 session_id）照旧 null。
     chart＝decide_chart 规则纯函数对结果集形态的一次裁决（折线/柱/大数卡，
     判不了即 null＝表格）；两端点同经本函数，一判双达不漂移。
     """
@@ -96,7 +118,7 @@ def answer_to_payload(answer: Answer) -> dict[str, Any]:
         "path": answer.path,
         "metric_name": answer.metric_name,
         "template_fell_back": answer.template_fell_back,
-        "session_id": None,
+        "session_id": session_id,
         "chart": decide_chart(columns or [], rows or []) if res else None,
     }
 
@@ -112,11 +134,12 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
     共享实例。static_dir 默认 web/dist 沿仓库根 cwd 约定（与 TRACE_PATH 同款）。
     """
     store = agents
+    sessions = SessionStore(store)  # 票 05：会话住智能体目录内，删智能体连带清会话
     dist = Path(static_dir) if static_dir is not None else Path("web/dist")
     app = FastAPI(title="qadata-web", docs_url=None, redoc_url=None)
 
-    def _bad(e: AgentStoreError) -> HTTPException:
-        if isinstance(e, AgentNotFound):
+    def _bad(e: AgentStoreError | SessionStoreError) -> HTTPException:
+        if isinstance(e, (AgentNotFound, SessionNotFound)):
             return HTTPException(status_code=404, detail=str(e))
         return HTTPException(status_code=400, detail=str(e))
 
@@ -211,27 +234,75 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
             raise _bad(e) from None
         return {"ok": True}
 
+    # ── 票 05：会话面（侧栏列表／重开回放／叠加口径与新话题 PATCH）────────
+    # 会话懒建档＝首问落盘才建文件；回放只渲问答本体（answer 即契约 payload），
+    # 自纠错 trail 属现场观察不入档（owner 裁决）。无 DELETE 端点（票未划；
+    # 删智能体连带清会话）。
+
+    @app.get("/api/agents/{agent_id}/sessions")
+    def list_sessions(agent_id: str) -> dict[str, Any]:
+        try:
+            store.get(agent_id)
+            return {"sessions": sessions.list(agent_id)}
+        except (AgentStoreError, SessionStoreError) as e:
+            raise _bad(e) from None
+
+    @app.get("/api/agents/{agent_id}/sessions/{sid}")
+    def get_session(agent_id: str, sid: str) -> dict[str, Any]:
+        try:
+            store.get(agent_id)
+            s = sessions.replay(agent_id, sid)
+        except (AgentStoreError, SessionStoreError) as e:
+            raise _bad(e) from None
+        return {"id": s.id, "overlay": s.overlay, "fresh_topic": s.fresh_topic,
+                "turns": [{"question": t["question"], "failed": t["failed"],
+                          "ts": t.get("ts"), "answer": t["answer"]} for t in s.turns]}
+
+    @app.patch("/api/agents/{agent_id}/sessions/{sid}")
+    def patch_session(agent_id: str, sid: str, req: SessionPatchRequest) -> dict[str, Any]:
+        try:
+            store.get(agent_id)
+            s = sessions.load(agent_id, sid)
+            fields = req.model_dump(exclude_unset=True)
+            if "overlay" in fields:
+                s = replace(s, overlay=str(fields["overlay"] or ""))
+            if "fresh_topic" in fields:
+                s = replace(s, fresh_topic=bool(fields["fresh_topic"]))
+            sessions.save(agent_id, s)
+        except (AgentStoreError, SessionStoreError) as e:
+            raise _bad(e) from None
+        return {"ok": True, "overlay": s.overlay, "fresh_topic": s.fresh_topic}
+
     # ── 问数：唯一入口，智能体定位数据源与默认业务知识 ───────────────
-    # 在途锁（票 03）：agent 级、/api/ask 与 /api/ask/stream 共用一把——防阻塞×流式
-    # 交错。单进程单用户约定（与上传闭包竞态同款，M7 spec）；多轮票 05 会话制落地后
-    # 键升为 session_id（票面"同会话并发"），先按智能体粒度拒。
+    # 在途锁（票 03→05）：/api/ask 与 /api/ask/stream 共用一把——防阻塞×流式交错。
+    # 键＝session_id（票面"同会话并发"拒），单轮请求（无 session_id）维持 agent 级；
+    # 前缀分域防 id 同值撞锁。单进程单用户约定（与上传闭包竞态同款，M7 spec）。
     _inflight: set[str] = set()
     _inflight_guard = threading.Lock()
 
-    def _acquire_or_409(agent_id: str, name: str) -> None:
+    def _acquire_or_409(key: str, busy_msg: str) -> None:
         with _inflight_guard:
-            if agent_id in _inflight:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"智能体「{name}」正在回答上一个问题，等进度流收口后再问")
-            _inflight.add(agent_id)
+            if key in _inflight:
+                raise HTTPException(status_code=409, detail=busy_msg)
+            _inflight.add(key)
 
-    def _release(agent_id: str) -> None:
+    def _release(key: str) -> None:
         with _inflight_guard:
-            _inflight.discard(agent_id)
+            _inflight.discard(key)
 
-    def _resolve_ask_target(req: AskRequest) -> tuple[str, str, str]:
-        """定位数据源＋口径优先级（请求显式 > 智能体业务知识 > 空）。
+    def _acquire_ask_lock(req: AskRequest, agent_name: str) -> str:
+        """两端点共用锁的键与文案在此单收（防双份字面量漂移）：会话请求升格
+        session_id 级（票 05 在途锁键升格），单轮请求维持 agent 级（票 03 契约）。
+        返回键供收口释放。"""
+        key = f"s:{req.session_id}" if req.session_id else f"a:{req.agent_id}"
+        msg = ("该会话正在回答上一个问题，等进度流收口后再问" if req.session_id else
+               f"智能体「{agent_name}」正在回答上一个问题，等进度流收口后再问")
+        _acquire_or_409(key, msg)
+        return key
+
+    def _resolve_ask_target(req: AskRequest) -> tuple[str, str, str, Session | None]:
+        """定位数据源＋装载会话记忆＋口径优先级（请求显式 > 会话叠加＋智能体业务
+        知识拼接 > 空——叠加为拼接非覆盖，owner 裁决 2026-09-14）。全部前置校验，
         阻塞与流式两端点共用＝拒绝文案与顺序严格一致（流式端点不得自创一套）。"""
         try:
             meta = store.get(req.agent_id)
@@ -239,21 +310,43 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
             if path is None:
                 raise HTTPException(status_code=400,
                                     detail=f"智能体「{meta.name}」未配置数据源（详情页上传 .sqlite 后再问）")
-            evidence = req.evidence.strip() or store.effective_evidence(meta)
-        except AgentStoreError as e:
+            session = sessions.load(req.agent_id, req.session_id) if req.session_id else None
+            kb = store.effective_evidence(meta)
+            if session is not None and session.overlay.strip():
+                kb = "\n".join(x for x in (session.overlay.strip(), kb.strip()) if x.strip())
+            evidence = req.evidence.strip() or kb
+        except (AgentStoreError, SessionStoreError) as e:
             raise _bad(e) from None
-        return str(path), evidence, meta.name
+        return str(path), evidence, meta.name, session
+
+    def _finish_ask(req: AskRequest, session: Session | None, answer: Answer) -> dict[str, Any]:
+        """两端点共同的收口：契约 payload（session_id 回显）＋会话轮次落盘。
+        落盘＝L3 归档＋fresh_topic 复位一次；失败轮也入账（如实标失败，供下轮消解）。
+        写前先重载再合并（双轴评审收紧）：在途问答期间 PATCH 改叠加时，持锁前装载
+        的快照已旧，整值写回＝丢更新；轮次侧同会话受在途锁排他，合并只为配置字段
+        兜底（单用户下 PATCH×ask 是唯一交叉写者）。在途期间**新设**的新话题标志
+        本问并未消费（ctx 装载时还是旧值），原样留给下一问。"""
+        payload = answer_to_payload(answer, session_id=req.session_id)
+        if session is not None:
+            current = sessions.load(req.agent_id, session.id)
+            merged = append_turn(current, req.question, res=answer.result,
+                                 failed=answer.failed, payload=payload)
+            if current.fresh_topic and not session.fresh_topic:
+                merged = replace(merged, fresh_topic=True)
+            sessions.save(req.agent_id, merged)
+        return payload
 
     @app.post("/api/ask")
     def ask(req: AskRequest) -> dict[str, Any]:
-        path, evidence, agent_name = _resolve_ask_target(req)
-        _acquire_or_409(req.agent_id, agent_name)
+        path, evidence, agent_name, session = _resolve_ask_target(req)
+        key = _acquire_ask_lock(req, agent_name)
         try:
             answer = run_question(path, req.question, evidence=evidence,
-                                  llm=llm, settings=settings, tracer=tracer)
+                                  llm=llm, settings=settings, tracer=tracer,
+                                  session_context=build_session_context(session) if session else None)
+            return _finish_ask(req, session, answer)
         finally:
-            _release(req.agent_id)
-        return answer_to_payload(answer)
+            _release(key)
 
     # ── 票 03：进度流直播（SSE）——治"黑盒感"的主治通道 ──────────────
 
@@ -261,27 +354,30 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
     def ask_stream(req: AskRequest) -> StreamingResponse:
         """前置拒绝与 /api/ask 同序同文案（400/404/409 走普通 JSON 错误，不起流）；
         起流后：进度帧＝data: {node,attempt,status}\n\n，末帧＝event: answer＋
-        契约本体（含票 04 chart 字段，与 /api/ask 同源 answer_to_payload，不另造）。
+        契约本体（含票 04 chart 字段，与 /api/ask 同源 answer_to_payload，不另造；
+        票 05 会话轮次落盘同样两端点同源——同走 _finish_ask，落盘在 runner 收口内）。
         run_question 仍是最外层
         守护——任何失败都以诚实失败答案收口成末帧，流永不裸断。
         桥接：worker 线程跑阻塞图（on_event＝入队），同步生成器逐帧取队 yield
         （starlette 自动 threadpool 迭代）。在途＝run_question 计算在途：放锁挂在
         runner 的 finally（评审收紧·双轴同指），断流/生成器未启动等一切投递路径
         都不构成泄漏窗口；计算跑完前队列缓冲、跑完即弃（单进程单用户尾差）。"""
-        path, evidence, agent_name = _resolve_ask_target(req)
-        _acquire_or_409(req.agent_id, agent_name)
+        path, evidence, agent_name, session = _resolve_ask_target(req)
+        key = _acquire_ask_lock(req, agent_name)
         events: queue.Queue = queue.Queue()
-        box: dict[str, Answer] = {}
+        box: dict[str, Any] = {}
         sentinel = object()
+        ctx = build_session_context(session) if session else None
 
         def _runner() -> None:
             try:
-                box["answer"] = run_question(path, req.question, evidence=evidence,
-                                             llm=llm, settings=settings, tracer=tracer,
-                                             on_event=events.put)
+                answer = run_question(path, req.question, evidence=evidence,
+                                      llm=llm, settings=settings, tracer=tracer,
+                                      on_event=events.put, session_context=ctx)
+                box["payload"] = _finish_ask(req, session, answer)
             finally:
                 events.put(sentinel)
-                _release(req.agent_id)  # 在途＝计算在途：投递侧任何路径不持锁
+                _release(key)  # 在途＝计算在途：投递侧任何路径不持锁
 
         threading.Thread(target=_runner, daemon=True).start()
 
@@ -291,10 +387,11 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
                 if item is sentinel:
                     break
                 yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
-            answer = box.get("answer") or Answer(  # worker 被 BaseException 掀翻也不裸断
-                conclusion="流式查询异常中断", failed=True, error_summary="流式查询异常中断")
-            payload = json.dumps(answer_to_payload(answer), ensure_ascii=False)
-            yield f"event: answer\ndata: {payload}\n\n"
+            payload = box.get("payload") or answer_to_payload(  # worker 被 BaseException 掀翻也不裸断
+                Answer(conclusion="流式查询异常中断", failed=True,
+                       error_summary="流式查询异常中断"), session_id=req.session_id)
+            yield ("event: answer\ndata: "
+                   f"{json.dumps(payload, ensure_ascii=False)}\n\n")
 
         return StreamingResponse(_frames(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache"})

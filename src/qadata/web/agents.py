@@ -31,6 +31,11 @@ _DESC_MAX = 500
 _DATASOURCE_FILENAME = "source.sqlite"
 
 
+def is_hex12(raw: str) -> bool:
+    """uuid4().hex[:12] 短串判定——智能体/会话 id 的路径穿越面从输入源头焊死（票 05 共用）。"""
+    return len(raw) == 12 and all(c in "0123456789abcdef" for c in raw)
+
+
 class AgentStoreError(ValueError):
     """智能体存储面的诚实拒绝（带病配置与越界输入一律拒，不带病运行）。"""
 
@@ -154,11 +159,15 @@ class AgentStore:
                     "先清空一头再换另一头")
         return meta
 
-    def _dir_of(self, agent_id: str) -> Path:
-        # id 只接受十六进制短串：路径穿越面从输入源头焊死
-        if len(agent_id) != 12 or any(c not in "0123456789abcdef" for c in agent_id):
+    def agent_dir(self, agent_id: str) -> Path:
+        """公开目录定位（票 05 会话存储层共用）：hex12 防穿越在此单一真源；
+        目录存在与否不在此判——存在性语义归各调用方（get/save 各自如实报错）。"""
+        if not is_hex12(agent_id):
             raise AgentNotFound(f"非法智能体 id：{agent_id!r}")
         return self._root / agent_id
+
+    def _dir_of(self, agent_id: str) -> Path:
+        return self.agent_dir(agent_id)
 
     def _load(self, d: Path) -> AgentMeta:
         if not d.is_dir():

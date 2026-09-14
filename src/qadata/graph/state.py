@@ -25,4 +25,10 @@ class AgentState(TypedDict, total=False):
     # 兜底路径清 None，降级时 explore 显式覆盖（防路由二次降级，仿 precise_candidates 纪律）
     metric_note: str | None  # M5 票 05：指标模板降级原因（执行失败/校验可疑）；None=未发生降级。
     # 进失败历史（generate 可见）与 respond 标注
+    session_context: dict | None  # M7 票 05 唯一新状态键（precise_candidates 同款载荷纪律：显式键、
+    # 整值覆盖）：{"turns": [L2 行 {question/sql/row_count/head/failed，≤K=5 条·时间升序}]，
+    # "draft": L1 {sql/head} 或 None}。仅 understand/generate 消费（姊妹钉测＝
+    # test_generate_never_reads_intent 同款条款，tests/test_session_context.py AST 源扫描
+    # 钉死其他节点不得读取）；None/缺键＝无会话关态，understand/generate prompt 与现状逐字节一致。
+    # L3 全史归档永不进 prompt（K=5 窗口与草稿资格在 web 层 build_session_context 切好再装填）。
     answer: Answer | None

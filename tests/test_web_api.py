@@ -18,6 +18,7 @@ from qadata.web import agents as web_agents
 from qadata.web import app as web_app
 from qadata.web import charts as web_charts
 from qadata.web import serve as web_serve
+from qadata.web import sessions as web_sessions
 from qadata.web.agents import AgentStore
 from qadata.web.app import create_app
 from tests.fakes import ScriptedLLM
@@ -344,9 +345,9 @@ def test_ask_empty_question_422(store, fixture_db):
 
 
 def test_web_package_never_imports_sqlite3():
-    """AST 级 import 纪律（metrics 先例同款）：web 四包禁 sqlite3/引擎驱动——
+    """AST 级 import 纪律（metrics 先例同款）：web 五包禁 sqlite3/引擎驱动——
     连接唯一入口是 tools/db.open_readonly，存储层只搬文件，图型判定只算纯函数。"""
-    for mod in (web_app, web_agents, web_charts, web_serve):
+    for mod in (web_app, web_agents, web_charts, web_serve, web_sessions):
         parsed = ast.parse(inspect.getsource(mod))
         imported: set[str] = set()
         for node in ast.walk(parsed):

@@ -37,18 +37,22 @@ def _fr(node: str, attempt: int, status: str) -> dict:
 
 
 def test_run_question_signature_tail_default_none():
-    """on_event 必须是末位可选参（缺省 None）——位置不动则 CLI/eval 现有调用零改动。"""
+    """末位可选参纪律：on_event（票 03）与 session_context（票 05）都在 evidence 之后
+    以缺省 None 的末位参数追加——既有位置参/关键字调用面零改动，CLI/eval 不受影响。
+    （本断言原钉 on_event 为末位；票 05 合法追加后钉"末两位皆缺省 None"。）"""
     params = list(inspect.signature(run_question).parameters.values())
-    assert params[-1].name == "on_event" and params[-1].default is None
+    assert params[-1].name == "session_context" and params[-1].default is None
+    assert params[-2].name == "on_event" and params[-2].default is None
 
 
 def test_cli_and_eval_call_sites_untouched():
-    """票面"CLI/eval 调用面零改动"钉死：两个调用方源码里不得出现 on_event。"""
+    """票面"CLI/eval 调用面零改动"钉死：两个调用方源码里不得出现 on_event/session_context。"""
     import qadata.cli.main as cli_main
     import qadata.eval.bird as eval_bird
 
-    assert "on_event" not in inspect.getsource(cli_main)
-    assert "on_event" not in inspect.getsource(eval_bird)  # eval 带 skip_respond=True 的路径同样不传
+    for name in ("on_event", "session_context"):
+        assert name not in inspect.getsource(cli_main), name
+        assert name not in inspect.getsource(eval_bird), name  # eval 带 skip_respond=True 的路径同样不传
 
 
 def test_off_state_answer_identical(fixture_db):
