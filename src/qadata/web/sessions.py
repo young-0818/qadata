@@ -27,6 +27,7 @@ import yaml
 
 from qadata.llm.tracing import BEIJING
 from qadata.types import QueryResult
+from qadata.web._fs import atomic_write
 from qadata.web.agents import AgentNotFound, AgentStore, is_hex12
 
 # L2 情节记忆窗口：最近 K 轮进 understand（spec 票 05；换窗＝记忆升级阶梯的触发器，勿随手调）
@@ -192,8 +193,8 @@ class SessionStore:
 
     def _dump(self, f: Path, session: Session) -> None:
         body = {"id": session.id, "turns": [dict(t) for t in session.turns]}
-        f.write_text(yaml.safe_dump(body, allow_unicode=True, sort_keys=False),
-                     encoding="utf-8")
+        # 票 01：写经唯一入口收口（tmp+fsync+os.replace），crash 不出半档
+        atomic_write(f, yaml.safe_dump(body, allow_unicode=True, sort_keys=False))
 
 
 def append_turn(session: Session, question: str, *, res: QueryResult | None,

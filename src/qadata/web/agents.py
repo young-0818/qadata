@@ -18,6 +18,7 @@ from pathlib import Path
 import yaml
 
 from qadata.graph.metrics import Metric, load_registry
+from qadata.web._fs import atomic_write
 
 # 智能体数据目录（仓库根 cwd 约定；data/ 已在 .gitignore，不入库）
 DEFAULT_AGENTS_DIR = "data/agents"
@@ -140,7 +141,9 @@ class AgentStore:
             raise AgentStoreError(
                 f"只接受 sqlite 文件（{sorted(SQLITE_SUFFIXES)}）：{filename!r}")
         dest = self._dir_of(agent_id) / _DATASOURCE_FILENAME
-        dest.write_bytes(data)
+        # 票 01：上传覆盖走原子写——覆盖坏一次＝整库损坏且用户以为换库成功，
+        # 是本函数唯一升级点（存在性/白名单检查原样在前）
+        atomic_write(dest, data)
         return dest
 
     # ── 内部 ────────────────────────────────────────────────────────
@@ -191,8 +194,8 @@ class AgentStore:
         body = {"name": meta.name, "description": meta.description,
                 "evidence": meta.evidence, "metrics_ref": meta.metrics_ref,
                 "preset_questions": list(meta.preset_questions)}
-        (d / "meta.yaml").write_text(
-            yaml.safe_dump(body, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        atomic_write(d / "meta.yaml",
+                     yaml.safe_dump(body, allow_unicode=True, sort_keys=False))
 
     @staticmethod
     def _checked_name(raw: str) -> str:
