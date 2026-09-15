@@ -12,10 +12,10 @@ owner 裁决**新增可选字段 chart**（图型判定＝web/charts.py 规则�
 票 03：/api/ask/stream 以 SSE 直播节点级进度帧（node/attempt/status 三字段
 起步）＋末帧 event:answer（即契约本体，与 /api/ask 同源）。
 票 05：多轮会话落盘（web/sessions.py，owner 裁决 2026-09-14 推翻"内存态"）——
-请求可选 session_id 装载三层记忆（图侧零新增调用）、问完落盘一轮；会话级口径
-叠加框随会话存（优先级＝请求显式 > 叠加＋智能体业务知识拼接 > 空，确定性合并
-零 LLM 判定）；在途锁键升格 session_id（单轮请求维持 agent 级）；历史会话端点
-供侧栏列表与重开回放（回放＝问答本体，自纠错 trail 属现场观察不入档）。
+请求可选 session_id 装载三层记忆（图侧零新增调用）、问完落盘一轮；在途锁键升格
+session_id（单轮请求维持 agent 级）；历史会话端点供侧栏列表与重开回放（回放＝
+问答本体，自纠错 trail 属现场观察不入档）。口径优先级照旧＝请求显式 > 智能体
+业务知识 > 空（会话级叠加框经 owner 裁 2026-09-15 撤销，票 05 修订见 spec）。
 """
 import json
 import queue
@@ -77,7 +77,6 @@ class AskRequest(BaseModel):
 
 
 class SessionPatchRequest(BaseModel):
-    overlay: str | None = None  # 会话级口径叠加文本（常驻，每轮并进 evidence）
     fresh_topic: bool | None = None  # 新话题闸：True＝下一问清 L1 保 L2
 
 
@@ -234,7 +233,7 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
             raise _bad(e) from None
         return {"ok": True}
 
-    # ── 票 05：会话面（侧栏列表／重开回放／叠加口径与新话题 PATCH）────────
+    # ── 票 05：会话面（侧栏列表／重开回放／新话题 PATCH）────────────────
     # 会话懒建档＝首问落盘才建文件；回放只渲问答本体（answer 即契约 payload），
     # 自纠错 trail 属现场观察不入档（owner 裁决）。无 DELETE 端点（票未划；
     # 删智能体连带清会话）。
@@ -254,7 +253,7 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
             s = sessions.replay(agent_id, sid)
         except (AgentStoreError, SessionStoreError) as e:
             raise _bad(e) from None
-        return {"id": s.id, "overlay": s.overlay, "fresh_topic": s.fresh_topic,
+        return {"id": s.id, "fresh_topic": s.fresh_topic,
                 "turns": [{"question": t["question"], "failed": t["failed"],
                           "ts": t.get("ts"), "answer": t["answer"]} for t in s.turns]}
 
@@ -264,14 +263,12 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
             store.get(agent_id)
             s = sessions.load(agent_id, sid)
             fields = req.model_dump(exclude_unset=True)
-            if "overlay" in fields:
-                s = replace(s, overlay=str(fields["overlay"] or ""))
             if "fresh_topic" in fields:
                 s = replace(s, fresh_topic=bool(fields["fresh_topic"]))
             sessions.save(agent_id, s)
         except (AgentStoreError, SessionStoreError) as e:
             raise _bad(e) from None
-        return {"ok": True, "overlay": s.overlay, "fresh_topic": s.fresh_topic}
+        return {"ok": True, "fresh_topic": s.fresh_topic}
 
     # ── 问数：唯一入口，智能体定位数据源与默认业务知识 ───────────────
     # 在途锁（票 03→05）：/api/ask 与 /api/ask/stream 共用一把——防阻塞×流式交错。
@@ -301,8 +298,8 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
         return key
 
     def _resolve_ask_target(req: AskRequest) -> tuple[str, str, str, Session | None]:
-        """定位数据源＋装载会话记忆＋口径优先级（请求显式 > 会话叠加＋智能体业务
-        知识拼接 > 空——叠加为拼接非覆盖，owner 裁决 2026-09-14）。全部前置校验，
+        """定位数据源＋装载会话记忆＋口径优先级（请求显式 > 智能体业务知识 > 空，
+        票 02.5 语义——会话级叠加框经 owner 裁 2026-09-15 撤销）。全部前置校验，
         阻塞与流式两端点共用＝拒绝文案与顺序严格一致（流式端点不得自创一套）。"""
         try:
             meta = store.get(req.agent_id)
@@ -311,10 +308,7 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
                 raise HTTPException(status_code=400,
                                     detail=f"智能体「{meta.name}」未配置数据源（详情页上传 .sqlite 后再问）")
             session = sessions.load(req.agent_id, req.session_id) if req.session_id else None
-            kb = store.effective_evidence(meta)
-            if session is not None and session.overlay.strip():
-                kb = "\n".join(x for x in (session.overlay.strip(), kb.strip()) if x.strip())
-            evidence = req.evidence.strip() or kb
+            evidence = req.evidence.strip() or store.effective_evidence(meta)
         except (AgentStoreError, SessionStoreError) as e:
             raise _bad(e) from None
         return str(path), evidence, meta.name, session
@@ -322,10 +316,10 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
     def _finish_ask(req: AskRequest, session: Session | None, answer: Answer) -> dict[str, Any]:
         """两端点共同的收口：契约 payload（session_id 回显）＋会话轮次落盘。
         落盘＝L3 归档＋fresh_topic 复位一次；失败轮也入账（如实标失败，供下轮消解）。
-        写前先重载再合并（双轴评审收紧）：在途问答期间 PATCH 改叠加时，持锁前装载
-        的快照已旧，整值写回＝丢更新；轮次侧同会话受在途锁排他，合并只为配置字段
-        兜底（单用户下 PATCH×ask 是唯一交叉写者）。在途期间**新设**的新话题标志
-        本问并未消费（ctx 装载时还是旧值），原样留给下一问。"""
+        写前先重载再合并（双轴评审收紧）：在途问答期间 PATCH 立新话题闸时，持锁前
+        装载的快照已旧，整值写回＝丢更新；轮次侧同会话受在途锁排他，合并只为闸位
+        兜底（单用户下 PATCH×ask 是唯一交叉写者）。在途期间**新设**的新话题闸本问
+        并未消费（ctx 装载时还是旧值），原样留给下一问。"""
         payload = answer_to_payload(answer, session_id=req.session_id)
         if session is not None:
             current = sessions.load(req.agent_id, session.id)

@@ -159,7 +159,6 @@ export interface SessionTurn {
 
 export interface SessionDetail {
   id: string;
-  overlay: string;
   fresh_topic: boolean;
   turns: SessionTurn[];
 }
@@ -177,8 +176,8 @@ export function getSession(agentId: string, sid: string): Promise<SessionDetail>
 export function patchSession(
   agentId: string,
   sid: string,
-  fields: { overlay?: string; fresh_topic?: boolean },
-): Promise<{ ok: boolean; overlay: string; fresh_topic: boolean }> {
+  fields: { fresh_topic?: boolean },
+): Promise<{ ok: boolean; fresh_topic: boolean }> {
   return sendJson(`/api/agents/${agentId}/sessions/${sid}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },

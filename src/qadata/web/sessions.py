@@ -12,8 +12,8 @@ owner 裁决（2026-09-14）：落盘替代 spec 原「内存 dict/重启丢历�
 - L2 情节记忆＝最近 K=5 轮滑窗 → turns（failed 行只留问题、如实标失败）。
 - L3 归档＝turns 全史，**永不进 prompt**——切窗只发生在 build_session_context。
 结果集只注摘要（result_head：标量→值；否则头部行）——全量展示行只活在轮次
-answer 载荷里供回放，不进任何上下文。优先级/合并（请求显式 > 会话叠加＋业务知识
-拼接 > 空）在 web/app.py 收口，本模块只存文本、不掺判定。
+answer 载荷里供回放，不进任何上下文。口径注入照旧走请求显式 evidence > 智能体
+业务知识的票 02.5 语义（owner 裁 2026-09-15：撤销会话级口径叠加框）。
 """
 import uuid
 from dataclasses import dataclass, replace
@@ -31,8 +31,6 @@ from qadata.web.agents import AgentNotFound, AgentStore, is_hex12
 SESSION_MEMORY_K = 5
 # 结果头部摘要的行数上限（喂 L1/L2 的记忆行，远小于显示行数——全量行不进上下文）
 HEAD_ROWS = 3
-# 会话级口径叠加文本上限（与智能体描述同量级，防无限长吃 prompt）
-OVERLAY_MAX = 2000
 
 _SESSIONS_SUBDIR = "sessions"
 
@@ -48,7 +46,6 @@ class SessionNotFound(SessionStoreError):
 @dataclass(frozen=True)
 class Session:
     id: str
-    overlay: str = ""  # 会话级口径叠加（常驻文本，每轮并进 evidence——拼接非覆盖）
     fresh_topic: bool = False  # 新话题闸：True＝下一问清 L1 保 L2（append 轮时复位）
     turns: tuple[dict[str, Any], ...] = ()  # L3 全史；轮形见 _validated_turn
 
@@ -143,8 +140,6 @@ class SessionStore:
     def save(self, agent_id: str, session: Session) -> None:
         self._checked_sid(session.id)
         self._agent_exists(agent_id)
-        if len(session.overlay) > OVERLAY_MAX:
-            raise SessionStoreError(f"会话口径叠加超长（≤{OVERLAY_MAX} 字）")
         d = self._sessions_root(agent_id)
         d.mkdir(parents=True, exist_ok=True)
         self._dump(d / f"{session.id}.yaml", session)
@@ -177,9 +172,9 @@ class SessionStore:
         turns = data.get("turns")
         if not isinstance(turns, list):
             raise SessionStoreError(f"会话文件缺 turns 列表：{f.name}")
+        # 未知键（如旧版 overlay）一律忽略——撤销叠加框后旧档案仍可正常读取
         return Session(
             id=f.stem,
-            overlay=str(data.get("overlay") or ""),
             fresh_topic=bool(data.get("fresh_topic") or False),
             turns=tuple(self._validated_turn(t, f) for t in turns),
         )
@@ -194,8 +189,7 @@ class SessionStore:
                 "head": str(t["head"]) if t.get("head") is not None else ""}
 
     def _dump(self, f: Path, session: Session) -> None:
-        body = {"id": session.id, "overlay": session.overlay,
-                "fresh_topic": session.fresh_topic,
+        body = {"id": session.id, "fresh_topic": session.fresh_topic,
                 "turns": [dict(t) for t in session.turns]}
         f.write_text(yaml.safe_dump(body, allow_unicode=True, sort_keys=False),
                      encoding="utf-8")

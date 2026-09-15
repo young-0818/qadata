@@ -4,8 +4,9 @@
 清会话）与 build_session_context 纯函数（K=5 滑窗、failed 轮不给草稿、fresh_topic
 清 L1 保 L2 且只挡一次）＋result_head 摘要（全量行不进上下文在此源头钉）。
 API 层钉：session_id 真值回显、轮次落盘两端点同源（_finish_ask 一个收口）、口径
-优先级＝请求显式 > 会话叠加＋业务知识拼接 > 空（确定性合并零 LLM）、在途锁升格
-session_id 键（同会话拒、新会话放行）、回放＝问答本体无 trail（owner 裁决）。
+优先级不随会话变（请求显式 > 智能体业务知识 > 空，叠加框已裁 owner 2026-09-15）、
+在途锁升格 session_id 键（同会话拒、新会话放行）、回放＝问答本体无 trail（owner 裁）、
+旧档案残留 overlay 键向后兼容忽略。
 图侧注入纪律在 tests/test_session_context.py，本文件不重复。
 """
 import threading
@@ -79,12 +80,27 @@ def test_lazy_load_creates_nothing(sessions, store, agent):
 
 
 def test_save_load_roundtrip(sessions, store, agent):
-    sess = Session(id=_SID, overlay="口径 X", fresh_topic=True,
+    sess = Session(id=_SID, fresh_topic=True,
                    turns=(_turn(_Q1), _turn("第二问", failed=True)))
     sessions.save(agent.id, sess)
     assert sessions.load(agent.id, _SID) == sess
     text = (_sessions_dir(store, agent.id) / f"{_SID}.yaml").read_text(encoding="utf-8")
-    assert "口径 X" in text and _Q1 in text  # 人可读可审（AgentStore 同款）
+    assert "第二问" in text and _Q1 in text  # 人可读可审（AgentStore 同款）
+    assert "overlay" not in text  # 叠加框已裁（owner 裁 2026-09-15），不再写该键
+
+
+def test_legacy_overlay_key_ignored_on_load(sessions, store, agent):
+    """撤销叠加框的向后兼容：旧档案残留 overlay 键——读取忽略、不炸不吞史。"""
+    d = _sessions_dir(store, agent.id)
+    d.mkdir(parents=True)
+    (d / f"{_SID}.yaml").write_text(
+        "id: aabbccddeeff\noverlay: 旧版口径叠加\nfresh_topic: false\nturns:\n"
+        + "- question: 旧问\n  ts: '2026-09-14T10:00:00+08:00'\n  failed: false\n"
+        "  row_count: 1\n  head: 标量值 7\n  answer: {sql: 'SELECT 7'}\n",
+        encoding="utf-8")
+    s = sessions.load(agent.id, _SID)
+    assert s.fresh_topic is False and len(s.turns) == 1
+    assert build_session_context(s)["draft"]["sql"] == "SELECT 7"  # 旧档案记忆照常装载
 
 
 def test_id_and_agent_guards(sessions, store, agent):
@@ -222,8 +238,9 @@ def test_second_ask_carries_l2_and_l1(store, fixture_db):
     assert llm.calls == 6  # 成本条款：多轮与单轮同调用数（3＋3）
 
 
-def test_overlay_merge_priority(store, fixture_db, monkeypatch):
-    """口径优先级＝请求显式 > 会话叠加＋智能体业务知识拼接 > 空（拼接非覆盖）。"""
+def test_session_ask_evidence_unchanged(store, fixture_db, monkeypatch):
+    """口径优先级不因会话而变（叠加框裁后回归钉）：请求显式 > 智能体业务知识 > 空
+    ——带 session_id 的问与单轮同语义（票 02.5 原样），会话只供记忆装载。"""
     seen = []
 
     def fake_run(db_path, question, evidence="", **kw):
@@ -235,15 +252,11 @@ def test_overlay_merge_priority(store, fixture_db, monkeypatch):
     client = _client(ScriptedLLM([]), store)
     base = {"agent_id": a.id, "question": "题", "session_id": _SID}
     client.post("/api/ask", json=base)
-    client.patch(f"/api/agents/{a.id}/sessions/{_SID}", json={"overlay": "会话口径"})
-    client.post("/api/ask", json=base)
     client.post("/api/ask", json={**base, "evidence": "显式口径"})
     b = store.create("空口径", "")
     store.store_datasource(b.id, b"x", "s.sqlite")
     client.post("/api/ask", json={"agent_id": b.id, "question": "题"})
-    assert seen == ["库口径", "会话口径\n库口径", "显式口径", ""]
-    replay = client.get(f"/api/agents/{a.id}/sessions/{_SID}").json()
-    assert replay["overlay"] == "会话口径"  # 叠加随会话落盘
+    assert seen == ["库口径", "显式口径", ""]
 
 
 def test_new_topic_endpoint_flow_and_reset(store, fixture_db):
@@ -267,7 +280,7 @@ def test_replay_shape_qa_only(store, fixture_db):
     ask = client.post("/api/ask",
                       json={"agent_id": a.id, "question": _Q1, "session_id": _SID}).json()
     r = client.get(f"/api/agents/{a.id}/sessions/{_SID}").json()
-    assert r["id"] == _SID and r["overlay"] == ""
+    assert r["id"] == _SID and set(r) == {"id", "fresh_topic", "turns"}
     assert len(r["turns"]) == 1
     t = r["turns"][0]
     assert set(t) == {"question", "failed", "ts", "answer"}  # 回放＝问答本体（trail 不入档）
@@ -280,27 +293,22 @@ def test_session_endpoint_errors(store, fixture_db):
     assert client.get("/api/agents/deadbeef0000/sessions").status_code == 404
     assert client.get(f"/api/agents/{a.id}/sessions/00zz00000000").status_code == 404  # 非法 sid
     assert client.get(f"/api/agents/{a.id}/sessions/{_SID}").status_code == 404  # 无档不放
-    long = "超" * 2001
-    assert client.patch(f"/api/agents/{a.id}/sessions/{_SID}",
-                        json={"overlay": long}).status_code == 400
     assert client.get("/api/agents/deadbeef0000/sessions/" + _SID).status_code == 404
 
 
-def test_overlay_patch_during_inflight_ask_not_lost(store, fixture_db, monkeypatch):
-    """双轴评审收紧（读改写竞态）：在途问答期间 PATCH 改叠加/新话题，落盘走
-    写前重载合并——PATCH 不丢；在途新设的新话题本问未消费，原样留给下一问。"""
+def test_new_topic_patch_during_inflight_ask_survives(store, fixture_db, monkeypatch):
+    """双轴评审收紧（读改写竞态，叠加裁后剩闸位）：在途问答期间 PATCH 立新话题闸，
+    落盘走写前重载合并——闸不丢、且在途新设者本问未消费，原样留给下一问。"""
     a = _agent_with_datasource(store, fixture_db)
     client = _client(ScriptedLLM([]), store)  # llm 不被触达（run 被 mock）
 
     def fake_run(db_path, question, evidence="", **kw):
-        client.patch(f"/api/agents/{a.id}/sessions/{_SID}",
-                     json={"overlay": "中途叠加", "fresh_topic": True})
+        client.patch(f"/api/agents/{a.id}/sessions/{_SID}", json={"fresh_topic": True})
         return Answer(conclusion="ok")
 
     monkeypatch.setattr("qadata.web.app.run_question", fake_run)
     client.post("/api/ask", json={"agent_id": a.id, "question": "题", "session_id": _SID})
     sess = client.get(f"/api/agents/{a.id}/sessions/{_SID}").json()
-    assert sess["overlay"] == "中途叠加"
     assert sess["fresh_topic"] is True
     assert len(sess["turns"]) == 1
 
