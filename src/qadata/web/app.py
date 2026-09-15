@@ -20,7 +20,6 @@ session_id（单轮请求维持 agent 级）；历史会话端点供侧栏列表
 import json
 import queue
 import threading
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -74,10 +73,6 @@ class AskRequest(BaseModel):
     # 票 05：会话 id（客户端生成 hex12，懒建档——"＋ 新建会话"＝换 id、下一问开新档）；
     # 缺省 None＝单轮关态（三层记忆零注入，与票 04 逐行为一致）
     session_id: str | None = None
-
-
-class SessionPatchRequest(BaseModel):
-    fresh_topic: bool | None = None  # 新话题闸：True＝下一问清 L1 保 L2
 
 
 class AgentCreateRequest(BaseModel):
@@ -233,10 +228,11 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
             raise _bad(e) from None
         return {"ok": True}
 
-    # ── 票 05：会话面（侧栏列表／重开回放／新话题 PATCH）────────────────
+    # ── 票 05：会话面（侧栏列表／重开回放）──────────────────────────────
     # 会话懒建档＝首问落盘才建文件；回放只渲问答本体（answer 即契约 payload），
-    # 自纠错 trail 属现场观察不入档（owner 裁决）。无 DELETE 端点（票未划；
-    # 删智能体连带清会话）。
+    # 自纠错 trail 属现场观察不入档（owner 裁决）。无 PATCH 端点（票 09 随
+    # fresh_topic 闸撤除——话题连续性模型隐式判，会话面无运行时写入口）、
+    # 无 DELETE 端点（票未划；删智能体连带清会话）。
 
     @app.get("/api/agents/{agent_id}/sessions")
     def list_sessions(agent_id: str) -> dict[str, Any]:
@@ -253,22 +249,9 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
             s = sessions.replay(agent_id, sid)
         except (AgentStoreError, SessionStoreError) as e:
             raise _bad(e) from None
-        return {"id": s.id, "fresh_topic": s.fresh_topic,
+        return {"id": s.id,
                 "turns": [{"question": t["question"], "failed": t["failed"],
                           "ts": t.get("ts"), "answer": t["answer"]} for t in s.turns]}
-
-    @app.patch("/api/agents/{agent_id}/sessions/{sid}")
-    def patch_session(agent_id: str, sid: str, req: SessionPatchRequest) -> dict[str, Any]:
-        try:
-            store.get(agent_id)
-            s = sessions.load(agent_id, sid)
-            fields = req.model_dump(exclude_unset=True)
-            if "fresh_topic" in fields:
-                s = replace(s, fresh_topic=bool(fields["fresh_topic"]))
-            sessions.save(agent_id, s)
-        except (AgentStoreError, SessionStoreError) as e:
-            raise _bad(e) from None
-        return {"ok": True, "fresh_topic": s.fresh_topic}
 
     # ── 问数：唯一入口，智能体定位数据源与默认业务知识 ───────────────
     # 在途锁（票 03→05）：/api/ask 与 /api/ask/stream 共用一把——防阻塞×流式交错。
@@ -315,18 +298,14 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
 
     def _finish_ask(req: AskRequest, session: Session | None, answer: Answer) -> dict[str, Any]:
         """两端点共同的收口：契约 payload（session_id 回显）＋会话轮次落盘。
-        落盘＝L3 归档＋fresh_topic 复位一次；失败轮也入账（如实标失败，供下轮消解）。
-        写前先重载再合并（双轴评审收紧）：在途问答期间 PATCH 立新话题闸时，持锁前
-        装载的快照已旧，整值写回＝丢更新；轮次侧同会话受在途锁排他，合并只为闸位
-        兜底（单用户下 PATCH×ask 是唯一交叉写者）。在途期间**新设**的新话题闸本问
-        并未消费（ctx 装载时还是旧值），原样留给下一问。"""
+        落盘＝L3 归档追加一轮；失败轮也入账（如实标失败，供下轮消解）。
+        写前重载合并原为 PATCH×ask 闸位竞态兜底（双轴评审收紧），票 09 随
+        fresh_topic 闸与 PATCH 端点一并裁撤——闸撤后同会话写者只剩受在途锁
+        排他的 ask 本身，装载快照即最新状态。"""
         payload = answer_to_payload(answer, session_id=req.session_id)
         if session is not None:
-            current = sessions.load(req.agent_id, session.id)
-            merged = append_turn(current, req.question, res=answer.result,
+            merged = append_turn(session, req.question, res=answer.result,
                                  failed=answer.failed, payload=payload)
-            if current.fresh_topic and not session.fresh_topic:
-                merged = replace(merged, fresh_topic=True)
             sessions.save(req.agent_id, merged)
         return payload
 

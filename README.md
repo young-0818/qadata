@@ -1,137 +1,172 @@
 # 问数 (qadata)
 
-对话式数据分析 Agent：自然语言问题 →（人审指标口径模板 ｜ LLM 生成 SQL）→ 沙箱执行 → 自纠错 → 可信答案。
+![ci](https://github.com/young-0818/qadata/actions/workflows/ci.yml/badge.svg)
 
-- 设计文档：`.scratch/qadata-agent/spec.md`（本地）
+对话式数据分析 Agent：自然语言问题 → SQL → 只读沙箱执行 → 规则校验 → 自纠错重试 → 三节可信答案。
+
+LangGraph 自研状态机，BIRD 基准评测驱动开发（每个数字绑实跑模型与时间窗），附多智能体 Web 演示。
+
+## 特性
+
+- **自纠错状态机**：执行失败与校验可疑双条件边驱动重试环，预算 3 次、`attempts` 即账本；SQL 错误规则化分类＋中文修复建议（零 token）注入重试历史。
+- **只读沙箱四层**：只读连接唯一入口 / sqlglot 单语句白名单＋表名校验 / 5s 超时中断＋双行数上限 / sqlite 物理只读。全路径无旁路——模板产出的 SQL 照过四层。
+- **永不编造**：失败路径不调 LLM，输出规则化的诚实失败说明；答案四节中唯一来自模型的只有【结论】一句话，【数据依据】【口径说明】【校验标注】全部代码组装。
+- **指标层（可选，默认关）**：人工审核的原子指标注册表（口径＝业务词到 SQL 计算的映射）＋两级匹配＋极值机制闸＋填槽渲染模板——Text-to-Metrics 与 Text-to-SQL 双路径并存，命中题直出「人审口径＋血缘」。
+- **多轮会话记忆**：三层记忆纯函数组装（工作草稿／近期消解窗／全史归档），文件即数据库落盘，零新增 LLM 调用。
+- **进度流与图表**：SSE 逐帧直播自纠错过程；图型判定为后端规则纯函数，LLM 不参与排版。
+- **评测工程**：并发＋全局限速＋断点续跑、逐题 token/调用数/延迟入账、题型切片、两轮 diff 报告、变体矩阵。
+- **测试全封闭**：500+ 测试不碰网（脚本化假模型＋调用计数断言），CI 门禁 ruff＋pytest。
+
+## 快速上手
+
+```bash
+# 安装（Python ≥ 3.11；建议虚拟环境）
+pip install -e ".[dev]"
+
+# 配置：填 API Key；QADATA_BASE_URL / QADATA_MODEL 可指向任意 OpenAI 兼容端点
+cp .env.example .env
+
+# 问第一个问题（需要 sqlite 库文件；--evidence 传业务口径）
+qadata ask /path/to/your.sqlite "去年销售额是多少" --evidence "销售额 = SUM(amount)"
+
+# BIRD 评测（数据需自行从 bird-bench 官网下载，不入库）
+qadata eval --questions data/bird/dev/dev.json --db-dir data/bird/dev/dev_databases --sample 100
+
+# 两轮跑分 diff（含题型切片与分路径报告）
+qadata report --baseline runs/A.jsonl --current runs/B.jsonl --types runs/attribution.jsonl --paths
+
+# Web 演示：先构建前端，再单进程起 API＋页面（同源）
+cd web && npm install && npm run build && cd ..
+qadata serve --port 8000        # 打开 http://localhost:8000 创建智能体、上传 sqlite、多轮问数
+```
 
 ## 架构
 
-六节点＋一个可选指标层节点的自纠错状态机（LangGraph 编排，双条件边）：
+### 管线总览
+
+六节点＋一个可选指标层节点的自纠错状态机（双条件边；`metric_match` 为可选节点，默认关时整节点跳过）：
+
+```mermaid
+flowchart LR
+    q([question]) --> u[understand<br/>改写＋六字段意图]
+    u -->|默认 · 指标层关| e[explore]
+    u -->|指标层开| mm{metric_match<br/>两级匹配＋极值闸}
+    mm -->|命中 · 填槽渲染模板| x[execute]
+    mm -->|未命中 · 宁漏勿错| e
+    e --> g[generate]
+    g --> x
+    x -->|成功| v[verify<br/>规则校验 · 零 token]
+    x -->|失败 · 有预算| g
+    x -->|失败 · 预算耗尽| r[respond]
+    v -->|通过| r
+    v -->|可疑 · 有预算| g
+    v -->|可疑 · 预算耗尽| r
+    r --> a([答案：三节结构<br/>或诚实失败说明])
+```
+
+### 节点职责
+
+| 节点 | 做什么 | 关键纪律 |
+|---|---|---|
+| **understand** | 问题改写为自包含查询意图，同一次调用产出六字段结构化意图（指标提及/维度/过滤/输出形态等） | 「宁空勿造」：字段仅题面明示才填，失败回退原文、不烧预算 |
+| **metric_match**（可选） | 两级匹配人审注册表：确定性别名归一化 → LLM 整表复核；⑨ 极值闸拦「谁最高/第二大」类模板不可答题；填槽渲染 SQL | 宁漏勿错：每级失效跌回兜底路径；解析失败＝未命中 |
+| **explore** | 选定相关表，注入 schema＋列注释（BIRD database_description 同款） | 表名经 sqlguard 校验，认表也认视图 |
+| **generate** | LLM 生成 SQL；重试时携带失败历史＋中文修复建议 | SYSTEM_RULES 固定 prompt 最前端（吃前缀缓存），动态内容只追加尾部 |
+| **execute** | 沙箱四层内只读执行 | 撞行数上限用 COUNT(*) 报真值，不静默截断 |
+| **verify** | 规则校验器判可疑：空结果/聚合异常（确定性检查，零 token） | 「列出全部」类问题豁免空结果；截断不触发重试、由 respond 标注 |
+| **respond** | 组装答案四节；失败路径不调 LLM | 执行耗尽时回退最近一次成功 SQL 作答并标注（答案稳定性） |
+
+重试预算不新增状态键：`len(attempts)` 即账本。精准模式（可选，默认关）：同一 prompt 连打 K 发、结果级多数派票决——运行内采样噪声探针实证后保留代码、默认关闭。
+
+### 指标层（Text-to-Metrics，默认关）
+
+「口径」以人工审核、入库版本管理的注册表（`metrics/<db>.yaml`）为单一真源：每条原子指标登记六要素（定义/别名/SQL 模板/维度槽等），绑定防泄漏护栏（构建时禁读评测答案 SQL）。命中题直出人审口径引用＋血缘一行，零 token 组装。开关 `QADATA_METRIC_LAYER=1`；关态与纯 Text-to-SQL 在路由/调用数/账本/评测字段上逐行为一致。该层的真实价值与命中率由固定考卷判卷（见「评测与结果」）。
+
+### 多轮会话与三层记忆
+
+会话＝智能体目录内的一个 YAML 文件（文件即数据库，懒建档，重启历史仍在）。下一问「带什么旧上下文」由纯函数确定性切分：
+
+- **L1 工作记忆**：上一轮成功 SQL＋结果头部摘要，作 generate 的增量改写草稿——「这些新生」的定义写在上一轮 SQL 里。草稿仅参考，仍走完整沙箱＋校验；上轮失败则不给草稿（错误草稿不传染）。
+- **L2 情节记忆**：最近 K=5 轮（问题/SQL/行数/标量），并进 understand 的改写调用做指代消解——复用既有机制，零新增 LLM 调用。
+- **L3 归档**：全史落盘，**永不进 prompt**。
+
+### Web 服务面
+
+`qadata serve` 单进程同源（FastAPI＋静态产物）：
+
+- **智能体**＝一个数据分析助手：名称/描述＋sqlite 数据源（raw-body 字节流上传，全程零建连）＋业务知识（手动口径或引用指标注册表，二态互斥）。文件即数据库，真空启动零预置。
+- **问数双端点**：`POST /api/ask`（阻塞）与 `POST /api/ask/stream`（SSE 进度流），响应同一契约工厂产出、逐字段相等钉测；会话轮次两端点同走一个落盘收口。
+- **图表契约**：`chart` 字段由规则纯函数判定（时间列→折线、类别＋数值→柱、单标量→大数卡、其余→表格），前端只管渲染、零形状自判；配色与排版走已验证数据可视化规范。
+- **呈现纪律**：三节分节折叠、校验旗标徽标化（✗失败/降级/⚠截断，label 承载语义不靠颜色单传）、结果值一律 textContent 进 DOM。
+- 前后端契约由 Python 侧 TestClient＋假模型钉死；前端不立测试（壳不判卷，CI 保持纯 Python）。
+
+### 评测工具链
+
+| 模块 | 职责 |
+|---|---|
+| `eval/bird.py` | 跑分器：每题独立分片＋单写者收口的并发评测、`--qps` 全局限速、`--ids` 固定题集、`--out/--resume` 断点续跑逐题 flush、`--skip-respond` 省一次调用/题、逐题异常隔离 |
+| `eval/match.py` | 判分：BIRD Execution Accuracy，顺序无关多重集匹配（类型分层排序防混排崩溃） |
+| `eval/qtypes.py` | 题型规则标签器（六类，词边界防误命中），供归因切片 |
+| `eval/report.py` | 两轮 diff、题型切片、命中/兜底分路径报告 |
+| `llm/` | OpenAI 兼容网关：指数退避（429/5xx）、自建 JSONL tracing、逐题调用数/token/延迟统计 |
+
+产物 `runs/`（逐题结果、节点 trace、token 汇总、成本账本）与 `data/` 均不入库。
+
+### 目录结构
 
 ```
-question → understand →〔metric_match〕→ explore → generate → execute ──成功──→ verify ──通过──→ respond
-                            命中↓未命中→explore        ↑          │                  │
-                                                    └──失败且有预算─┘   └──可疑且有预算──┘
-                    （预算耗尽：失败→respond 兜底；可疑→respond 带校验标注）
+src/qadata/
+├── graph/        # 六节点状态机：build / nodes / state / prompts / verify / metrics / intent …
+├── tools/        # 沙箱：db 只读连接 / sqlguard 语句校验 / executor 资源层 / schema
+├── llm/          # OpenAI 兼容网关 + 限速 + tracing
+├── eval/         # 跑分器 / 判分 / 题型 / 报告 / 变体矩阵
+├── web/          # FastAPI 服务面：app / agents / sessions / charts / serve
+└── cli/          # ask / eval / report / serve 薄壳
+metrics/          # 人审指标注册表（按库名寻址）
+tests/            # 500+ pytest：ScriptedLLM 假模型、契约测试、AST 级纪律钉测
+web/              # Vite + React + TypeScript 前端（dist 构建产物不入库）
+data/  runs/      # 评测数据与运行产物（不入库）
 ```
 
-- **命中路径（M5 指标层，默认关）**：两级匹配（确定性别名归一化 → LLM 整表复核，解析失败＝未命中——宁漏勿错）→ ⑨ 极值闸（具名极值/排名词形撤销命中走兜底，纯函数零调用）→ 意图填槽 → 人审 SQL 模板渲染——每级失效都跌回兜底；模板执行失败入账恰好降级一次。
-- **兜底路径（M1–M4 管线）**：schema 探索 → LLM 生成 SQL → 重试环（预算 3，`len(attempts)` 即账本）→ 规则校验器。
-- **沙箱四层**：只读连接唯一入口 / sqlglot 单语句白名单＋表名校验 / 5s 超时＋双行数上限 / sqlite 物理只读。全路径无旁路（模板产出的 SQL 照过四层）。
-- **答案形态（E1，两态共用）**：【结论】（唯一 LLM 产出）＋【数据依据】【口径说明】【校验标注】全部代码组装；命中路径口径节零 token 引用注册表＋血缘。失败路径不调 LLM——永不编造。
-- 评测：BIRD 双轨小样本（ADR-0001：轨道① financial 冻结 50 题＝指标考卷，轨道② 跨库 50 题＝回归闸），`qadata eval`/`qadata report --paths` 分路径报告，逐题 token/延迟统计。
+## 评测与结果
 
-## M1 基线（2026-09-02）
+判分＝BIRD Execution Accuracy（结果集顺序无关多重集匹配）。每个数字绑实跑模型与时间窗，复现命令随表附注。
 
-- 模型：qwen3.7-flash（OpenAI 兼容接口），BIRD dev 随机 100 题（seed=42，分层抽样前的朴素随机）
-- 总执行准确率：**63.0%**（63/100）
-  - simple 69.4%（43/62）｜ moderate 53.6%（15/28）｜ challenging 50.0%（5/10）
-- 系统状态：M1 最小闭环（线性图、无自纠错、临时沙箱），后续里程碑按评测驱动迭代
-- 成本：输出 ~0.51M tokens（推理模型 thinking 开销为主），单题均 ~5K 输出 tokens
-- 复现：`qadata eval --questions data/bird/dev/dev.json --db-dir data/bird/dev/dev_databases --sample 100`（在仓库根目录运行）
+| 考卷 | 结果 | 实跑模型 | 说明 |
+|---|---|---|---|
+| BIRD dev 随机 100 题（seed=42） | **63.0%**（simple 69.4 / moderate 53.6 / challenging 50.0） | qwen3.7-flash | M1 最小闭环基线（无自纠错环），2026-09-02 |
+| 固定 50 题跨库配对集 | 58.0% → 64.0% → 60.0% | deepseek-v4-flash-0731 | 自纠错＋沙箱 / verify 精准化 / M4 终局。末档 60% 为当日低档位运行——**同码同日三档 32→36→29**，端点跨时段漂移 ±4~7 题 ≫ 采样噪声 |
+| 轨道① financial 冻结 50 题：纯 SQL 对照 vs 指标层 | 28 vs 29；**命中率 0/50** | kimi-k2.7-code（同时段配对，同 commit） | Δ+1 落在该端点实测噪声带 ±5 内＝无统计含义；零命中归因＝BIRD 题面普遍是组合约束查询、与 18 条原子口径交集≈0 → **指标层默认保持关**（可开关演示，负结果成文） |
+| 冒烟 10 题固定集 | **10/10** | glm-5.2 | 链路健康闸（非准确率指标），绑 commit f16fc7a；**与模型绑定，换模型必须重建基线** |
 
-## M2 自纠错与沙箱（2026-09-03）
+方法学约束（比数字本身更重要的产出，均已入项目纪律）：
 
-- 图结构：线性图 → 带自纠错反馈环（预算 3 次：执行失败重试＋校验可疑重试）；
-  沙箱补齐语句层（sqlglot 白名单/单语句/表名校验）与资源层（5s 超时中断/双行数上限）
-- 冒烟基线（10 题固定集，`tests/smoke_ids.json`）：**50%**（deepseek-v4-flash-0731，见 `tests/smoke_baseline.json`）
-- 50 题配对对比（与 M1 同题，`tests/m2_compare_ids.json`）：同题子集 **62.0% → 58.0%**（救回 6 / 改坏 8）
-  - ⚠️ 混杂说明：M1 基线用 qwen3.7-flash；M2 评测中途该模型免费配额耗尽，
-    换 deepseek-v4-flash-0731 重跑，Δ 含模型切换成分
-  - 翻转归因：自纠错环净效应 ≈ 救回 2 / 改坏 3（改坏均为 verify 触发重试后答案漂移）；
-    其余翻转归因模型差异。样本小，两者均在噪声量级
-  - 沙箱零误伤：21 道错题全部为判分不匹配，零超时、零 sqlguard 误拒；
-    BIRD gold SQL 1534 题 sqlglot 解析失败 0 例
-- 成本变化：单题均输出 tokens ~5K → ~4.1K（重试使调用次数升至 3.3 次/题，新模型单次更省）
-- 复现：`qadata eval --questions data/bird/dev/dev.json --db-dir data/bird/dev/dev_databases --ids tests/m2_compare_ids.json`
+- **同时段配对铁律**：端点跨时段漂移实证 ≫ 改动效应，跨日 Δ 一律不可解读；线级增量只认同题集、同模型、同时段的配对或受控探针。
+- **新线先探针后上线**：¥0.3 级存在性探针拦下过 ¥3.5 的无效优化；砍线规则使预算红线全程未触。
+- **判卷标准落盘即冻结**：固定题集一经冻结不得换题；无结论/判负按有效交割成文。
+- **全量 dev（1534 题）未跑**：解锁条款（固定集同日 ≥75% 且人工确认）未达成，如实挂起。
+- 逐题复现：`qadata eval --questions … --ids tests/<固定集>.json`（各判卷绑实跑模型，换端点须同时段重配对方可解读）。
 
-## M3 自纠错深化与评测完备（2026-09-04）
+## 工程原则
 
-- 靶子三件套（M2 评测数据直接指向）：verify 精准化（「列出全部」类空结果豁免、截断不再触发重试）、
-  答案稳定性（执行失败耗尽时回退最近成功候选作答）、generate 口径规则（禁格式化输出、只选问题需要的列）
-- 评测工具链：断点续跑（`--out`/`--resume`，逐题 flush 进度可见）、记录增强（`gold_sql`/`gold_failed`/`error_class`）、
-  失败样本库（任意 run 文件派生）、`qadata report` 两轮 diff、变体矩阵最小版（`--variants`）
-- 其余：错误分类修复建议（规则版进失败历史）、`database_description/` 列注释按选中表进 schema 上下文、
-  视图入列、LLM 客户端超时、ruff 版本锁定
-- 冒烟（10 题固定集）：**60%** ≥ 基线 50%
-- 50 题配对对比（与 M2 同题同模型 deepseek-v4-flash-0731）：**58.0% → 64.0%**（救回 4 / 改坏 1，净 +3）
-  - M2 归因的 3 道「verify 假阳性 → 重试改坏」题（457/1309/1330）全部救回，重试改坏归零（靶子直接命中）
-  - ⚠️ 噪声说明：同一代码多轮运行中个别题（如 228、440）正误翻转，接口在 temp=0 下仍有非确定性；
-    50 题样本 ±1-2 题属噪声量级，净效应以翻转归因为准
-  - 开发过程验证跑逮住 1 个真 bug：BIRD 部分 `database_description` CSV 非 UTF-8（如 formula_1），
-    曾致 7 题 explore 崩溃；已修（`utf-8-sig + errors="replace"`）并加回归测试
-  - 全量 dev（1534 题）按裁决推迟至项目收尾；M3 口径为 50 题固定配对集
-- 成本：验证/归因/终局共 ~5 次运行 ≈ ¥6.5（超出原估算 ¥4——验证跑揪出编码 bug 后的修复-重跑循环，如实记录）
-- 复现：`qadata eval --questions data/bird/dev/dev.json --db-dir data/bird/dev/dev_databases --ids tests/m2_compare_ids.json --out runs/eval-m3-50.jsonl`
-  对比报告：`qadata report --baseline runs/eval-m2-50.jsonl --current runs/eval-m3-50.jsonl`
+1. **永不编造**：一个错数字的代价远大于一次我不知道——失败路径不调 LLM，截断如实报数。
+2. **评测驱动**：改动前先由错题数据定位失败模式，改完跑固定集配对，混杂因素（换模型/审查题）如实标注。
+3. **归属明确**：每类错误先问「该谁处理」（LLM/规则/沙箱/判分器），不写万能 try-except。
+4. **确定性优先**：能纯函数不靠模型——图型判定、校验、错误分类、记忆切窗全为可单测的确定性代码；LLM 只出现在改写、SQL 生成、结论一句话与指标复核四处。
+5. **成本入账**：逐题记录调用数与 token，预算红线与砍线规则在每个里程碑的账本上可审计。
+6. **测试封闭**：不碰网、不碰真实目录——假模型脚本化应答＋调用计数断言＋AST 级纪律钉测（如「web 包禁 import sqlite3」「respond 永不读意图字段」）。
 
-## M4 速度与正确率双优化（2026-09-05）
+## 开发
 
-- **方法学发现（本里程碑最重要产出）：端点跨时段漂移 ≫ ±1-2 题噪声带**。同一代码同一题集，
-  24 小时内三个档位：32/50（M3 前晚）→ 36/50（M4 今晨 A 复现跑）→ 29-30/50（当晚 B/D 跑）；
-  B/D 两晚各自「改坏」的 {1436, 1466, 1508} 与对应运行的代码改动无关（共同受害者）。
-  **结论入纪律：配对对比必须同时段**；单题差异在跨时段比较中不可解读。
-- 50 题终局数字（如实标注）：M3 64.0% → 终局运行（D 态，晚间档位）**60.0%**（30/50；
-  救回 228/440/689，改坏 189/285/1330/1436/1508，后三题疑漂移）。**M4 未获得可验证的准确率净提升**
-  ——表观数字被 ±4~7 题的时段漂移淹没，各线增量一律以受控证据计（见下），不以跨时段 Δ 计。
-  报告：`qadata report --baseline runs/eval-m3-50.jsonl --current runs/eval-m4-d.jsonl --types runs/m4-attribution.jsonl`
-- 评测基建：每题独立分片＋收口合并的**并发评测**（`--concurrency 5 --qps 8` 全局限速器）＋
-  `--skip-respond`（判分只读 answer.sql，省 1 次调用/题，约 -30% 墙钟与 token）。
-  提速如实记录：deepseek **单 key 端点按 key 节流**，5 路并发延迟 median 3.0s→10.6s、p90→61s，
-  基建压缩 3.1× 被供应商膨胀 2.3× 抵消，墙钟 38m49s ≈ 串行——单 key 并发零收益；
-  并发基建保留（多 key / vLLM 本地端点可直接兑现），提速改走减调用路线。
-- B 值感知 schema 关联：落地后配对净 -7、预注册靶题命中 0（题面提示直接致错 1436、可复现丢 DISTINCT 440）
-  → **回滚**（教训转 M5：取值按题面关键词条件注入，不全列无条件灌）。
-- D 口径规则 5（题面明示精度/百分比形态）：跨时段整跑不可用，增量证据改受控探针（唯一变量 A/B）：
-  228 判对 **0/3 → 3/3**，且终局跑中该题 `ROUND(...,4)` 形态穿链路生效 → **保留**。
-- C 多候选自一致性（精准模式，`--precise-candidates` 配置）：**「先探针后上线」拦下 ¥3.5**——
-  temp=0.3 下 4 题×3 发结果级分歧 **0/4**（SQL 文本有多样性但执行结果恒同；错靶三发同错＝确定性错误）。
-  机制：历史翻转的噪声源是跨运行时段漂移，而该端点运行内采样噪声≈0，自一致性票决无信号可票。
-  帕累托取消，代码＋单测保留、默认关闭。
-- E2 题型切片（`report --types`，复用 P0 人工归因标签）：对比 3 题 33.3%｜极值 11 题 54.5%｜
-  分布 10 题 70.0%｜明细 25 题 60.0%｜排名 1 题 100%（「对比/极值」是薄弱题型，入 M5 靶子候选）。
-- 冒烟基线重建：50% → **90%**（10 题 9/10，唯一失分 51＝B 靶选列歧义已知短板；
-  绑定 D 后代码与 deepseek-v4-flash-0731，见 `tests/smoke_baseline.json`）。
-- 工具链修复：`--variants` 分支透传 settings/并发/限速/skip-respond（此前变体候选数会静默回退 1）；
-  非 UTF-8 描述 CSV、孤儿分片等亦各有 fix。
-- 成本：**~¥4.9 / ¥10**（逐行总账 `runs/m4-budget.md`；帕累托 ¥3.5 因探针负结果未花，砍线规则首战生效）。
-- 复现：`bash runs/m4-d-run.sh`（内嵌模型强制与真跑统一参数）。
+```bash
+pip install -e ".[dev]"
+python -m pytest              # 500+ 测试，必须全绿
+python -m ruff check src tests
+cd web && npm run build       # 前端产物 web/dist（开发期 npm run dev）
+```
 
-## M5 指标层 Text-to-Metrics（2026-09-08 ~ 09-10，已收尾）
+CI（GitHub Actions）门禁＝ruff＋pytest。提交信息用 conventional 前缀＋中文描述。
 
-- 交付：意图结构化载体（understand 同调六字段，宁空勿造）／**18 条人审原子指标注册表**（`metrics/financial.yaml`，
-  防泄漏护栏：构建会话禁读 gold SQL，逐条 owner 拍板）／metric_match 两级匹配＋⑨ 极值机制闸／填槽渲染走既有沙箱
-  零旁路／E1 三节答案（唯一 LLM 产出＝【结论】一句话）／分路径评测（`report --paths`）。**默认关**（`QADATA_METRIC_LAYER=1` 开），
-  关态与纯 Text-to-SQL 在路由/调用数/账本/评测字段上逐行为一致。389 测试全绿。
-- 条款④（意图尾段注入喂 generate）**判负成文**（票 02，kimi 同日配对 32/50 vs 32/50、翻转 3/3 对消、
-  1466 分离探针证注入信号≤改写漂移噪声带）：软用途入墓地，载体保留、消费者改为 metric_match 填槽，
-  注入线拆除并由 `test_generate_never_reads_intent` 钉死防回流（owner 签字回炉裁决 C）。
-- 轨道①判卷（票 06）：financial 冻结题集 50 题（票 01，seed=42 分层 29/18/3，ADR-0001 单库子集不代表 dev 全量）。
-  模型跟随 .env＝kimi-k2.7-code——票 01 深基线 27/50 跨端点不可比，票 06 按裁决**同时段配对**
-  （18:2x–19:0x 串行两轮，同 commit `efea1cf`）：对照轮（纯 SQL）**28/50**，指标轮 **29/50**。
-  三个数：命中率 **0/50**；命中路径准确率 **无数据**；兜底路径 29/50。判卷（Q9 三条款，`report --paths`）：
-  **① 无结论、② 样本不足（命中 0 <10）、③ 判过**（兜底 29 ≥ 28−2）。→ **metric_layer 默认值保持 False**
-  （默认位须由证据挣得，①未判过即不翻；功能保留可开关演示＝条款⑤形态，负结果成文、不追加烧钱重跑）。
-- 零命中的在体归因（全部 50 题逐题可溯 `runs/traces.jsonl`）：L2 判 NONE 36 题（33 题题面确无注册表口径词，
-  3 题属组合条件形态——branch/region/占比，模板本就答不了）；L1/L2 命中后撤销 14 题（**⑨ 极值闸在体拦 8 题**
-  ＝票 04 §F.4 担忧实锤，含 Q98/134/138——补闸前这些题会拿户均/合计 AVG 模板答「谁最低/第二大」错数字；
-  填槽宁空勿造拦 6 题）。**结论：BIRD financial 题面普遍是组合约束查询，与人审原子口径的覆盖交集在本考卷上≈0**
-  ——「指标优先」在轨道①既未被证实也未被证伪；价值叙事＝口径治理的可演示性（开关节下命中题直出
-  「人审口径＋血缘」，`QADATA_METRIC_LAYER=1 qadata ask … "1995年批准的贷款的违约率"` 可复现）。
-- 配对噪声带校准（kimi 端点）：兜底路径与对照轮**同码路径**，逐题翻转仍 5 题（救回 98/102/189、改坏 91/108）
-  ——同时段同代码 Δ±5 属端点噪声，Δ+1 无统计含义；后续 kimi 上的配对按此带解读（glm 端点未实测校准，勿直接套用）。
-- 冒烟基线重建（票 08）：understand 链路已变（载体 A 复活）＋端点两度切换（deepseek→kimi→glm）双触发——
-  10 题固定集 **10/10**（glm-5.2，`--skip-respond` 同真跑参数），绑定 f16fc7a；51（B 靶选列歧义）本轮亦对，
-  如实标注为换绑当轮表现、非 B 靶修复证据（见 `tests/smoke_baseline.json`）。
-- 分路径报告：`qadata report --baseline runs/eval-m5-track1-off.jsonl --current runs/eval-m5-track1-on.jsonl --types runs/m5-track1-types.jsonl --paths`；
-  跑分脚本 `runs/m5-track1-pair.sh`。
-- 成本：**~¥5.9 / ¥10**（影子折算口径——百炼 coding plan 订阅逐行无现金实付可计，按唯一价格锚 ~¥3.9/M tokens 折算，
-  逐行总账与收尾对账 `runs/m5-budget.md`）；单次 ≤¥3 红线全行满足、砍线规则未触发；④判负省回炉配对 ~¥1.3-2.6。
-- B v2 条件化取值注入（票 09）**存在性探针砍线、wontfix 成文**（用户批准，¥0.08，glm 三靶裸跑＋三端点历史轮交叉验证）：
-  51 靶消失（kimi/glm 连对）；326 病灶迁移（模型已用 TRIM 正确处理取值形态，真死因＝JOIN 语义——「同分子共存」vs「直接相连」，
-  取值样例救不了）；407 某轮已写出与 gold 同构 SQL、只因加 DISTINCT 削掉 gold 重复行被判错（判分形态问题，判分器不动＝M5 既定裁决）。
-  **三靶 0/3 命中「看不见取值」的设计前提**→ 未进入注入实现与配对，弹性线预算分文未花。两案例（gold 含重复行的 DISTINCT 判负、
-  evidence 谎报取值形态）入 gold/注释可靠性记录，供「评测基准自身有噪声」叙事引用。
-- 复现：`.env` 设 `QADATA_METRIC_LAYER=1` 后
-  `qadata eval --questions data/bird/dev/dev.json --db-dir data/bird/dev/dev_databases --ids tests/m5_financial_ids.json --out runs/eval-m5-track1-on.jsonl`，
-  对照轮去开关；判卷表自动复算（判卷数字绑实跑模型——本段为 kimi 轮，换端点须同时段重配对方可解读）。
+## 文档
+
+设计与里程碑档案（各卷 spec/复盘/成本账本）按里程碑存放于本地 `.scratch/`（不入库）；对外以本 README、代码与测试为事实来源。演示定位如实声明：作品集 demo，数据源仅 sqlite，「演示即策展」，公网部署/多租户/凭证管理不在范围内。

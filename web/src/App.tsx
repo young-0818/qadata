@@ -16,7 +16,6 @@ import {
   listRegistries,
   listSessions,
   patchAgent,
-  patchSession,
   uploadDatasource,
 } from "./api";
 import { ResultChart } from "./Chart";
@@ -24,8 +23,9 @@ import { ResultChart } from "./Chart";
 // 渲染纪律（spec）：一律 React 文本插值（＝textContent），全文件禁 dangerouslySetInnerHTML。
 // M7-rev2 票 02.5：三视图状态路由（首页/智能体详情/对话页），不引 router 依赖。
 // 对话页于 2026-09-12 改版为通高侧栏＋中栏滚动的 agent 布局（首页/详情页仍窄版）。
-// 票 05 多轮：会话号前端自生成（hex12）、懒建档；侧栏历史会话真落点；
-// 新话题按钮＝清 L1 保 L2（会话级口径叠加框经 owner 裁 2026-09-15 撤销）。
+// 票 05 多轮：会话号前端自生成（hex12）、懒建档；侧栏历史会话真落点。
+// 会话级运行时通道全部裁撤（owner 裁 2026-09-15）：口径叠加框（不配第二入口）、
+// ↺ 新话题按钮（票 09：真实用户直接打字换题，话题连续性由模型隐式判）。
 
 // 后端拒绝理由一律原样展示（永不编造错误说明）
 const errMsg = (e: unknown): string =>
@@ -521,11 +521,12 @@ function AgentPage({
   );
 }
 
-// ── 对话页：通高侧栏（返回/新会话/新话题/历史会话＝票 05 真落点）＋中栏对话 ──
+// ── 对话页：通高侧栏（返回/新会话/历史会话＝票 05 真落点）＋中栏对话 ──
 // owner 2026-09-12 改版：业务知识块删除（只活在详情页）、预设 pill 入坞到
 // 输入框上方且仅空对话显示、欢迎大字个性化、视口分区本地滚动（agent 布局）。
-// 票 05：＋新建会话原地升级＝换新会话号（懒建档，下一问开新档）；新话题＝清 L1
-// 保 L2。（会话级口径叠加框经 owner 裁 2026-09-15 撤销——口径活在配置面。）
+// 票 05：＋新建会话原地升级＝换新会话号（懒建档，下一问开新档）。
+// 会话级运行时通道两度归零（owner 裁 2026-09-15）：口径叠加框（口径活在配置面）、
+// ↺ 新话题闸（票 09：换话题＝直接打字，连续性由模型在既有调用内隐式判）。
 
 const newSid = () => crypto.randomUUID().replace(/-/g, "").slice(0, 12);
 
@@ -565,18 +566,6 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
     if (busyRef.current) return; // 在途期间不清场（锁的展示面）
     setSid(newSid()); // 换会话号：当前会话已在侧栏历史里，下一问开新档
     setMsgs([]);
-  }
-
-  async function newTopic() {
-    if (busyRef.current) return;
-    try {
-      // 清 L1 保 L2（票面语义）：下一问不带上一轮 SQL 草稿，历史仍供消解
-      await patchSession(id, sid, { fresh_topic: true });
-      setMsgs([]); // 版面归零，会话继续（区别于"新建会话"的换档）
-      setErr("");
-    } catch (e) {
-      setErr(errMsg(e));
-    }
   }
 
   async function openSession(h: SessionHead) {
@@ -638,15 +627,6 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
           title={msgs.length === 0 ? "当前已是新会话" : "开一个新会话（当前会话存入侧栏历史）"}
         >
           ＋ 新建会话
-        </button>
-        <button
-          className="rail-new"
-          type="button"
-          onClick={newTopic}
-          disabled={pending || msgs.length === 0}
-          title="新话题：下一问不带上一轮 SQL 草稿（历史仍供指代消解），会话不换档"
-        >
-          ↺ 新话题
         </button>
         <div className="side-block">
           <h4>历史会话</h4>

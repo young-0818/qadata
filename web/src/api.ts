@@ -159,7 +159,6 @@ export interface SessionTurn {
 
 export interface SessionDetail {
   id: string;
-  fresh_topic: boolean;
   turns: SessionTurn[];
 }
 
@@ -171,18 +170,6 @@ export function listSessions(agentId: string): Promise<SessionHead[]> {
 
 export function getSession(agentId: string, sid: string): Promise<SessionDetail> {
   return getJson<SessionDetail>(`/api/agents/${agentId}/sessions/${sid}`);
-}
-
-export function patchSession(
-  agentId: string,
-  sid: string,
-  fields: { fresh_topic?: boolean },
-): Promise<{ ok: boolean; fresh_topic: boolean }> {
-  return sendJson(`/api/agents/${agentId}/sessions/${sid}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(fields),
-  });
 }
 
 // 票 03 问数主通道：POST /api/ask/stream（SSE）。EventSource 不支持 POST，

@@ -190,3 +190,19 @@ def test_draft_block_carries_head_summary():
     block = format_session_draft(_CTX)
     assert _HIST_SQL in block and "标量值 120" in block
     assert "仅供参考" in block or "草稿" in block  # 措辞钉"草稿仅参考"纪律
+
+
+# ── 票 09 显式授权（话题连续性模型隐式判，Cortex 同构）──────────────
+
+
+def test_history_block_carries_ignore_authorization():
+    """L2 节头带授权句：与历史无关→忽略历史独立改写（人肉闸撤除后的连续性防线）。"""
+    block = format_session_history(_CTX)
+    assert "与历史无关" in block and "忽略这段历史" in block
+
+
+def test_draft_block_carries_ignore_authorization():
+    """L1 节头带授权句：与上问无关→忽略草稿独立完整生成（宁多带勿错切，判错方向
+    由沙箱/verify 兜底——见 prompts.py 票 09 注释）。"""
+    block = format_session_draft(_CTX)
+    assert "与上一问无关" in block and "忽略这段草稿" in block

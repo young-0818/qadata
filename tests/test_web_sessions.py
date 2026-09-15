@@ -1,12 +1,14 @@
 """M7 票 05 web 侧专测：会话落盘（SessionStore）＋三层记忆组装＋API 会话面。
 
 单元层钉存储纪律（懒建档、hex12 焊死穿越、坏文件如实报错不静默吞、删智能体连带
-清会话）与 build_session_context 纯函数（K=5 滑窗、failed 轮不给草稿、fresh_topic
-清 L1 保 L2 且只挡一次）＋result_head 摘要（全量行不进上下文在此源头钉）。
+清会话）与 build_session_context 纯函数（K=5 滑窗、failed 轮不给草稿、L1 只认最近
+一轮成功——fresh_topic 人肉闸已撤 owner 裁 2026-09-15 票 09，连续性模型隐式判）
+＋result_head 摘要（全量行不进上下文在此源头钉）。
 API 层钉：session_id 真值回显、轮次落盘两端点同源（_finish_ask 一个收口）、口径
 优先级不随会话变（请求显式 > 智能体业务知识 > 空，叠加框已裁 owner 2026-09-15）、
 在途锁升格 session_id 键（同会话拒、新会话放行）、回放＝问答本体无 trail（owner 裁）、
-旧档案残留 overlay 键向后兼容忽略。
+会话 PATCH 端点已随票 09 撤除（405 钉）、旧档案残留 overlay/fresh_topic 键向后
+兼容忽略。
 图侧注入纪律在 tests/test_session_context.py，本文件不重复。
 """
 import threading
@@ -80,27 +82,28 @@ def test_lazy_load_creates_nothing(sessions, store, agent):
 
 
 def test_save_load_roundtrip(sessions, store, agent):
-    sess = Session(id=_SID, fresh_topic=True,
-                   turns=(_turn(_Q1), _turn("第二问", failed=True)))
+    sess = Session(id=_SID, turns=(_turn(_Q1), _turn("第二问", failed=True)))
     sessions.save(agent.id, sess)
     assert sessions.load(agent.id, _SID) == sess
     text = (_sessions_dir(store, agent.id) / f"{_SID}.yaml").read_text(encoding="utf-8")
     assert "第二问" in text and _Q1 in text  # 人可读可审（AgentStore 同款）
     assert "overlay" not in text  # 叠加框已裁（owner 裁 2026-09-15），不再写该键
+    assert "fresh_topic" not in text  # 新话题闸已撤（票 09），新写档案不产该键
 
 
-def test_legacy_overlay_key_ignored_on_load(sessions, store, agent):
-    """撤销叠加框的向后兼容：旧档案残留 overlay 键——读取忽略、不炸不吞史。"""
+def test_legacy_revoked_keys_ignored_on_load(sessions, store, agent):
+    """已撤机制的向后兼容：旧档案残留 overlay／fresh_topic 键——读取忽略、不炸不吞史。"""
     d = _sessions_dir(store, agent.id)
     d.mkdir(parents=True)
     (d / f"{_SID}.yaml").write_text(
-        "id: aabbccddeeff\noverlay: 旧版口径叠加\nfresh_topic: false\nturns:\n"
+        "id: aabbccddeeff\noverlay: 旧版口径叠加\nfresh_topic: true\nturns:\n"
         + "- question: 旧问\n  ts: '2026-09-14T10:00:00+08:00'\n  failed: false\n"
         "  row_count: 1\n  head: 标量值 7\n  answer: {sql: 'SELECT 7'}\n",
         encoding="utf-8")
     s = sessions.load(agent.id, _SID)
-    assert s.fresh_topic is False and len(s.turns) == 1
-    assert build_session_context(s)["draft"]["sql"] == "SELECT 7"  # 旧档案记忆照常装载
+    assert not hasattr(s, "fresh_topic") and len(s.turns) == 1
+    # 闸语义已死：残留 true 也不再清 L1（草稿照常装载）
+    assert build_session_context(s)["draft"]["sql"] == "SELECT 7"
 
 
 def test_id_and_agent_guards(sessions, store, agent):
@@ -157,14 +160,14 @@ def test_context_empty_is_none():
     assert build_session_context(Session(id=_SID)) is None
 
 
-def _sess(*qs, failed_last=False, fresh=False):
+def _sess(*qs, failed_last=False):
     turns = []
     for i, q in enumerate(qs):
         if failed_last and i == len(qs) - 1:
             turns.append(_turn(q, failed=True))
         else:
             turns.append(_turn(q, ts=f"2026-09-14T10:00:{i:02d}+08:00"))
-    return Session(id=_SID, fresh_topic=fresh, turns=tuple(turns))
+    return Session(id=_SID, turns=tuple(turns))
 
 
 def test_l2_window_is_last_five_chronological():
@@ -182,17 +185,10 @@ def test_failed_last_turn_no_draft_but_line_kept():
     assert not ctx["turns"][0]["failed"]  # 好轮照常带 SQL
 
 
-def test_fresh_topic_clears_l1_keeps_l2_once():
-    ctx = build_session_context(_sess(_Q1, fresh=True))
-    assert ctx["draft"] is None  # L1 清
-    assert len(ctx["turns"]) == 1 and ctx["turns"][0]["question"] == _Q1  # L2 保
-
-
-def test_append_turn_resets_fresh_and_archives_everything():
+def test_append_turn_archives_everything():
     payload = dict.fromkeys(_CONTRACT_KEYS)
-    sess = Session(id=_SID, fresh_topic=True, turns=(_turn(_Q1),))
+    sess = Session(id=_SID, turns=(_turn(_Q1),))
     out = append_turn(sess, "第二问", res=None, failed=True, payload=payload)
-    assert out.fresh_topic is False  # 新话题只挡下一问一次
     assert len(out.turns) == 2  # L3 全史累积（失败轮也入账）
     assert out.turns[1]["failed"] is True and out.turns[1]["head"] == ""
 
@@ -259,19 +255,17 @@ def test_session_ask_evidence_unchanged(store, fixture_db, monkeypatch):
     assert seen == ["库口径", "显式口径", ""]
 
 
-def test_new_topic_endpoint_flow_and_reset(store, fixture_db):
+def test_draft_always_fed_when_last_success_authority_in_prompt(store, fixture_db):
+    """票 09 换防：人肉闸撤后草稿常给（上轮成功即喂），"用不用"的裁量在节头授权句
+    ——连续性判定不再有机电状态，prompt 形状即完整契约。"""
     a = _agent_with_datasource(store, fixture_db)
-    llm = ScriptedLLM(_HAPPY_SCRIPT * 3)
+    llm = ScriptedLLM(_HAPPY_SCRIPT * 2)
     client = _client(llm, store)
     client.post("/api/ask", json={"agent_id": a.id, "question": _Q1, "session_id": _SID})
-    assert client.patch(f"/api/agents/{a.id}/sessions/{_SID}",
-                        json={"fresh_topic": True}).json()["fresh_topic"] is True
-    client.post("/api/ask", json={"agent_id": a.id, "question": "换个话题", "session_id": _SID})
-    assert "上一轮 SQL" not in llm.prompts[4]  # L1 清
-    assert "会话历史" in llm.prompts[3]  # L2 保
-    assert client.get(f"/api/agents/{a.id}/sessions/{_SID}").json()["fresh_topic"] is False  # 复位入账
-    client.post("/api/ask", json={"agent_id": a.id, "question": "接着问", "session_id": _SID})
-    assert "上一轮 SQL" in llm.prompts[7]  # 新话题只挡一次，第三问草稿照常（草稿=第二问）
+    client.post("/api/ask", json={"agent_id": a.id, "question": "完全无关的新话题", "session_id": _SID})
+    u2, g2 = llm.prompts[3], llm.prompts[4]
+    assert "会话历史" in u2 and "与历史无关" in u2  # L2 在场＋授权句
+    assert "上一轮 SQL" in g2 and "与上一问无关" in g2  # L1 照常喂＋授权句在场
 
 
 def test_replay_shape_qa_only(store, fixture_db):
@@ -280,7 +274,7 @@ def test_replay_shape_qa_only(store, fixture_db):
     ask = client.post("/api/ask",
                       json={"agent_id": a.id, "question": _Q1, "session_id": _SID}).json()
     r = client.get(f"/api/agents/{a.id}/sessions/{_SID}").json()
-    assert r["id"] == _SID and set(r) == {"id", "fresh_topic", "turns"}
+    assert r["id"] == _SID and set(r) == {"id", "turns"}  # fresh_topic 出档＝闸已撤（票 09）
     assert len(r["turns"]) == 1
     t = r["turns"][0]
     assert set(t) == {"question", "failed", "ts", "answer"}  # 回放＝问答本体（trail 不入档）
@@ -294,23 +288,9 @@ def test_session_endpoint_errors(store, fixture_db):
     assert client.get(f"/api/agents/{a.id}/sessions/00zz00000000").status_code == 404  # 非法 sid
     assert client.get(f"/api/agents/{a.id}/sessions/{_SID}").status_code == 404  # 无档不放
     assert client.get("/api/agents/deadbeef0000/sessions/" + _SID).status_code == 404
-
-
-def test_new_topic_patch_during_inflight_ask_survives(store, fixture_db, monkeypatch):
-    """双轴评审收紧（读改写竞态，叠加裁后剩闸位）：在途问答期间 PATCH 立新话题闸，
-    落盘走写前重载合并——闸不丢、且在途新设者本问未消费，原样留给下一问。"""
-    a = _agent_with_datasource(store, fixture_db)
-    client = _client(ScriptedLLM([]), store)  # llm 不被触达（run 被 mock）
-
-    def fake_run(db_path, question, evidence="", **kw):
-        client.patch(f"/api/agents/{a.id}/sessions/{_SID}", json={"fresh_topic": True})
-        return Answer(conclusion="ok")
-
-    monkeypatch.setattr("qadata.web.app.run_question", fake_run)
-    client.post("/api/ask", json={"agent_id": a.id, "question": "题", "session_id": _SID})
-    sess = client.get(f"/api/agents/{a.id}/sessions/{_SID}").json()
-    assert sess["fresh_topic"] is True
-    assert len(sess["turns"]) == 1
+    # 会话 PATCH 端点整面撤除（票 09）——路由不存在的诚实形态
+    assert client.patch(f"/api/agents/{a.id}/sessions/{_SID}",
+                        json={"fresh_topic": True}).status_code == 405
 
 
 def test_single_turn_ask_side_effect_free(store, fixture_db):

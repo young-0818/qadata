@@ -8,7 +8,9 @@ owner 裁决（2026-09-14）：落盘替代 spec 原「内存 dict/重启丢历�
 
 三层记忆（图侧载荷契约见 graph/state.py，本模块是唯一组装者，零 LLM 判定）：
 - L1 工作记忆＝最近一轮**成功**的完整 SQL＋结果头部摘要 → draft；failed 轮不给草稿
-  （"错误草稿不传染"最保守读法）；新话题清 L1 保 L2（fresh_topic 闸，落盘随会话）。
+  （"错误草稿不传染"最保守读法）。话题连续性由模型隐式判（owner 裁 2026-09-15
+  票 09：fresh_topic 人肉闸撤销——用户永远直接打字换题、业界无此闸先例；
+  "无关则忽略"授权进 prompt 措辞，见 graph/prompts.py）。
 - L2 情节记忆＝最近 K=5 轮滑窗 → turns（failed 行只留问题、如实标失败）。
 - L3 归档＝turns 全史，**永不进 prompt**——切窗只发生在 build_session_context。
 结果集只注摘要（result_head：标量→值；否则头部行）——全量展示行只活在轮次
@@ -46,8 +48,8 @@ class SessionNotFound(SessionStoreError):
 @dataclass(frozen=True)
 class Session:
     id: str
-    fresh_topic: bool = False  # 新话题闸：True＝下一问清 L1 保 L2（append 轮时复位）
     turns: tuple[dict[str, Any], ...] = ()  # L3 全史；轮形见 _validated_turn
+    # fresh_topic 闸已撤（owner 裁 2026-09-15 票 09）——旧档案残留键读取忽略（_read）
 
 
 def new_session_id() -> str:
@@ -74,7 +76,8 @@ def build_session_context(session: Session) -> dict | None:
 
     None＝无史可注（新会话/清场后首问），等价关态、prompt 逐字节一致。
     L2 行取自最近 K 轮：failed 轮剥净 SQL 与结果（只留问题供消解，如实标失败）；
-    L1 草稿仅认最近一轮成功且非新话题（fresh_topic 闸），随首问落盘复位。"""
+    L1 草稿只认最近一轮成功（票 09 撤人肉闸后，"用不用"交 generate prompt 的
+    显式授权措辞＋沙箱/verify 兜底——连续性模型隐式判，零新增调用）。"""
     if not session.turns:
         return None
     window = []
@@ -88,7 +91,7 @@ def build_session_context(session: Session) -> dict | None:
                            "failed": False})
     draft = None
     last = session.turns[-1]
-    if not last["failed"] and not session.fresh_topic:
+    if not last["failed"]:
         sql = last["answer"].get("sql")
         if sql:
             draft = {"sql": sql, "head": last["head"] or ""}
@@ -172,10 +175,9 @@ class SessionStore:
         turns = data.get("turns")
         if not isinstance(turns, list):
             raise SessionStoreError(f"会话文件缺 turns 列表：{f.name}")
-        # 未知键（如旧版 overlay）一律忽略——撤销叠加框后旧档案仍可正常读取
+        # 未知键一律忽略——已撤销的旧机制（overlay、fresh_topic）残留档案仍可正常读取
         return Session(
             id=f.stem,
-            fresh_topic=bool(data.get("fresh_topic") or False),
             turns=tuple(self._validated_turn(t, f) for t in turns),
         )
 
@@ -189,8 +191,7 @@ class SessionStore:
                 "head": str(t["head"]) if t.get("head") is not None else ""}
 
     def _dump(self, f: Path, session: Session) -> None:
-        body = {"id": session.id, "fresh_topic": session.fresh_topic,
-                "turns": [dict(t) for t in session.turns]}
+        body = {"id": session.id, "turns": [dict(t) for t in session.turns]}
         f.write_text(yaml.safe_dump(body, allow_unicode=True, sort_keys=False),
                      encoding="utf-8")
 
@@ -198,11 +199,11 @@ class SessionStore:
 def append_turn(session: Session, question: str, *, res: QueryResult | None,
                 failed: bool, payload: dict[str, Any]) -> Session:
     """跑完一问 → 新会话对象（纯函数，落盘归 caller）。failed 轮如实标失败并剥净
-    结果摘要（不给下游留草稿素材）；fresh_topic 在此复位（新话题只挡下一问一次）。"""
+    结果摘要（不给下游留草稿素材）。"""
     turn = {"question": question,
             "ts": datetime.now(BEIJING).isoformat(timespec="seconds"),
             "failed": failed,
             "row_count": res.row_count if (res and not failed) else None,
             "head": "" if failed else result_head(res),
             "answer": payload}
-    return replace(session, fresh_topic=False, turns=session.turns + (turn,))
+    return replace(session, turns=session.turns + (turn,))

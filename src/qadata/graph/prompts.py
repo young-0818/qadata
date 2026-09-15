@@ -84,6 +84,10 @@ _RESPOND_TMPL = """你是数据分析助手。请根据查询结果用中文给�
 # prompt 与票 04 现状逐字节一致（专测钉死）。错误草稿不传染：failed 轮只留问题
 # 供消解、如实标失败；草稿仅为参考的措辞写进节头，照走完整沙箱＋verify 是代码路径
 # 保证（草稿不改路由/沙箱/校验/账本一分）。
+# 票 09（owner 裁 2026-09-15）：两个节头带**显式授权**——"与历史/上问无关则忽略"，
+# 话题连续性由模型在这两处既有调用内隐式判（Cortex Analyst 同构，零新增调用）；
+# 人肉 fresh_topic 闸已撤，判错的代价方向性＝宁多带勿错切（多带的旧史由沙箱/verify
+# 兜住，错切真指代直接答错）。
 
 def format_session_history(ctx: dict | None) -> str:
     """L2 情节记忆段（最近 K 轮，web 层已切窗）：问题/SQL/行数/标量头部。"""
@@ -105,7 +109,8 @@ def format_session_history(ctx: dict | None) -> str:
     if not lines:
         return ""
     return ("## 会话历史（按时间升序，最后一条是上一轮；用于消解「这些/那些/它」等指代与延续主体，"
-            "不要回答历史里的问题）\n" + "\n".join(lines))
+            "不要回答历史里的问题；本轮问题与历史无关时忽略这段历史，独立改写为自包含一句）\n"
+            + "\n".join(lines))
 
 
 def format_session_draft(ctx: dict | None) -> str:
@@ -117,7 +122,8 @@ def format_session_draft(ctx: dict | None) -> str:
     if not sql:
         return ""
     block = ("## 上一轮 SQL（增量改写的草稿：本题若为其延续（如「这些新生」的定义即写在其中），"
-             "在其结构上改；它仅供参考、不是本题答案，仍须按本题完整生成）\n" + sql)
+             "在其结构上改；它仅供参考、不是本题答案，仍须按本题完整生成；"
+             "本题与上一问无关时忽略这段草稿，按本题独立完整生成）\n" + sql)
     head = str(d.get("head") or "") if isinstance(d, dict) else ""
     return block + (f"\n上一轮结果摘要：{head}" if head else "")
 
