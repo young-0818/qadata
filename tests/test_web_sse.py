@@ -76,7 +76,7 @@ def test_stream_happy_frames_and_answer_contract(store, fixture_db):
     assert res.headers["content-type"].startswith("text/event-stream")
     frames = _parse(res.text)
     assert frames[-1][0] == "answer"
-    assert set(frames[-1][1]) == _CONTRACT_KEYS  # 末帧即 13 字段契约，一字节不多不少
+    assert set(frames[-1][1]) == _CONTRACT_KEYS  # 末帧即 14 字段契约（含票 03 clarification），一字节不多不少
     assert frames[-1][1]["failed"] is False and llm.calls == 3
     assert _progress(frames) == [
         {"node": "understand", "attempt": 0, "status": "start"},

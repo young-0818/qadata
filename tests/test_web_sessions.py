@@ -11,6 +11,7 @@ API 层钉：session_id 真值回显、轮次落盘两端点同源（_finish_ask
 兼容忽略。
 图侧注入纪律在 tests/test_session_context.py，本文件不重复。
 """
+import json
 import threading
 from pathlib import Path
 from unittest.mock import ANY
@@ -37,6 +38,7 @@ from tests.test_web_api import (
     _CONTRACT_KEYS,
     _HAPPY_SCRIPT,
     _S,
+    _S_CLAR,
     _agent_with_datasource,
     _client,
 )
@@ -214,7 +216,7 @@ def test_ask_echoes_session_and_persists_turn(store, fixture_db):
     client = _client(ScriptedLLM(_HAPPY_SCRIPT), store)
     body = client.post("/api/ask",
                        json={"agent_id": a.id, "question": _Q1, "session_id": _SID}).json()
-    assert set(body) == _CONTRACT_KEYS  # 13 字段形状不动（session_id 出真值）
+    assert set(body) == _CONTRACT_KEYS  # 14 字段形状不动（session_id 出真值）
     assert body["session_id"] == _SID
     out = client.get(f"/api/agents/{a.id}/sessions").json()["sessions"]
     assert out == [{"id": _SID, "title": _Q1, "updated": ANY, "turn_count": 1}]
@@ -299,6 +301,37 @@ def test_single_turn_ask_side_effect_free(store, fixture_db):
     body = client.post("/api/ask", json={"agent_id": a.id, "question": _Q1}).json()
     assert body["session_id"] is None  # 单轮关态照旧
     assert client.get(f"/api/agents/{a.id}/sessions").json() == {"sessions": []}
+
+
+# ── M8 票 03：澄清轮不落盘（_finish_ask 见 clarification 跳 append_turn）────────
+
+
+def _clar_blob(ask="「表现」指成绩还是违约率？"):
+    return json.dumps({"question": "改写", "intent": {}, "clarification": ask},
+                      ensure_ascii=False)
+
+
+def test_clarification_turn_not_persisted(store, fixture_db):
+    """澄清轮跳落盘：不造 failed=False 且 sql=None 的第三种轮形态；懒建档连带
+    意味着澄清轮连会话文件都不出生成。代价如实记＝重开回放不见澄清史（题史在
+    前端合成的问句里自证）。"""
+    a = _agent_with_datasource(store, fixture_db)
+    ask = "按入学年还是毕业年算？"
+    llm = ScriptedLLM([_clar_blob(ask)] + _HAPPY_SCRIPT)
+    client = TestClient(create_app(llm=llm, settings=_S_CLAR, agents=store,
+                                   static_dir="__no_such_dist_for_tests__"))
+    body = client.post("/api/ask",
+                       json={"agent_id": a.id, "question": _Q1, "session_id": _SID}).json()
+    assert body["clarification"] == ask and body["failed"] is False
+    assert client.get(f"/api/agents/{a.id}/sessions").json() == {"sessions": []}
+    assert not _sessions_dir(store, a.id).exists()  # 懒建档：澄清轮无落盘无档
+    # 续问（前端合成带「补充说明：」标记）正常作答＝首轮入账，轮次只数正式轮
+    composed = f"{_Q1}补充说明：{ask} 入学年"
+    r2 = client.post("/api/ask",
+                     json={"agent_id": a.id, "question": composed, "session_id": _SID})
+    assert r2.json()["clarification"] is None and r2.json()["sql"] is not None
+    out = client.get(f"/api/agents/{a.id}/sessions").json()["sessions"]
+    assert out[0]["turn_count"] == 1 and out[0]["title"] == composed
 
 
 def test_stream_session_persists_and_echoes(store, fixture_db):

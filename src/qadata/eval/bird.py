@@ -237,6 +237,12 @@ def _run_one(q: dict, db_dir: str, llm, max_rows: int, tracer, settings=None,
     # 票 05 路径字段：Answer 是带默认值的 dataclass，三字段恒在（指标层关时 path=fallback）
     path = {"path": answer.path, "metric_name": answer.metric_name,
             "template_fell_back": answer.template_fell_back}
+    if answer.clarification:
+        # M8 票 03：澄清轮弃答入账（每题 clarified≈判负——判卷读的就是误伤上界）；
+        # pred 未生成不执行不判分。默认关态澄清恒 None＝本分支不可达（票面如实注）
+        return {**base, **_run_stats(tracer, q), "pred_sql": None, "correct": False,
+                "error": f"澄清问：{answer.clarification}",
+                "error_class": "clarified", **path}
     if answer.failed or not answer.sql:
         return {**base, **_run_stats(tracer, q), "pred_sql": answer.sql, "correct": False,
                 "error": answer.error_summary or "no sql", "error_class": "answer_failed", **path}

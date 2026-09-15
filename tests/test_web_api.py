@@ -1,13 +1,15 @@
 """M7-rev2 票 02.5 契约测试：TestClient＋ScriptedLLM＋tmp AgentStore——不碰网、不碰真实目录。
 
-/api/ask 响应 12 字段冻结不动＋票 04 经 owner 裁决新增可选字段 chart（共 13，
-spec 响应契约：改形状＝跨票改卷，本票修订段见 spec）；智能体面
+/api/ask 响应 12 字段冻结不动＋票 04 新增可选 chart＋M8 票 03 新增可选 clarification
+（共 14，spec 响应契约：改形状＝跨票改卷，本票修订段见 spec）；智能体面
 CRUD／数据源上传／业务知识双态／模型只读卡由本文件钉死。
 happy path 恰好 3 次 LLM 调用（understand/generate/respond），纪律⑤ calls 断言照旧。
 """
 import ast
 import inspect
+import json
 import types
+from dataclasses import replace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -25,12 +27,14 @@ from tests.fakes import ScriptedLLM
 from tests.web_shared import ONE_METRIC_YAML
 
 _S = Settings(api_key="", base_url="", model="test-model", retry_budget=3)
+_S_CLAR = replace(_S, clarification=True)  # M8 票 03 开态（web 演示场景＝开闸面）
 
-# 契约字段全集（票 01 冻结 12＋票 04 新增可选 chart）——多一个少一个都算改卷
+# 契约字段全集（票 01 冻结 12＋票 04 新增可选 chart＋票 03 新增可选 clarification）
+# ——多一个少一个都算改卷
 _CONTRACT_KEYS = {
     "conclusion", "sql", "columns", "rows", "truncated", "elapsed_ms",
     "failed", "error_summary", "path", "metric_name", "template_fell_back",
-    "session_id", "chart",
+    "session_id", "chart", "clarification",
 }
 
 _HAPPY_SCRIPT = ["改写", "SELECT name FROM students WHERE id = 2", "Bob 的数学 88 分"]
@@ -247,7 +251,27 @@ def test_ask_success_contract(store, fixture_db):
     assert body["truncated"] is False and isinstance(body["elapsed_ms"], int)
     assert body["path"] == "fallback" and body["session_id"] is None
     assert body["chart"] is None  # 单格文本非标量数值→其余→表格（null）
+    assert body["clarification"] is None  # 票 03：关态/非澄清轮第 14 字段恒 null
     assert llm.calls == 3
+
+
+def test_ask_clarification_round_contract(store, fixture_db):
+    """M8 票 03：澄清轮＝第 14 字段出真值、failed=False（不是失败）、
+    1 次 LLM 调用直达 END；澄清语即 conclusion（原样一句，非三节组装）。"""
+    a = _agent_with_datasource(store, fixture_db)
+    ask = "「表现」指成绩还是违约率？"
+    blob = json.dumps({"question": "学生的表现如何", "intent": {}, "clarification": ask},
+                      ensure_ascii=False)
+    llm = ScriptedLLM([blob])
+    client = TestClient(create_app(llm=llm, settings=_S_CLAR, agents=store,
+                                   static_dir="__no_such_dist_for_tests__"))
+    body = client.post("/api/ask",
+                       json={"agent_id": a.id, "question": "学生表现如何"}).json()
+    assert set(body) == _CONTRACT_KEYS  # 14 字段形状不扩不缩（一判双达同经本收口）
+    assert body["clarification"] == ask and body["conclusion"] == ask
+    assert body["failed"] is False and body["sql"] is None
+    assert body["columns"] is None and body["chart"] is None
+    assert llm.calls == 1  # 澄清＝最省动路：不进 explore 不进沙箱
 
 
 def test_ask_evidence_precedence(store, fixture_db, monkeypatch):

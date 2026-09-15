@@ -29,6 +29,22 @@ _UNDERSTAND_TMPL = """请把下面的用户问题改写为一句自包含的查�
 {history}原始问题：{question}
 背景信息（evidence）：{evidence}"""
 
+# M8 票 03 澄清保险丝（默认关；尾追静态段，开关关时 prompt 与今日逐字节一致）。
+# 保险丝不是主菜：指令把产出条件收紧到「任何 SQL 都是猜」，并明列不构成澄清的情形
+# （值写法有采样/兜底、列归属有 explore、形态缺省可合理选——都轮不到回问）。
+# 防循环闸＝「补充说明：」标记：续轮题面必带（前端合成），带标记＝本轮指令段不加
+# （节点侧另有机制版复闸——M5 ⑨闸教训：指令守不住的，代码兜）。
+SUPPLEMENT_MARK = "补充说明："
+
+_CLARIFY_TAIL = """
+澄清例外（保险丝，不是常规出口）：仅当口径缺失到「任何 SQL 都只能是猜」的程度——
+题面与背景信息都定不了到底算什么、从哪算，两种以上合理读法会给出不同数字且无从取舍——
+才在上述 JSON 中额外追加一个字段 "clarification": "一句中文澄清问（问清缺的是什么，不超过 30 字）"；
+其他任何情况一律不写该字段或填 null。以下都**不构成**澄清理由：
+取值的具体写法/大小写（按 schema 所示形态处理）、列与表的归属（系统自会探查）、
+输出形态或精度未明示（选合理形态作答）、时间范围未给出（按题面处理）。
+能改写、能给出合理 SQL 就不要问。"""
+
 # M5 票 05 第二级 LLM 复核（spec「匹配机制」）：整表装入、只判身份、禁写 SQL。
 # 模板不进 prompt（防照抄、省 token）；⑨闸为 04→05 移交裁决（04 票单 §F.4：
 # 包含路径误命中户均条——具名个体极值/比较题不是聚合口径指标，一律 NONE）。
@@ -128,9 +144,16 @@ def format_session_draft(ctx: dict | None) -> str:
     return block + (f"\n上一轮结果摘要：{head}" if head else "")
 
 
-def understand_prompt(question: str, evidence: str = "", session_block: str = "") -> str:
+def understand_prompt(question: str, evidence: str = "", session_block: str = "",
+                      clarify: bool = False) -> str:
+    """understand 的完整 prompt。clarify（M8 票 03）＝开关开**且**题面不含「补充说明：」
+    标记才尾追澄清指令段——续轮必带标记（防死循环闸的指令侧；节点侧消费复闸在 nodes.understand）。
+    关态/带标记态与本函数参数加入前逐字节一致（专测钉死）。"""
     h = session_block + "\n" if session_block else ""
-    return _UNDERSTAND_TMPL.format(question=question, evidence=evidence or "（无）", history=h)
+    p = _UNDERSTAND_TMPL.format(question=question, evidence=evidence or "（无）", history=h)
+    if clarify and SUPPLEMENT_MARK not in question:
+        p += _CLARIFY_TAIL
+    return p
 
 
 def sql_prompt(schema: str, evidence: str, question: str, history: str = "",

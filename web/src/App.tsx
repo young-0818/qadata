@@ -127,12 +127,14 @@ function AnswerBubble({ resp, trail }: { resp: AskResponse; trail: ProgressEvent
       : null;
   return (
     <div className={`bubble agent${resp.failed ? " failed" : ""}`}>
-      {/* 票 04：校验旗标以徽标呈现（label 承载语义，不靠颜色单传） */}
-      {(resp.failed || resp.template_fell_back || resp.truncated) && (
+      {/* 票 04：校验旗标以徽标呈现（label 承载语义，不靠颜色单传）；
+          M8 票 03：澄清轮徽标——直接打字回答即可（下一问前端自动合成补充说明） */}
+      {(resp.failed || resp.template_fell_back || resp.truncated || resp.clarification) && (
         <div className="badges">
           {resp.failed && <span className="badge danger">✗ 失败</span>}
           {resp.template_fell_back && <span className="badge warn">⚠ 模板降级</span>}
           {resp.truncated && <span className="badge warn">⚠ 已截断</span>}
+          {resp.clarification && <span className="badge warn">？ 待澄清</span>}
         </div>
       )}
       {sections.map((s, i) =>
@@ -541,6 +543,11 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
   const [progress, setProgress] = useState<ProgressEvent[]>([]);
   const [err, setErr] = useState("");
   const tailRef = useRef<HTMLDivElement>(null);
+  // M8 票 03：待答澄清 {原问, 澄清问}——续轮无状态前端合成（裁决：服务端 pending 要
+  // 复活写前重载合并＋翻票 09 的 405 钉＋新 spec 修订，三重改卷只换省一次拼接）。
+  // 澄清轮不落盘，会话文件里没有它的踪迹；合成问句自带「补充说明：」标记（防循环闸，
+  // 后端带标记即不再产澄清），题史在合并问句里自证。换会话/重开回放即清。
+  const [awaiting, setAwaiting] = useState<{ question: string; clarify: string } | null>(null);
 
   async function refreshSessions() {
     try {
@@ -553,6 +560,7 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
   useEffect(() => {
     setSid(newSid()); // 换智能体＝新会话（会话绑智能体，spec 票 05）
     setMsgs([]);
+    setAwaiting(null); // 换智能体即弃待答澄清（跨会话合成＝串味）
     getAgent(id).then(setAgent).catch((e: Error) => setErr(e.message));
     refreshSessions();
   }, [id]);
@@ -566,6 +574,7 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
     if (busyRef.current) return; // 在途期间不清场（锁的展示面）
     setSid(newSid()); // 换会话号：当前会话已在侧栏历史里，下一问开新档
     setMsgs([]);
+    setAwaiting(null); // 新会话不带上一档的待答澄清
   }
 
   async function openSession(h: SessionHead) {
@@ -580,6 +589,7 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
           { role: "agent", resp: t.answer, trail: [] },
         ]),
       );
+      setAwaiting(null); // 重开回放＝换上下文载入，不携旧待答澄清
       setErr("");
     } catch (e) {
       setErr(errMsg(e));
@@ -591,16 +601,21 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
     if (!q || busyRef.current) return;
     busyRef.current = true;
     setQuestion("");
-    setMsgs((m) => [...m, { role: "user", text: q }]);
+    // M8 票 03：有待答澄清＝本条是其续答，合成 原问＋"补充说明："＋澄清问＋答
+    // （无状态前端拼接，用户气泡即合成后全句＝题史自证）；澄清轮未落盘，侧栏计数不涨
+    const asked = awaiting ? `${awaiting.question}补充说明：${awaiting.clarify} ${q}` : q;
+    setAwaiting(null);
+    setMsgs((m) => [...m, { role: "user", text: asked }]);
     setPending(true);
     setProgress([]);
     const trail: ProgressEvent[] = [];
     try {
       // evidence 恒空＝智能体业务知识兜底（口径优先级在后端收口，同票 02.5）
-      const resp = await askStream(id, q, "", (ev) => {
+      const resp = await askStream(id, asked, "", (ev) => {
         trail.push(ev);
         setProgress([...trail]);
       }, sid);
+      if (resp.clarification) setAwaiting({ question: asked, clarify: resp.clarification });
       setMsgs((m) => [...m, { role: "agent", resp, trail: [...trail] }]);
       refreshSessions(); // 懒建档：首问落盘后侧栏才有这一档
     } catch (e) {

@@ -413,3 +413,18 @@ def test_run_one_failure_record_has_path_fields(tmp_path, monkeypatch):
     assert rec["error_class"] == "answer_failed"
     assert rec["path"] == "fallback" and rec["metric_name"] is None
     assert rec["template_fell_back"] is False
+
+
+def test_run_one_clarified_error_class(tmp_path, monkeypatch):
+    """M8 票 03：澄清轮 error_class="clarified"（每题 clarified≈判负——配对判卷读
+    的就是误伤上界）；pred 未生成不执行不判分。默认关态澄清恒 None＝分支不可达。"""
+    from qadata.eval import bird
+    from qadata.types import Answer
+    q, db_dir = _school_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(bird, "run_question",
+                        lambda *a, **k: Answer(conclusion="「表现」指成绩还是违约率？",
+                                               clarification="「表现」指成绩还是违约率？"))
+    rec = bird._run_one(q, db_dir, None, 100, None)
+    assert rec["correct"] is False and rec["error_class"] == "clarified"
+    assert rec["pred_sql"] is None and "成绩还是违约率" in rec["error"]
+    assert rec["gold_failed"] is False and rec["path"] == "fallback"

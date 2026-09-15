@@ -30,7 +30,8 @@ class QueryResult:
 class Answer:
     """最终答案。respond 产出的 conclusion 为票 07 三节组装文本（【结论】→【数据依据】→
     【口径说明】→【校验标注】，空节省略；判分在结果集层，不读此文本）。failed=True 时为
-    诚实失败说明；最外层守护（run_question 兜裸异常）不经 respond，保持单段纯文本。"""
+    诚实失败说明；最外层守护（run_question 兜裸异常）不经 respond，保持单段纯文本。
+    M8 票 03 澄清态：failed=False、无 SQL、conclusion＝澄清问本身（非三节组装）。"""
 
     conclusion: str
     sql: str | None = None
@@ -43,3 +44,6 @@ class Answer:
     path: str = "fallback"
     metric_name: str | None = None
     template_fell_back: bool = False
+    # M8 票 03（默认关）：口径缺失到「任何 SQL 都是猜」时 understand 回问的一句澄清；
+    # None＝非澄清轮（尾键先例同 path/metric_name——加键不改既有位置）
+    clarification: str | None = None

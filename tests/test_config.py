@@ -24,6 +24,7 @@ def _isolate_env(monkeypatch):
     monkeypatch.delenv("QADATA_METRIC_LAYER", raising=False)
     monkeypatch.delenv("QADATA_METRICS_DIR", raising=False)
     monkeypatch.delenv("QADATA_VALUE_SAMPLING", raising=False)
+    monkeypatch.delenv("QADATA_CLARIFICATION", raising=False)
 
 
 def test_load_settings_reads_env(monkeypatch):
@@ -178,6 +179,25 @@ def test_bad_value_sampling_rejected(monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
     monkeypatch.setenv("QADATA_VALUE_SAMPLING", "maybe")
     with pytest.raises(RuntimeError, match="QADATA_VALUE_SAMPLING"):
+        load_settings()
+
+
+def test_clarification_defaults_off(monkeypatch):
+    """M8 票 03：澄清回合默认关（关态 prompt 与路由 map 与今日一致是专测面）。"""
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    assert load_settings().clarification is False
+
+
+def test_clarification_env_on(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setenv("QADATA_CLARIFICATION", "1")
+    assert load_settings().clarification is True
+
+
+def test_bad_clarification_rejected(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setenv("QADATA_CLARIFICATION", "maybe")
+    with pytest.raises(RuntimeError, match="QADATA_CLARIFICATION"):
         load_settings()
 
 

@@ -20,6 +20,7 @@ class Settings:
     metric_layer: bool = False  # M5 票 05 指标层总开关（False 时管线与纯 SQL 现状逐行为一致）
     metrics_dir: str = "metrics"  # 注册表目录（按库名寻址 metrics/<db>.yaml）
     value_sampling: bool = False  # M8 票 02 值采样注入（False 时 schema 上下文与现状逐字节一致）
+    clarification: bool = False  # M8 票 03 澄清回合（False 时 understand prompt 与路由 map 与今日逐字节一致）
 
 
 def _env_int(name: str, default: int, *, minimum: int | None = None) -> int:
@@ -78,6 +79,7 @@ def load_settings() -> Settings:
         metric_layer=_env_bool("QADATA_METRIC_LAYER", False),
         metrics_dir=os.getenv("QADATA_METRICS_DIR", "metrics"),
         value_sampling=_env_bool("QADATA_VALUE_SAMPLING", False),
+        clarification=_env_bool("QADATA_CLARIFICATION", False),
     )
 
 

@@ -21,6 +21,7 @@ from qadata.graph.metrics import (
 )
 from qadata.graph.precise import NO_MAJORITY_ERROR, run_precise_batch
 from qadata.graph.prompts import (
+    SUPPLEMENT_MARK,
     compose_conclusion,
     format_failure_history,
     format_session_draft,
@@ -144,12 +145,25 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         # metric_match 消费（票 05），generate 不读它（尾段注入线④判负已拆，见 graph/intent.py）；
         # 解析失败＝回退纯原文＋intent None，不写 attempts、不烧重试预算（§3.7 既定降级语义）。
         # 票 05：L2 会话历史并进这次改写的 prompt（指代消解复用"补全指代"既有机制，零新增调用）
+        # 票 03（M8，默认关）：同一改写调用兼产澄清问（三元组，宁空勿造）——保险丝出口，
+        # 关态与今日逐字节一致（prompt 不追加指令段、本节点不写 answer、路由 map 不含 END）。
         text = timed_invoke(llm, understand_prompt(
             state["question"], state.get("evidence", ""),
-            format_session_history(state.get("session_context"))),
+            format_session_history(state.get("session_context")),
+            clarify=s.clarification),
             "understand", tracer, limiter)
-        question, intent = parse_understand_response(text)
+        question, intent, clarification = parse_understand_response(text)
         attempt = len(state.get("attempts", []))
+        if (s.clarification and clarification
+                and SUPPLEMENT_MARK not in state["question"]):
+            # 澄清出口：answer 即澄清问（failed=False——不是失败），路由首判直达 END，
+            # 全程 1 次调用、零沙箱零账本。防循环＝双闸：续轮题面带「补充说明：」标记时
+            # 指令段不加（prompt 侧）＋此处机制版复闸（模型违令产出也不消费——M5 ⑨闸
+            # 教训：指令守不住的，代码兜），续轮必带标记由前端合成保证。
+            _emit("understand", attempt, "口径缺失过大，先澄清一句")
+            return {"original_question": state["question"], "question": question,
+                    "intent": intent,
+                    "answer": Answer(conclusion=clarification, clarification=clarification)}
         if intent is None:
             _emit("understand", attempt, "解析失败，按原问题作答")
         else:

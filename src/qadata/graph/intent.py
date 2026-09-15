@@ -12,6 +12,10 @@
 验收门改判为轨道①命中路径直检契约）。票 07 起新增一个**展示消费者**：respond 兜底
 口径说明引用 evidence_terms——只进答案文本组装、零 prompt 注入，「勿再喂 prompt」纪律
 不破（test_generate_never_reads_intent 仍钉死）。
+
+M8 票 03：返回值扩为三元组（＋clarification），默认关的保险丝——仅当口径缺失到
+「任何 SQL 都是猜」时模型才产澄清问，宁空勿造；消费闸在节点侧（flag＋防循环标记），
+本解析层只负责「收不收」的形状判定。
 """
 import json
 import re
@@ -52,11 +56,16 @@ def _clean_list(value):
 
 
 def parse_understand_response(text):
-    """understand 回复 → (改写问题, 六字段意图 dict 或 None)。
+    """understand 回复 → (改写问题, 六字段意图 dict 或 None, 澄清问句或 None)。
 
     成功判定：能提取出带非空 question 的 JSON 对象。意图契约坏掉（intent 缺失/非 dict）
     但改写拿到了时六字段全 null——回退成 JSON 原文反而污染题面，不如留空；
     question 拿不到＝整体失败：原文当改写问题、意图判 None（行为与接线前逐字节一致）。
+
+    M8 票 03 第三元（澄清保险丝，宁空勿造在解析层的形态）：仅当 JSON 对象里
+    clarification 为非空字符串才收——键缺失/空串/空白/非字符串一律 None，
+    纯文本与坏 JSON 回退态同样 None（半坏契约不采信）；与 question/intent 判定
+    正交（模型丢改写只留澄清问也收，宁回问不拿 JSON 原文喂 generate）。
     """
     raw = str(text).strip()
     m = _JSON_RE.search(raw)
@@ -66,6 +75,7 @@ def parse_understand_response(text):
         except json.JSONDecodeError:
             data = None
         if isinstance(data, dict):
+            clarification = _clean_str(data.get("clarification"))
             question = _clean_str(data.get("question"))
             if question:
                 src = data.get("intent")
@@ -75,5 +85,6 @@ def parse_understand_response(text):
                         else _clean_str(src.get(f)))
                     for f in INTENT_FIELDS
                 }
-                return question, intent
-    return raw, None
+                return question, intent, clarification
+            return raw, None, clarification
+    return raw, None, None

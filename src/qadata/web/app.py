@@ -8,7 +8,8 @@
 测试）。/api/ask 响应 12 字段冻结不动（spec 响应契约：改形状＝跨票改卷；
 session_id 自票 05 出真值——请求带会话则回显，单轮请求照旧 null）；票 04 经
 owner 裁决**新增可选字段 chart**（图型判定＝web/charts.py 规则纯函数，一判双达
-两端点）——共 13 字段。
+两端点）；M8 票 03 经 owner 立项**新增可选字段 clarification**（澄清回合，默认关）
+——共 14 字段。
 票 03：/api/ask/stream 以 SSE 直播节点级进度帧（node/attempt/status 三字段
 起步）＋末帧 event:answer（即契约本体，与 /api/ask 同源）。
 票 05：多轮会话落盘（web/sessions.py，owner 裁决 2026-09-14 推翻"内存态"）——
@@ -90,12 +91,14 @@ class AgentPatchRequest(BaseModel):
 
 
 def answer_to_payload(answer: Answer, session_id: str | None = None) -> dict[str, Any]:
-    """Answer/QueryResult → 契约 JSON（票 01 冻结 12 字段＋票 04 新增可选 chart，
-    共 13 字段；无结果集时行列与图型如实 null）。
+    """Answer/QueryResult → 契约 JSON（票 01 冻结 12 字段＋票 04 新增可选 chart＋
+    M8 票 03 新增可选 clarification，共 14 字段；无结果集时行列与图型如实 null）。
 
     session_id（票 05）＝请求所带会话 id 的回显；单轮请求（无 session_id）照旧 null。
     chart＝decide_chart 规则纯函数对结果集形态的一次裁决（折线/柱/大数卡，
     判不了即 null＝表格）；两端点同经本函数，一判双达不漂移。
+    clarification（M8 票 03，开关关恒 null）＝澄清轮的问句本体——非失败、非答案，
+    续问由前端无状态合成（原问＋「补充说明：」＋澄清问＋答）；澄清轮不落盘。
     """
     res = answer.result
     columns = list(res.columns) if res else None
@@ -114,6 +117,7 @@ def answer_to_payload(answer: Answer, session_id: str | None = None) -> dict[str
         "template_fell_back": answer.template_fell_back,
         "session_id": session_id,
         "chart": decide_chart(columns or [], rows or []) if res else None,
+        "clarification": answer.clarification,
     }
 
 
@@ -299,11 +303,14 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
     def _finish_ask(req: AskRequest, session: Session | None, answer: Answer) -> dict[str, Any]:
         """两端点共同的收口：契约 payload（session_id 回显）＋会话轮次落盘。
         落盘＝L3 归档追加一轮；失败轮也入账（如实标失败，供下轮消解）。
+        M8 票 03：**澄清轮不落盘**——落盘会造出 failed=False 且 sql=None 的第三种
+        轮形态，牵动 _validated_turn/回放契约；代价如实记＝重开回放不见澄清史，
+        题史在前端合成问句里自证（原问＋「补充说明：」＋澄清问＋答）。
         写前重载合并原为 PATCH×ask 闸位竞态兜底（双轴评审收紧），票 09 随
         fresh_topic 闸与 PATCH 端点一并裁撤——闸撤后同会话写者只剩受在途锁
         排他的 ask 本身，装载快照即最新状态。"""
         payload = answer_to_payload(answer, session_id=req.session_id)
-        if session is not None:
+        if session is not None and not answer.clarification:
             merged = append_turn(session, req.question, res=answer.result,
                                  failed=answer.failed, payload=payload)
             sessions.save(req.agent_id, merged)

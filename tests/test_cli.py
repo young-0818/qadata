@@ -26,6 +26,19 @@ def test_ask_failure_returns_zero_but_honest(fixture_db, monkeypatch, capsys):
     assert code == 0 and "未能完成查询" in capsys.readouterr().out
 
 
+def test_ask_clarification_prints_and_exits_zero(fixture_db, monkeypatch, capsys):
+    """M8 票 03：澄清不是失败——打印问句后 exit 0（CLI 无合成通道，续问把
+    「补充说明：…」带进下一问题面即可——防循环标记闸认它）。"""
+    import qadata.cli.main as m
+
+    monkeypatch.setattr(m, "run_question",
+                        lambda *a, **k: Answer(conclusion="「表现」指成绩还是违约率？",
+                                               clarification="「表现」指成绩还是违约率？"))
+    code = cli_main.main(["ask", fixture_db, "学生的表现如何"])
+    assert code == 0
+    assert "「表现」指成绩还是违约率？" in capsys.readouterr().out
+
+
 def test_serve_shell_delegates_to_run_server(monkeypatch):
     """CLI 薄壳：serve 参数原样交给包内 run_server，不碰 uvicorn。"""
     import qadata.web.serve as serve_mod

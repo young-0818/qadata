@@ -8,11 +8,18 @@ from qadata.llm.gateway import build_llm
 from qadata.types import Answer
 
 
-def _route_after_understand(state: dict, metric_layer: bool) -> str:
+def _route_after_understand(state: dict, metric_layer: bool,
+                            clarification: bool = False) -> str:
     """指标层总开关（票 05）：关＝与纯 SQL 现状逐行为一致；开＝进 metric_match。
 
     注册表存在与否不在路由判（路由保持纯函数不摸文件系统）——节点无文件即零调用跳过。
+
+    M8 票 03 首判（默认关）：understand 出口写了 answer（澄清轮，图侧唯一提前落
+    answer 的节点）→ 直达 END，不进 explore/generate。关态本函数与参数加入前逐
+    行为一致——answer 键在关态不可能被 understand 写入，判据也随开关才启用（双保险）。
     """
+    if clarification and state.get("answer") is not None:
+        return "END"
     return "metric_match" if metric_layer else "explore"
 
 
@@ -58,10 +65,15 @@ def build_graph(llm, tracer=None, settings: Settings | None = None, limiter=None
                  "verify", "respond"):
         g.add_node(name, nodes[name])
     g.add_edge(START, "understand")
+    # M8 票 03：澄清保险丝——关态路由 map 与今日逐分支一致（END 分支随开关才加，
+    # 不靠运行时不可达兜形状）；开态仅多一条直达 END 的出口。
+    understand_routes = {"metric_match": "metric_match", "explore": "explore"}
+    if s.clarification:
+        understand_routes = {"END": END, **understand_routes}
     g.add_conditional_edges(
         "understand",
-        lambda st: _route_after_understand(st, s.metric_layer),
-        {"metric_match": "metric_match", "explore": "explore"},
+        lambda st: _route_after_understand(st, s.metric_layer, s.clarification),
+        understand_routes,
     )
     g.add_conditional_edges(
         "metric_match",

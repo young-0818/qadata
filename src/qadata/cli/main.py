@@ -15,7 +15,14 @@ console = Console()
 
 def _print_answer(answer) -> None:
     console.rule("问数")
-    style = "red" if answer.failed else "green"
+    # M8 票 03：澄清轮不是失败（黄字提示形态），ask 打印后照旧 exit 0——
+    # CLI 无前端合成通道，续问靠用户把「补充说明：…」带进下一问的题面
+    if answer.failed:
+        style = "red"
+    elif answer.clarification:
+        style = "yellow"
+    else:
+        style = "green"
     # 票 07：conclusion 即三节组装成品（【结论】【数据依据】【口径说明】【校验标注】），原样输出；
     # 截断标注已并入校验节，不再单列黄字（避免同一事实两处表述漂移）
     console.print(answer.conclusion, style=style, markup=False)

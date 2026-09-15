@@ -17,6 +17,8 @@ export interface AskResponse {
   template_fell_back: boolean;
   session_id: string | null; // 票 05：带会话即回显请求所带 sid；单轮＝null
   chart: ChartSpec | null; // 票 04：后端规则纯函数判定的图型，null＝表格
+  clarification: string | null; // M8 票 03（默认关恒 null）：澄清轮问句本体——非失败非答案；
+  // 续问＝前端无状态合成（原问＋「补充说明：」＋澄清问＋用户答），澄清轮后端不落盘
 }
 
 // 票 04 图型判定契约（web/charts.py::decide_chart）：列下标寻址 columns/rows

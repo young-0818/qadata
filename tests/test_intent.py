@@ -42,7 +42,8 @@ def test_parse_success_returns_question_and_six_fields():
         format_constraint="保留两位小数",
         evidence_terms=["违约 = status 'B'"],
     )
-    q, intent = parse_understand_response(text)
+    q, intent, clar = parse_understand_response(text)
+    assert clar is None  # 票 03：模型没产澄清键＝恒 None（宁空勿造的默认形态）
     assert q == "已结束合同的违约率是多少"
     assert intent == {
         "metric_mention": "违约率",
@@ -61,35 +62,36 @@ def test_parse_accepts_fenced_json_and_prose_around():
     assert fenced[1] is not None
     assert wrapped[1] is not None
     assert fenced[0] == wrapped[0] == "改写后的问题"
+    assert fenced[2] is None and wrapped[2] is None  # 无澄清键＝第三元恒 None
 
 
 def test_parse_plain_text_falls_back_to_raw():
     """解析失败回退（§3.7 既定降级语义）：原文当改写问题、意图判 null。"""
-    q, intent = parse_understand_response("  每个学生的平均成绩是多少  ")
+    q, intent, clar = parse_understand_response("  每个学生的平均成绩是多少  ")
     assert q == "每个学生的平均成绩是多少"
-    assert intent is None
+    assert intent is None and clar is None  # 回退态三元齐全：纯文本不产澄清
 
 
 def test_parse_broken_json_falls_back():
-    q, intent = parse_understand_response('{"question": "改写", "intent": 坏掉的')
+    q, intent, clar = parse_understand_response('{"question": "改写", "intent": 坏掉的')
     assert q == '{"question": "改写", "intent": 坏掉的'
-    assert intent is None
+    assert intent is None and clar is None  # 坏 JSON 半截契约不采信
 
 
 def test_parse_json_without_usable_question_falls_back():
-    """改写问题拿不到＝整体失败：不发明 question，原文回退。"""
-    q, intent = parse_understand_response('{"intent": {"output_form": "百分比"}}')
+    """改写问题拿不到＝整体失败：不发明 question，原文回退（意图判 None）。"""
+    q, intent, clar = parse_understand_response('{"intent": {"output_form": "百分比"}}')
     assert q == '{"intent": {"output_form": "百分比"}}'
-    assert intent is None
-    q2, intent2 = parse_understand_response('{"question": "   ", "intent": {}}')
-    assert intent2 is None and q2 == '{"question": "   ", "intent": {}}'
+    assert intent is None and clar is None
+    q2, intent2, clar2 = parse_understand_response('{"question": "   ", "intent": {}}')
+    assert intent2 is None and clar2 is None and q2 == '{"question": "   ", "intent": {}}'
 
 
 def test_parse_bad_intent_yields_all_null_not_failure():
     """改写成功但意图契约坏掉：保留改写（回退原文反而更差），六字段全 null。"""
-    q, intent = parse_understand_response('{"question": "改写", "intent": " nonsense"}')
+    q, intent, clar = parse_understand_response('{"question": "改写", "intent": " nonsense"}')
     assert q == "改写"
-    assert intent == _NULL_INTENT
+    assert intent == _NULL_INTENT and clar is None
 
 
 def test_parse_normalization_ning_kong_wu_zao():
@@ -107,7 +109,7 @@ def test_parse_normalization_ning_kong_wu_zao():
         },
         ensure_ascii=False,
     )
-    _, intent = parse_understand_response(text)
+    _, intent, _clar = parse_understand_response(text)
     assert intent == {
         "metric_mention": None,
         "dimensions": None,
@@ -125,9 +127,53 @@ def test_parse_coerces_list_fields_from_scalars():
         dimensions="按月份",
         filters=[2023, "", "  已结束  ", {"坏": "元素"}],
     )
-    _, intent = parse_understand_response(text)
+    _, intent, _clar = parse_understand_response(text)
     assert intent["dimensions"] == ["按月份"]
     assert intent["filters"] == ["2023", "已结束"]
+
+
+# ── M8 票 03：第三元（澄清问句，宁空勿造在解析层的形态）─────────────
+
+
+def _full(payload: dict) -> str:
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def test_parse_clarification_returns_third_element():
+    text = _full({"question": "哪个指标的口径？",
+                  "intent": {"output_form": "百分比"},
+                  "clarification": "「表现」指成绩还是违约率？"})
+    q, intent, clar = parse_understand_response(text)
+    assert q == "哪个指标的口径？"
+    assert intent["output_form"] == "百分比"
+    assert clar == "「表现」指成绩还是违约率？"
+
+
+def test_parse_clarification_ning_kong_wu_zao_forms():
+    """宁空勿造：缺失/空串/空白/非字符串一律 None——「完全歧义」之外不产。"""
+    for bad in (None, "", "   ", True, 123, [], {}):
+        payload = {"question": "改写", "intent": {}}
+        if bad is not None:
+            payload["clarification"] = bad
+        _, intent, clar = parse_understand_response(_full(payload))
+        assert clar is None, f"坏形态 {bad!r} 不得被采信"
+        assert intent == _NULL_INTENT  # 顺带钉：六字段照常归一
+
+
+def test_parse_clarification_orthogonal_to_question_failure():
+    """模型丢改写只留澄清问：question 原文回退（不发明），澄清照常收——
+    路由端 answer 直达 END，回退出来的 JSON 原文永不喂给 generate。"""
+    text = _full({"clarification": "按入学年还是毕业年算？"})
+    q, intent, clar = parse_understand_response(text)
+    assert intent is None
+    assert clar == "按入学年还是毕业年算？"
+    assert q == text
+
+
+def test_parse_fallback_states_never_produce_clarification():
+    """回退态不产澄清：纯文本、坏 JSON 的第三元恒 None（半截契约不采信）。"""
+    assert parse_understand_response("到底算哪个？请补充")[2] is None
+    assert parse_understand_response('{"clarification": "半截"')[2] is None
 
 
 # ── 节点级：understand 回退不写 attempts、不烧预算 ────────────────
