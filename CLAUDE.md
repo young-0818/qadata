@@ -27,6 +27,9 @@ qadata serve --port 8000   # 单进程起 API＋页面；智能体真空启动�
 # M8 票 02 值采样（默认关）：QADATA_VALUE_SAMPLING=1 在 schema 上下文为最终入选表附列取值样本块
 #   （有界窗口 DISTINCT 防大表全扫；低基数全枚举、高基数给存储形态示例；窗口外如实漏；一切失败静默跳列；
 #   关态零采样查询、schema 上下文逐字节一致有专测 tests/test_value_sampling.py）。
+#   **判负成文（2026-09-15）**：A3 活靶单靶翻案＝机制有效；但 qwen＋BIRD 考面上值域病自愈/迁移
+#   （447 迁列路径、326 迁 JOIN 语义、1330 自愈），20 题切片 Δ−3 全落 gold 清奇族噪声漂移、零翻案
+#   → 默认保持关、代码测试留仓（生产库无 database_description 兜底时开闸即用）；判例链见 .scratch/qadata-m8/票02。
 # M5 指标层（票 05，默认关）：QADATA_METRIC_LAYER=1 开命中路径（ask/eval 共用，注册表按库名寻址 metrics/<db>.yaml）；
 # 关时与纯 Text-to-SQL 现状**在路由/调用数/账本/评测字段上**逐行为一致（评测 path 恒 fallback；
 # 票 07 E1 三节展示形态与开关无关、两态共用，判分在结果集层不读 conclusion）。轨道① on/off 配对须同模型同时段。
