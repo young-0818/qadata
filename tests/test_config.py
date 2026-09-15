@@ -23,6 +23,7 @@ def _isolate_env(monkeypatch):
     monkeypatch.delenv("QADATA_PRECISE_TEMPERATURE", raising=False)
     monkeypatch.delenv("QADATA_METRIC_LAYER", raising=False)
     monkeypatch.delenv("QADATA_METRICS_DIR", raising=False)
+    monkeypatch.delenv("QADATA_VALUE_SAMPLING", raising=False)
 
 
 def test_load_settings_reads_env(monkeypatch):
@@ -158,6 +159,25 @@ def test_bad_metric_layer_rejected(monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
     monkeypatch.setenv("QADATA_METRIC_LAYER", "maybe")
     with pytest.raises(RuntimeError, match="QADATA_METRIC_LAYER"):
+        load_settings()
+
+
+def test_value_sampling_defaults_off(monkeypatch):
+    """M8 票 02：值采样默认关（关态 schema 上下文逐字节一致是专测面）。"""
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    assert load_settings().value_sampling is False
+
+
+def test_value_sampling_env_on(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setenv("QADATA_VALUE_SAMPLING", "1")
+    assert load_settings().value_sampling is True
+
+
+def test_bad_value_sampling_rejected(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setenv("QADATA_VALUE_SAMPLING", "maybe")
+    with pytest.raises(RuntimeError, match="QADATA_VALUE_SAMPLING"):
         load_settings()
 
 

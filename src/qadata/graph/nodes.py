@@ -208,7 +208,8 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         conn = open_readonly(state["db_path"])
         try:
             ctx = build_schema_context(conn, state["question"], llm=llm, tracer=tracer,
-                                       db_path=state["db_path"], limiter=limiter)
+                                       db_path=state["db_path"], limiter=limiter,
+                                       sample_values=s.value_sampling)
         finally:
             conn.close()
         _emit("explore", len(state.get("attempts", [])), "取到 Schema")

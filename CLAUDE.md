@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # 环境：.venv 为 editable 安装（pip install -e ".[dev]"），git bash 无需激活即可用：
-.venv/Scripts/python -m pytest                 # 全部测试（当前 511 个，必须全绿）
+.venv/Scripts/python -m pytest                 # 全部测试（当前 528 个，必须全绿）
 .venv/Scripts/python -m pytest tests/test_eval_match.py::test_xxx   # 单个测试
 .venv/Scripts/python -m ruff check src tests   # lint（另有 ruff format）
 
@@ -24,6 +24,9 @@ qadata eval --questions data/bird/dev/dev.json --db-dir data/bird/dev/dev_databa
 qadata report --baseline runs/A.jsonl --current runs/B.jsonl --types runs/m4-attribution.jsonl  # 两轮 diff＋题型切片
 # M7-rev2 web demo（票 02.5）：先 cd web && npm install && npm run build（产物 web/dist 由后端同源服务；未构建时 "/" 出诚实占位页），再：
 qadata serve --port 8000   # 单进程起 API＋页面；智能体真空启动零预置，数据 data/agents/<uuid12>/（meta.yaml＋source.sqlite＋sessions/<sid12>.yaml，gitignore）；模型只读展示、真源 .env；票 03 起问数主通道＝POST /api/ask/stream（SSE 进度流）；票 04 起响应含可选 chart 图型字段（判定＝web/charts.py 纯函数）；票 05 起多轮会话落盘（owner 裁 2026-09-14，spec 原内存态作废——重启历史仍在；三层记忆组装＝web/sessions.py，图侧唯一新键 session_context 仅 understand/generate 消费）
+# M8 票 02 值采样（默认关）：QADATA_VALUE_SAMPLING=1 在 schema 上下文为最终入选表附列取值样本块
+#   （有界窗口 DISTINCT 防大表全扫；低基数全枚举、高基数给存储形态示例；窗口外如实漏；一切失败静默跳列；
+#   关态零采样查询、schema 上下文逐字节一致有专测 tests/test_value_sampling.py）。
 # M5 指标层（票 05，默认关）：QADATA_METRIC_LAYER=1 开命中路径（ask/eval 共用，注册表按库名寻址 metrics/<db>.yaml）；
 # 关时与纯 Text-to-SQL 现状**在路由/调用数/账本/评测字段上**逐行为一致（评测 path 恒 fallback；
 # 票 07 E1 三节展示形态与开关无关、两态共用，判分在结果集层不读 conclusion）。轨道① on/off 配对须同模型同时段。
@@ -60,7 +63,7 @@ question → understand →〔metric_match〕→ explore → generate → execut
 - `graph/prompts.py`：SYSTEM_RULES 永远位于 prompt 最前端（吃前缀缓存，动态内容只能追加尾部），含口径规则（禁格式化输出、只选问题需要的列、题面明示精度/百分比形态时从题面——M4-D 规则 5，228 探针实证）；`format_failure_history` 失败历史段（含修复建议）；`strip_conclusion_prefix` 防复读（剥多层）；`format_session_history`/`format_session_draft`（M7 票 05：L2→understand、L1→generate 尾草稿渲染，零 LLM 确定性拼装，空块＝关态逐字节一致）。
 - `graph/build.py`：`_route_after_execute`/`_route_after_verify` 为纯函数路由（独立测试）；`run_question` 是最外层守护——任何裸异常收敛为诚实失败的 `Answer`；票 03：末位可选参 `on_event`（节点级进度帧 `{node, attempt, status}`）沿 `build_graph→make_nodes` 闭包注入——缺省 None＝零包装逐行为一致（专测 `tests/test_on_event.py` 钉死：关态双跑、CLI/eval 调用面源码出现 on_event 即红、假模型完整帧序列含失败→重试→成功与预算耗尽形态）。
 - 沙箱四层：① `tools/db.py::open_readonly` 只读连接唯一入口（URI 转义）② `tools/sqlguard.py` sqlglot 语句校验（解析→单语句→根白名单→表名校验；另供 `used_tables` 纯函数给 respond 数据依据节——显示辅助，认不出返回空表绝不抛，拒绝语义仍归 validate_sql，空名表节点的历史拒绝行为两侧语义各钉死）③ `tools/executor.py` 资源层（progress handler 5s 超时中断＋双行数上限：显示 `max_rows`/获取 `fetch_cap=1000`，撞顶用 COUNT(*) 报真值）④ sqlite 物理只读。`list_tables`/`get_schema` 认表也认视图（M3）。
-- `tools/schema.py`：schema 上下文可附 `database_description/{table}.csv` 列注释（BIRD 官方，按选中表注入，`utf-8-sig + errors="replace"` 容错编码）。
+- `tools/schema.py`：schema 上下文可附 `database_description/{table}.csv` 列注释（BIRD 官方，按选中表注入，`utf-8-sig + errors="replace"` 容错编码）；M8 票 02 值采样（`column_value_samples`，默认关）＝对最终入选表按列采样——`SELECT DISTINCT col FROM (SELECT … LIMIT 窗口) ORDER BY LIMIT 11`，文本亲和列、每表 ≤8 列×全局 ≤2000 字确定性裁尾，低基数全枚举（'gold' 大小写病灶）、高基数统一「存储形态示例」不冒充全量（日期分支废除中——真库 A4 区名列被日期正则误判注无意义范围，宁漏勿错），有界窗口把百万行表从 14s 压进毫秒带且双跑同文，一切失败静默跳列（锦上添花不连累本体，`_load_description` 先例）。
 - `eval/`：`bird.py` 跑分器（逐题异常隔离，`--ids` 固定题集，`--out`/`--resume` 断点续跑，逐题 flush；记录含 `gold_sql`/`gold_failed`/`error_class`；M4：`--concurrency` 每题独立分片＋主线程单写者收口合并、非续跑先清遗留分片、`--skip-respond` 评测模式省调用）；`qtypes.py` 题型标签器（规则六类，词边界防误命中，题面优先）；`match.py` 判分 = 顺序无关多重集匹配，`_sort_key` 类型分层是为修 None/数值混排崩溃的假阴性 bug——勿动，回归测试钉死；`report.py` 两轮 diff/变体对比；`variants.py` 变体矩阵驱动（variants.yaml）。
 - `llm/`：OpenAI 兼容网关（temperature=0；精准模式候选>1 时 `build_llm` 切 `precise_temperature`）＋ `invoke_with_backoff`（429/5xx/连接错指数退避重试，鉴权错立即失败）＋ `ratelimit.py` 全局限速器（`--qps`，多线程共享单实例）＋自建 JSONL tracing（不用 LangSmith）。注意：取回复用 `.content`（`timed_invoke` 语义），`str(AIMessage)` 的 repr 转义引号会炸 sqlglot 提取。
 - `cli/main.py`：argparse+rich 薄壳，核心逻辑全在包内；`run_question` 顶层导入以便 monkeypatch；`ask --evidence` 透传业务口径；`serve` 只做参数转交（真逻辑在 `web/serve.py`：load_settings→build_llm 共享实例→create_app）。

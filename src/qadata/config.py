@@ -19,6 +19,7 @@ class Settings:
     precise_temperature: float = 0.3  # 精准模式采样温度（候选>1 时生效；关闭时无效）
     metric_layer: bool = False  # M5 票 05 指标层总开关（False 时管线与纯 SQL 现状逐行为一致）
     metrics_dir: str = "metrics"  # 注册表目录（按库名寻址 metrics/<db>.yaml）
+    value_sampling: bool = False  # M8 票 02 值采样注入（False 时 schema 上下文与现状逐字节一致）
 
 
 def _env_int(name: str, default: int, *, minimum: int | None = None) -> int:
@@ -76,6 +77,7 @@ def load_settings() -> Settings:
         precise_temperature=_env_float("QADATA_PRECISE_TEMPERATURE", 0.3, minimum=0.0),
         metric_layer=_env_bool("QADATA_METRIC_LAYER", False),
         metrics_dir=os.getenv("QADATA_METRICS_DIR", "metrics"),
+        value_sampling=_env_bool("QADATA_VALUE_SAMPLING", False),
     )
 
 
