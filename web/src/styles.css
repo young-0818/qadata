@@ -690,3 +690,10 @@ button:disabled {
   border-radius: 0.8rem;
   background: #fff;
 }
+
+/* M8 票 03 改判：composer 次要按钮（「新话题」＝放弃在途澄清），弱于主按钮存在感 */
+.composer .secondary {
+  border: 1px solid #d1d1d6;
+  background: #fff;
+  color: #48484a;
+}

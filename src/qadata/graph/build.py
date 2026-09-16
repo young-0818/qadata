@@ -1,5 +1,6 @@
 """图组装：M2 带自纠错反馈环（条件边①执行失败重试、②校验可疑重试）。"""
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import Command
 
 from qadata.config import FALLBACK_SETTINGS, Settings, load_settings
 from qadata.graph.nodes import make_nodes
@@ -56,10 +57,11 @@ def _route_after_verify(state: dict, budget: int) -> str:
 
 
 def build_graph(llm, tracer=None, settings: Settings | None = None, limiter=None,
-                skip_respond: bool = False, on_event=None):
+                skip_respond: bool = False, on_event=None, checkpointer=None,
+                hitl: bool = False):
     s = settings or FALLBACK_SETTINGS
     nodes = make_nodes(llm, tracer, settings=s, limiter=limiter, skip_respond=skip_respond,
-                       on_event=on_event)
+                       on_event=on_event, hitl=hitl)
     g = StateGraph(AgentState)
     for name in ("understand", "metric_match", "explore", "generate", "execute",
                  "verify", "respond"):
@@ -94,35 +96,86 @@ def build_graph(llm, tracer=None, settings: Settings | None = None, limiter=None
         {"generate": "generate", "respond": "respond", "explore": "explore"},
     )
     g.add_edge("respond", END)
-    return g.compile()
+    # M8 票 03 改判（经典 HITL）：checkpointer 缺省 None＝compile() 原形（关态/CLI/评测
+    # 零染指）；web 开态传入共享 MemorySaver，澄清节点 interrupt() 的暂停态按 thread 存它。
+    return g.compile(checkpointer=checkpointer)
+
+
+def _final_answer(final: dict) -> Answer:
+    """图终态 → Answer：__interrupt__ 面＝暂停等人（conclusion=澄清问、clarification=同文，
+    failed=False——不是失败）；否则取 final 的 answer（路由保证必有）。"""
+    intr = final.get("__interrupt__")
+    if intr:
+        ask = str((getattr(intr[0], "value", None) or {}).get("clarification") or "").strip()
+        if ask:
+            return Answer(conclusion=ask, clarification=ask)
+        # 暂停面却拿不出问句＝半坏载荷，宁诚实失败不编造（永不编造纪律）
+        return _honest_failure(RuntimeError("澄清暂停载荷缺 clarification 文本"))
+    return final["answer"]
+
+
+def _honest_failure(e: Exception) -> Answer:
+    """最外层守护的失败形态（永不编造：面向 CLI/评测用户给规则化诚实说明）。"""
+    return Answer(
+        conclusion=f"未能完成查询：{e}",
+        sql=None,
+        result=None,
+        failed=True,
+        error_summary=str(e),
+    )
 
 
 def run_question(db_path: str, question: str, evidence: str = "", llm=None,
                  tracer=None, settings: Settings | None = None, limiter=None,
-                 skip_respond: bool = False, on_event=None, session_context=None) -> Answer:
+                 skip_respond: bool = False, on_event=None, session_context=None,
+                 thread_id: str | None = None, checkpointer=None) -> Answer:
     """跑一题到底。on_event（票 03）＝节点级进度回调 `Callable[[dict], None]`，
     帧形如 {node, attempt, status}；缺省 None 时与现状逐行为一致（CLI/eval 调用面
     零改动，专测钉死于 tests/test_on_event.py）。
     session_context（票 05）＝三层记忆载荷 {"turns": [...], "draft": ...|None}，
     仅此透传进初始状态供 understand/generate 消费；缺省 None 时初始状态与本参数
-    存在前逐字节一致（单轮关态钉死于 tests/test_session_context.py）。"""
+    存在前逐字节一致（单轮关态钉死于 tests/test_session_context.py）。
+    thread_id＋checkpointer（M8 票 03 经典 HITL，owner 改判 2026-09-16）：成对给出时
+    澄清走节点内 interrupt() 暂停（invoke 正常返回 __interrupt__ 面→_final_answer 收成
+    澄清 Answer），人类补充经 resume_question 同 thread 续跑；缺省 None＝澄清落 answer
+    直达 END（CLI/eval/无会话单轮形态，与本参数存在前逐行为一致）。"""
+    try:
+        if llm is None:
+            settings = settings or load_settings()
+            llm = build_llm(settings)
+        # 成对纪律在唯一闸口守死（langgraph 会拒收"带 checkpointer 无 thread"的裸跑——
+        # 单轮/CLI/评测自然双双缺省，直 END 形态与本参数存在前逐行为一致）
+        hitl = thread_id is not None and checkpointer is not None
+        graph = build_graph(llm, tracer, settings=settings, limiter=limiter,
+                            skip_respond=skip_respond, on_event=on_event,
+                            checkpointer=checkpointer if hitl else None, hitl=hitl)
+        initial = {"db_path": db_path, "question": question, "evidence": evidence}
+        if session_context is not None:
+            initial["session_context"] = session_context
+        final = (graph.invoke(initial, {"configurable": {"thread_id": thread_id}})
+                 if hitl else graph.invoke(initial))
+        return _final_answer(final)
+    except Exception as e:  # noqa: BLE001 run_question 是最外层守护：有意收敛一切裸异常
+        # 永不编造（面向 CLI 用户）：收敛图内未兜住的裸异常为诚实失败答案。
+        return _honest_failure(e)
+
+
+def resume_question(thread_id: str, supplement: str, llm=None,
+                    tracer=None, settings: Settings | None = None, limiter=None,
+                    skip_respond: bool = False, on_event=None, checkpointer=None) -> Answer:
+    """经典 HITL 续跑（M8 票 03 改判）：人类补充经 Command(resume) 送回暂停 thread，
+    understand 节点重放（＝understand 共 2 次调用的既定代价）后走常规路线。
+    session_context 不用重传——暂停态连记忆一起在 checkpoint 里。守护同 run_question：
+    任何裸异常（含 thread 不存在/无 checkpointer）收敛为诚实失败。"""
     try:
         if llm is None:
             settings = settings or load_settings()
             llm = build_llm(settings)
         graph = build_graph(llm, tracer, settings=settings, limiter=limiter,
-                            skip_respond=skip_respond, on_event=on_event)
-        initial = {"db_path": db_path, "question": question, "evidence": evidence}
-        if session_context is not None:
-            initial["session_context"] = session_context
-        final = graph.invoke(initial)
-        return final["answer"]
-    except Exception as e:  # noqa: BLE001 run_question 是最外层守护：有意收敛一切裸异常
-        # 永不编造（面向 CLI 用户）：收敛图内未兜住的裸异常为诚实失败答案。
-        return Answer(
-            conclusion=f"未能完成查询：{e}",
-            sql=None,
-            result=None,
-            failed=True,
-            error_summary=str(e),
-        )
+                            skip_respond=skip_respond, on_event=on_event,
+                            checkpointer=checkpointer, hitl=True)
+        final = graph.invoke(Command(resume=supplement),
+                             {"configurable": {"thread_id": thread_id}})
+        return _final_answer(final)
+    except Exception as e:  # noqa: BLE001 同 run_question：最外层守护收敛一切裸异常
+        return _honest_failure(e)

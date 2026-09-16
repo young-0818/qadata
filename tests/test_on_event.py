@@ -37,20 +37,25 @@ def _fr(node: str, attempt: int, status: str) -> dict:
 
 
 def test_run_question_signature_tail_default_none():
-    """末位可选参纪律：on_event（票 03）与 session_context（票 05）都在 evidence 之后
-    以缺省 None 的末位参数追加——既有位置参/关键字调用面零改动，CLI/eval 不受影响。
-    （本断言原钉 on_event 为末位；票 05 合法追加后钉"末两位皆缺省 None"。）"""
+    """末位可选参纪律：on_event（票 03）与 session_context（票 05）、thread_id＋checkpointer
+    （M8 票 03 改判＝经典 HITL）都在 evidence 之后以缺省 None 的末位参数追加——
+    既有位置参/关键字调用面零改动，CLI/eval 不受影响。
+    （本断言原钉 on_event 为末位；票 05 合法追加后钉"末两位皆缺省 None"；
+    HITL 改判追加后钉"末四位皆缺省 None"。）"""
     params = list(inspect.signature(run_question).parameters.values())
-    assert params[-1].name == "session_context" and params[-1].default is None
-    assert params[-2].name == "on_event" and params[-2].default is None
+    for tail, want in ((-1, "checkpointer"), (-2, "thread_id"),
+                       (-3, "session_context"), (-4, "on_event")):
+        assert params[tail].name == want and params[tail].default is None
 
 
 def test_cli_and_eval_call_sites_untouched():
-    """票面"CLI/eval 调用面零改动"钉死：两个调用方源码里不得出现 on_event/session_context。"""
+    """票面"CLI/eval 调用面零改动"钉死：两个调用方源码里不得出现进度流/会话/HITL 参数
+    ——澄清在 CLI/评测侧恒走直 END 形态（无 key 可续，暂停无意义），HITL 属 web 专属。"""
     import qadata.cli.main as cli_main
     import qadata.eval.bird as eval_bird
 
-    for name in ("on_event", "session_context"):
+    for name in ("on_event", "session_context", "thread_id", "checkpointer",
+                 "resume_question"):
         assert name not in inspect.getsource(cli_main), name
         assert name not in inspect.getsource(eval_bird), name  # eval 带 skip_respond=True 的路径同样不传
 

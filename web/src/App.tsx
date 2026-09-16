@@ -532,6 +532,15 @@ function AgentPage({
 
 const newSid = () => crypto.randomUUID().replace(/-/g, "").slice(0, 12);
 
+// M8 票 03 改判（经典 HITL）：待答澄清时回放恢复用的最小应答体——14 字段照契约
+// 逐字段摆齐（TS 编译器即钉子：第 15 字段来时这里编译不过，逼两侧同步）
+const pendingAskResp = (ask: string, sid: string): AskResponse => ({
+  conclusion: ask, sql: null, columns: null, rows: null, truncated: null,
+  elapsed_ms: null, failed: false, error_summary: null, path: "fallback",
+  metric_name: null, template_fell_back: false, session_id: sid, chart: null,
+  clarification: ask,
+});
+
 function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
   const [agent, setAgent] = useState<AgentDetail | null>(null);
   const [sid, setSid] = useState(newSid); // 票 05：会话号前端自生成，进页＝新会话
@@ -543,11 +552,17 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
   const [progress, setProgress] = useState<ProgressEvent[]>([]);
   const [err, setErr] = useState("");
   const tailRef = useRef<HTMLDivElement>(null);
-  // M8 票 03：待答澄清 {原问, 澄清问}——续轮无状态前端合成（裁决：服务端 pending 要
-  // 复活写前重载合并＋翻票 09 的 405 钉＋新 spec 修订，三重改卷只换省一次拼接）。
-  // 澄清轮不落盘，会话文件里没有它的踪迹；合成问句自带「补充说明：」标记（防循环闸，
-  // 后端带标记即不再产澄清），题史在合并问句里自证。换会话/重开回放即清。
-  const [awaiting, setAwaiting] = useState<{ question: string; clarify: string } | null>(null);
+  // M8 票 03 改判（owner 裁 2026-09-16）：无状态前端合成退役——澄清暂停态住服务端
+  // checkpoint，下一条消息**原样**发回即自动续答（服务端合成归档）；本状态只是 UI
+  // 提示镜像（composer 提示＋「新话题」按钮），真相以回放接口的 pending 字段为准。
+  const [pendingClarify, setPendingClarify] = useState<string | null>(null);
+
+  // 会话号过刷新存活（sessionStorage＝同标签页语义）：不然刷新即换 sid，
+  // 服务端那份 pending 就没人认领了。新标签页进页＝新会话，票 05 裁决定语不动。
+  function rememberSid(s: string) {
+    sessionStorage.setItem("qadata-sid-" + id, s);
+    setSid(s);
+  }
 
   async function refreshSessions() {
     try {
@@ -558,9 +573,13 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
   }
 
   useEffect(() => {
-    setSid(newSid()); // 换智能体＝新会话（会话绑智能体，spec 票 05）
+    // 换智能体＝新会话（会话绑智能体，spec 票 05）；刷新回来的同一标签页续旧会话
+    // （M8 票 03 改判：不续档则服务端那份 pending 无人认领）
+    const saved = sessionStorage.getItem("qadata-sid-" + id);
+    setSid(saved ?? newSid());
     setMsgs([]);
-    setAwaiting(null); // 换智能体即弃待答澄清（跨会话合成＝串味）
+    setPendingClarify(null);
+    if (saved) loadSession(saved, true);
     getAgent(id).then(setAgent).catch((e: Error) => setErr(e.message));
     refreshSessions();
   }, [id]);
@@ -572,50 +591,60 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
 
   function newConversation() {
     if (busyRef.current) return; // 在途期间不清场（锁的展示面）
-    setSid(newSid()); // 换会话号：当前会话已在侧栏历史里，下一问开新档
+    rememberSid(newSid()); // 换会话号：当前会话已在侧栏历史里，下一问开新档
     setMsgs([]);
-    setAwaiting(null); // 新会话不带上一档的待答澄清
+    setPendingClarify(null); // 新会话不认领上一档的待答澄清（旧 pending 原地过期）
   }
 
-  async function openSession(h: SessionHead) {
-    if (busyRef.current) return;
+  // 会话载入（侧栏点击与刷新恢复共用）：回放＝问答本体（answer 即契约 payload；
+  // trail 属现场观察不入档，owner 裁）；在途澄清不落盘，经 pending 字段恢复成
+  // 末尾两气泡（原问＋待补充的问句）＝M8 票 03 改判。quiet＝刷新自动恢复不弹错。
+  async function loadSession(targetSid: string, quiet: boolean = false) {
     try {
-      const d = await getSession(id, h.id);
-      setSid(h.id);
-      // 回放＝问答本体（answer 即契约 payload；trail 属现场观察不入档，owner 裁）
-      setMsgs(
-        d.turns.flatMap((t): Msg[] => [
+      const d = await getSession(id, targetSid);
+      rememberSid(targetSid);
+      const restored: Msg[] = d.pending
+        ? [{ role: "user", text: d.pending.question },
+           { role: "agent", resp: pendingAskResp(d.pending.clarification, targetSid), trail: [] }]
+        : [];
+      setMsgs([
+        ...d.turns.flatMap((t): Msg[] => [
           { role: "user", text: t.question },
           { role: "agent", resp: t.answer, trail: [] },
         ]),
-      );
-      setAwaiting(null); // 重开回放＝换上下文载入，不携旧待答澄清
+        ...restored,
+      ]);
+      setPendingClarify(d.pending?.clarification ?? null);
       setErr("");
     } catch (e) {
-      setErr(errMsg(e));
+      if (!quiet) setErr(errMsg(e));
     }
   }
 
-  async function send(text: string) {
+  function openSession(h: SessionHead) {
+    if (busyRef.current) return;
+    void loadSession(h.id);
+  }
+
+  async function send(text: string, discard: boolean = false) {
     const q = text.trim();
     if (!q || busyRef.current) return;
     busyRef.current = true;
     setQuestion("");
-    // M8 票 03：有待答澄清＝本条是其续答，合成 原问＋"补充说明："＋澄清问＋答
-    // （无状态前端拼接，用户气泡即合成后全句＝题史自证）；澄清轮未落盘，侧栏计数不涨
-    const asked = awaiting ? `${awaiting.question}补充说明：${awaiting.clarify} ${q}` : q;
-    setAwaiting(null);
-    setMsgs((m) => [...m, { role: "user", text: asked }]);
+    setMsgs((m) => [...m, { role: "user", text: q }]);
+    setPendingClarify(null); // 乐观清提示；若本问又起新澄清（非续答形态）响应后重设
     setPending(true);
     setProgress([]);
     const trail: ProgressEvent[] = [];
     try {
-      // evidence 恒空＝智能体业务知识兜底（口径优先级在后端收口，同票 02.5）
-      const resp = await askStream(id, asked, "", (ev) => {
+      // evidence 恒空＝智能体业务知识兜底（口径优先级在后端收口，同票 02.5）；
+      // 有待答澄清时本条＝补充，服务端合成续跑（M8 票 03 改判，前端不再拼接）；
+      // discard＝用户显式放弃续答，本条按新话题问
+      const resp = await askStream(id, q, "", (ev) => {
         trail.push(ev);
         setProgress([...trail]);
-      }, sid);
-      if (resp.clarification) setAwaiting({ question: asked, clarify: resp.clarification });
+      }, sid, discard);
+      if (resp.clarification) setPendingClarify(resp.clarification);
       setMsgs((m) => [...m, { role: "agent", resp, trail: [...trail] }]);
       refreshSessions(); // 懒建档：首问落盘后侧栏才有这一档
     } catch (e) {
@@ -734,15 +763,29 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
               placeholder={
                 pending
                   ? "正在回答上一个问题…"
-                  : agent
-                    ? `向 ${agent.name} 提问…`
-                    : "加载中…"
+                  : pendingClarify
+                    ? "回答上方澄清问即自动续答；点右侧按钮可另起新话题…"
+                    : agent
+                      ? `向 ${agent.name} 提问…`
+                      : "加载中…"
               }
               disabled={!agent || pending}
             />
             <button type="submit" disabled={!agent || pending || !question.trim()}>
-              提问
+              {pendingClarify ? "补充" : "提问"}
             </button>
+            {/* M8 票 03 改判：有待答澄清时显式放弃＝本条按新话题问（服务端弃 checkpoint 续档） */}
+            {pendingClarify && (
+              <button
+                type="button"
+                className="secondary"
+                disabled={!agent || pending || !question.trim()}
+                onClick={() => send(question, true)}
+                title="放弃这条澄清，把输入作为新话题提问"
+              >
+                新话题
+              </button>
+            )}
           </form>
         </div>
       </main>

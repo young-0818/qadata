@@ -6,6 +6,8 @@ import re
 from datetime import date, datetime
 from pathlib import Path
 
+from langgraph.types import interrupt
+
 from qadata.config import FALLBACK_SETTINGS, Settings
 from qadata.graph.error_hints import error_hint
 from qadata.graph.intent import parse_understand_response
@@ -23,6 +25,7 @@ from qadata.graph.precise import NO_MAJORITY_ERROR, run_precise_batch
 from qadata.graph.prompts import (
     SUPPLEMENT_MARK,
     compose_conclusion,
+    compose_supplement,
     format_failure_history,
     format_session_draft,
     format_session_history,
@@ -115,14 +118,17 @@ def _evidence_caliber(state: dict) -> str:
 
 
 def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
-               skip_respond: bool = False, on_event=None):
+               skip_respond: bool = False, on_event=None, hitl: bool = False):
     """节点工厂：闭包注入 llm/tracer/settings/limiter，便于测试时替换假模型与配置。
     skip_respond：评测模式——成功路径不生成结论文本（判分只读 answer.sql 的执行结果），
     失败诚实汇报与回退重执行不受影响。产品路径（ask/Web）默认 False，全家桶保留。
     on_event（票 03）：节点级进度回调，帧＝{node, attempt, status}——attempt 为该时刻
     已入账的 SQL 尝试数（本轮未入账则停在上一计数，重试环上单调递增）；status 为
     后端单源生成的一行中文（start＝开跑，其余＝该步结果与人读细节，如执行失败带
-    修复建议）。缺省 None 零发射、零包装，与现状逐行为一致。"""
+    修复建议）。缺省 None 零发射、零包装，与现状逐行为一致。
+    hitl（M8 票 03 owner 改判 2026-09-16）：澄清走经典 HITL——understand 节点内
+    interrupt() 暂停等人类（需调用侧配好 checkpointer＋thread_id），缺省 False＝
+    澄清落 answer 直达 END（无会话/CLI/评测形态）。"""
     s = settings or FALLBACK_SETTINGS
 
     def _emit(node: str, attempt: int, status: str) -> None:
@@ -156,10 +162,21 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         attempt = len(state.get("attempts", []))
         if (s.clarification and clarification
                 and SUPPLEMENT_MARK not in state["question"]):
-            # 澄清出口：answer 即澄清问（failed=False——不是失败），路由首判直达 END，
-            # 全程 1 次调用、零沙箱零账本。防循环＝双闸：续轮题面带「补充说明：」标记时
-            # 指令段不加（prompt 侧）＋此处机制版复闸（模型违令产出也不消费——M5 ⑨闸
-            # 教训：指令守不住的，代码兜），续轮必带标记由前端合成保证。
+            # 防循环＝双闸：续轮题面带「补充说明：」标记时指令段不加（prompt 侧）＋
+            # 此处机制版复闸（模型违令产出也不消费——M5 ⑨闸教训：指令守不住的代码兜），
+            # 续轮必带标记由 compose_supplement 单源保证（HITL 恢复态与前端合成同式）。
+            if hitl:
+                # 经典 HITL（owner 改判 2026-09-16）：节点内 interrupt() 暂停等人类——
+                # 首跑即在此抛出（invoke 返回 __interrupt__ 面，暂停＝正常返回、零线程挂等）；
+                # 人类补充经 Command(resume) 到达时本节点从头重放、interrupt() 直接返回补充文本。
+                # 重放＝understand 共 2 次 LLM 调用（langgraph 节点副作用重放的既定代价，
+                # 仍省于跨请求重来：澄清往返 4 call < 前端合成 6 call）。
+                supplement = str(interrupt({"clarification": clarification}) or "").strip()
+                _emit("understand", attempt, "补充已到，继续作答")
+                return {"original_question": state["question"],
+                        "question": compose_supplement(state["question"], clarification,
+                                                       supplement),
+                        "intent": intent}
             _emit("understand", attempt, "口径缺失过大，先澄清一句")
             return {"original_question": state["question"], "question": question,
                     "intent": intent,

@@ -18,7 +18,8 @@ export interface AskResponse {
   session_id: string | null; // 票 05：带会话即回显请求所带 sid；单轮＝null
   chart: ChartSpec | null; // 票 04：后端规则纯函数判定的图型，null＝表格
   clarification: string | null; // M8 票 03（默认关恒 null）：澄清轮问句本体——非失败非答案；
-  // 续问＝前端无状态合成（原问＋「补充说明：」＋澄清问＋用户答），澄清轮后端不落盘
+  // owner 改判 2026-09-16＝经典 HITL：暂停态存服务端 checkpoint，下一条消息自动续答
+  // （前端不再本地合成）；澄清轮不落盘，回放经会话详情 pending 字段恢复
 }
 
 // 票 04 图型判定契约（web/charts.py::decide_chart）：列下标寻址 columns/rows
@@ -162,6 +163,9 @@ export interface SessionTurn {
 export interface SessionDetail {
   id: string;
   turns: SessionTurn[];
+  // M8 票 03 改判（经典 HITL）：在途澄清（服务端指针）——刷新/回放后据此恢复
+  // 「待你补充」形态；null＝无待答。单轮关态恒 null（字段后端只在会话面出）
+  pending: { question: string; clarification: string } | null;
 }
 
 export function listSessions(agentId: string): Promise<SessionHead[]> {
@@ -178,12 +182,14 @@ export function getSession(agentId: string, sid: string): Promise<SessionDetail>
 // 故 fetch＋ReadableStream 手解帧——不引新依赖（状态路由同款纪律）。
 // onProgress 逐帧回调；末帧 event:answer resolve；非 2xx 拒在起流前如实抛出。
 // sessionId（票 05）＝当前会话号：带即装载三层记忆并落盘，缺省单轮。
+// discardPending（M8 票 03 改判）＝有待答澄清时放弃续答、本条按新话题问。
 export async function askStream(
   agentId: string,
   question: string,
   evidence: string,
   onProgress: (ev: ProgressEvent) => void,
   sessionId?: string,
+  discardPending: boolean = false,
 ): Promise<AskResponse> {
   const res = await fetch("/api/ask/stream", {
     method: "POST",
@@ -193,6 +199,7 @@ export async function askStream(
       question,
       evidence,
       session_id: sessionId ?? null,
+      discard_pending: discardPending,
     }),
   });
   if (!res.ok) throw new Error(await errorText(res, "问数失败"));

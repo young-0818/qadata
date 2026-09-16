@@ -21,16 +21,20 @@ session_id（单轮请求维持 agent 级）；历史会话端点供侧栏列表
 import json
 import queue
 import threading
+import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from langgraph.checkpoint.memory import MemorySaver
 from pydantic import BaseModel, Field
 
 from qadata.config import Settings
-from qadata.graph.build import run_question
+from qadata.graph.build import resume_question, run_question
+from qadata.graph.prompts import compose_supplement
 from qadata.tools.db import open_readonly
 from qadata.tools.schema import list_tables
 from qadata.types import Answer
@@ -74,6 +78,9 @@ class AskRequest(BaseModel):
     # 票 05：会话 id（客户端生成 hex12，懒建档——"＋ 新建会话"＝换 id、下一问开新档）；
     # 缺省 None＝单轮关态（三层记忆零注入，与票 04 逐行为一致）
     session_id: str | None = None
+    # M8 票 03 改判（经典 HITL）：带 pending 澄清时显式放弃续答、本条按新话题问；
+    # 无 pending 时无害忽略（请求面放宽不动响应契约）
+    discard_pending: bool = False
 
 
 class AgentCreateRequest(BaseModel):
@@ -97,8 +104,9 @@ def answer_to_payload(answer: Answer, session_id: str | None = None) -> dict[str
     session_id（票 05）＝请求所带会话 id 的回显；单轮请求（无 session_id）照旧 null。
     chart＝decide_chart 规则纯函数对结果集形态的一次裁决（折线/柱/大数卡，
     判不了即 null＝表格）；两端点同经本函数，一判双达不漂移。
-    clarification（M8 票 03，开关关恒 null）＝澄清轮的问句本体——非失败、非答案，
-    续问由前端无状态合成（原问＋「补充说明：」＋澄清问＋答）；澄清轮不落盘。
+    clarification（M8 票 03，开关关恒 null）＝澄清轮的问句本体——非失败、非答案；
+    owner 改判 2026-09-16＝经典 HITL：带会话时此为暂停面（checkpoint 存档，下一条
+    消息自动续答），单轮/CLI 形态仍为直达 END；澄清轮不落盘、字段形状两端点一致。
     """
     res = answer.result
     columns = list(res.columns) if res else None
@@ -135,6 +143,22 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
     sessions = SessionStore(store)  # 票 05：会话住智能体目录内，删智能体连带清会话
     dist = Path(static_dir) if static_dir is not None else Path("web/dist")
     app = FastAPI(title="qadata-web", docs_url=None, redoc_url=None)
+
+    # M8 票 03 改判（经典 HITL，owner 裁 2026-09-16）：澄清暂停态＝图侧 interrupt()
+    # 存档于 checkpointer，续答＝Command(resume) 原 thread 续跑。pending 指针住**进程内**
+    # （key=agent:sid）——不入会话档、不开运行时写入口，票 09 的 405 钉与"写前重载合并
+    # 已裁撤"两条裁决原样存活（当初"三重改卷"之忧，被指针放对位置整个绕开）。
+    # ponytail: MemorySaver＝重启丢在途澄清（单进程自托管约定与在途锁同款）；
+    # 升级路径＝langgraph-checkpoint-sqlite（新依赖＋data/ 落一档），多进程/长跑需要时再装。
+    checkpoint = MemorySaver() if (settings is not None and settings.clarification) else None
+
+    @dataclass
+    class _PendingAsk:
+        thread: str  # checkpoint thread 号（agent:sid:随机尾——每问一新 thread，防终态串档）
+        question: str  # 澄清前的原始问题（合成与回放展示用）
+        ask: str  # 澄清问句
+
+    _pending: dict[str, _PendingAsk] = {}  # 读写均发生在在途锁内（单进程约定）
 
     def _bad(e: AgentStoreError | SessionStoreError) -> HTTPException:
         if isinstance(e, (AgentNotFound, SessionNotFound)):
@@ -250,12 +274,24 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
     def get_session(agent_id: str, sid: str) -> dict[str, Any]:
         try:
             store.get(agent_id)
-            s = sessions.replay(agent_id, sid)
+            p = _pending.get(f"{agent_id}:{sid}")
+            try:
+                s = sessions.replay(agent_id, sid)
+            except SessionNotFound:
+                # M8 票 03 改判：懒建档无档但**有在途澄清**＝空档也放行（首问被反问后
+                # 刷新，pending 是找回它的唯一路径）；无档无 pending 照旧 404 不放。
+                if p is None:
+                    raise
+                s = Session(id=sid)
         except (AgentStoreError, SessionStoreError) as e:
             raise _bad(e) from None
         return {"id": s.id,
                 "turns": [{"question": t["question"], "failed": t["failed"],
-                          "ts": t.get("ts"), "answer": t["answer"]} for t in s.turns]}
+                          "ts": t.get("ts"), "answer": t["answer"]} for t in s.turns],
+                # M8 票 03 改判：在途澄清（进程内指针）——刷新/回放后前端据此恢复
+                # "待你补充"形态；None＝无待答（澄清轮本身照旧不落盘）
+                "pending": None if p is None else
+                {"question": p.question, "clarification": p.ask}}
 
     # ── 问数：唯一入口，智能体定位数据源与默认业务知识 ───────────────
     # 在途锁（票 03→05）：/api/ask 与 /api/ask/stream 共用一把——防阻塞×流式交错。
@@ -300,31 +336,61 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
             raise _bad(e) from None
         return str(path), evidence, meta.name, session
 
-    def _finish_ask(req: AskRequest, session: Session | None, answer: Answer) -> dict[str, Any]:
+    def _finish_ask(req: AskRequest, session: Session | None, answer: Answer,
+                    question: str | None = None) -> dict[str, Any]:
         """两端点共同的收口：契约 payload（session_id 回显）＋会话轮次落盘。
         落盘＝L3 归档追加一轮；失败轮也入账（如实标失败，供下轮消解）。
+        question＝入账题面，缺省取 req.question；HITL 续答轮显式传合成全句
+        （compose_supplement 单源）＝题史在归档里自证。
         M8 票 03：**澄清轮不落盘**——落盘会造出 failed=False 且 sql=None 的第三种
-        轮形态，牵动 _validated_turn/回放契约；代价如实记＝重开回放不见澄清史，
-        题史在前端合成问句里自证（原问＋「补充说明：」＋澄清问＋答）。
+        轮形态，牵动 _validated_turn/回放契约；暂停态住 checkpointer＋进程内指针，
+        重开回放经 pending 字段恢复"待补充"形态（澄清史不再只活在标签页里）。
         写前重载合并原为 PATCH×ask 闸位竞态兜底（双轴评审收紧），票 09 随
         fresh_topic 闸与 PATCH 端点一并裁撤——闸撤后同会话写者只剩受在途锁
         排他的 ask 本身，装载快照即最新状态。"""
         payload = answer_to_payload(answer, session_id=req.session_id)
         if session is not None and not answer.clarification:
-            merged = append_turn(session, req.question, res=answer.result,
+            merged = append_turn(session, question or req.question, res=answer.result,
                                  failed=answer.failed, payload=payload)
             sessions.save(req.agent_id, merged)
         return payload
+
+    def _route_clarification(req: AskRequest, path: str, evidence: str, ctx,
+                             on_event=None) -> tuple[Answer, str]:
+        """经典 HITL 分流（M8 票 03 改判；两端点唯一闸口，在途锁内调用）：
+        有待答澄清且未显式放弃＝本条消息按"补充"续跑原 thread（归档题面＝合成全句）；
+        否则新问——**带会话且开了 checkpoint 才配 thread**（单轮/CLI/评测无 key 可续，
+        照旧直 END 形态）。新问若以澄清收口＝落 pending 指针供下一条续跑。
+        返回 (Answer, 归档题面)。"""
+        pkey = f"{req.agent_id}:{req.session_id}" if req.session_id else None
+        pend = _pending.pop(pkey, None) if pkey else None
+        if req.discard_pending:
+            pend = None
+        if pend is not None:
+            answer = resume_question(pend.thread, req.question.strip(), llm=llm,
+                                     settings=settings, tracer=tracer, on_event=on_event,
+                                     checkpointer=checkpoint)
+            if answer.clarification:  # 不该发生（标记复闸保证续轮必答）；万一即塞回，不装没发生过
+                _pending[pkey] = pend
+            return answer, compose_supplement(pend.question, pend.ask, req.question)
+        # thread 只在有会话＋有 checkpoint 时给；成对纪律由 run_question 闸口守死
+        thread = f"{pkey}:{uuid.uuid4().hex[:8]}" if (pkey and checkpoint) else None
+        answer = run_question(path, req.question, evidence=evidence, llm=llm,
+                              settings=settings, tracer=tracer, on_event=on_event,
+                              session_context=ctx, thread_id=thread, checkpointer=checkpoint)
+        if thread is not None and answer.clarification:
+            _pending[pkey] = _PendingAsk(thread=thread, question=req.question.strip(),
+                                         ask=answer.clarification)
+        return answer, req.question
 
     @app.post("/api/ask")
     def ask(req: AskRequest) -> dict[str, Any]:
         path, evidence, agent_name, session = _resolve_ask_target(req)
         key = _acquire_ask_lock(req, agent_name)
         try:
-            answer = run_question(path, req.question, evidence=evidence,
-                                  llm=llm, settings=settings, tracer=tracer,
-                                  session_context=build_session_context(session) if session else None)
-            return _finish_ask(req, session, answer)
+            answer, turn_q = _route_clarification(
+                req, path, evidence, build_session_context(session) if session else None)
+            return _finish_ask(req, session, answer, question=turn_q)
         finally:
             _release(key)
 
@@ -351,10 +417,9 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
 
         def _runner() -> None:
             try:
-                answer = run_question(path, req.question, evidence=evidence,
-                                      llm=llm, settings=settings, tracer=tracer,
-                                      on_event=events.put, session_context=ctx)
-                box["payload"] = _finish_ask(req, session, answer)
+                answer, turn_q = _route_clarification(req, path, evidence, ctx,
+                                                      on_event=events.put)
+                box["payload"] = _finish_ask(req, session, answer, question=turn_q)
             finally:
                 events.put(sentinel)
                 _release(key)  # 在途＝计算在途：投递侧任何路径不持锁

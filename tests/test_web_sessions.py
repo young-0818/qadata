@@ -276,7 +276,8 @@ def test_replay_shape_qa_only(store, fixture_db):
     ask = client.post("/api/ask",
                       json={"agent_id": a.id, "question": _Q1, "session_id": _SID}).json()
     r = client.get(f"/api/agents/{a.id}/sessions/{_SID}").json()
-    assert r["id"] == _SID and set(r) == {"id", "turns"}  # fresh_topic 出档＝闸已撤（票 09）
+    # 回放形状：id/turns＋M8 票 03 改判的 pending（关态/无在途＝null，形状恒在）
+    assert r["id"] == _SID and set(r) == {"id", "turns", "pending"} and r["pending"] is None
     assert len(r["turns"]) == 1
     t = r["turns"][0]
     assert set(t) == {"question", "failed", "ts", "answer"}  # 回放＝问答本体（trail 不入档）
@@ -303,7 +304,7 @@ def test_single_turn_ask_side_effect_free(store, fixture_db):
     assert client.get(f"/api/agents/{a.id}/sessions").json() == {"sessions": []}
 
 
-# ── M8 票 03：澄清轮不落盘（_finish_ask 见 clarification 跳 append_turn）────────
+# ── M8 票 03 改判（经典 HITL）：澄清暂停→pending 恢复→服务端合成续答→不落盘照旧───
 
 
 def _clar_blob(ask="「表现」指成绩还是违约率？"):
@@ -311,27 +312,79 @@ def _clar_blob(ask="「表现」指成绩还是违约率？"):
                       ensure_ascii=False)
 
 
-def test_clarification_turn_not_persisted(store, fixture_db):
-    """澄清轮跳落盘：不造 failed=False 且 sql=None 的第三种轮形态；懒建档连带
-    意味着澄清轮连会话文件都不出生成。代价如实记＝重开回放不见澄清史（题史在
-    前端合成的问句里自证）。"""
+def test_hitl_clarification_round_trip(store, fixture_db):
+    """暂停态住 checkpoint、指针住进程内：澄清轮照旧不落盘（懒建档连带＝连文件
+    都不生）但回放经 pending 恢复；下一条消息原样发回＝服务端合成续答，归档题面
+    ＝合成全句（题史自证从"前端气泡"迁到"会话档"，更诚实）。"""
     a = _agent_with_datasource(store, fixture_db)
     ask = "按入学年还是毕业年算？"
-    llm = ScriptedLLM([_clar_blob(ask)] + _HAPPY_SCRIPT)
+    llm = ScriptedLLM([_clar_blob(ask), _clar_blob(ask)] + _HAPPY_SCRIPT[1:])
     client = TestClient(create_app(llm=llm, settings=_S_CLAR, agents=store,
                                    static_dir="__no_such_dist_for_tests__"))
     body = client.post("/api/ask",
                        json={"agent_id": a.id, "question": _Q1, "session_id": _SID}).json()
     assert body["clarification"] == ask and body["failed"] is False
+    assert llm.calls == 1  # 暂停＝1 次调用、零沙箱零账本（与直 END 形态同价）
     assert client.get(f"/api/agents/{a.id}/sessions").json() == {"sessions": []}
-    assert not _sessions_dir(store, a.id).exists()  # 懒建档：澄清轮无落盘无档
-    # 续问（前端合成带「补充说明：」标记）正常作答＝首轮入账，轮次只数正式轮
+    assert not _sessions_dir(store, a.id).exists()  # 澄清轮无落盘无档
+    # 懒建档无档＋有 pending＝空档放行（404 闸为恢复让路，无 pending 照旧不放）
+    r = client.get(f"/api/agents/{a.id}/sessions/{_SID}").json()
+    assert r["turns"] == [] and r["pending"] == {"question": _Q1, "clarification": ask}
+    # 续答：消息原样发回，合成与重放在服务端（前端不再拼串）
+    r2 = client.post("/api/ask", json={"agent_id": a.id, "question": "入学年",
+                                       "session_id": _SID}).json()
+    assert r2["clarification"] is None and r2["sql"] is not None
+    assert llm.calls == 4  # 暂停 1＋续跑 3（understand 重放＝HITL 既定代价，如实入账）
+    assert "补充说明：" in llm.prompts[2]  # generate 吃到的题面带标记（防循环闸同源）
     composed = f"{_Q1}补充说明：{ask} 入学年"
-    r2 = client.post("/api/ask",
-                     json={"agent_id": a.id, "question": composed, "session_id": _SID})
-    assert r2.json()["clarification"] is None and r2.json()["sql"] is not None
-    out = client.get(f"/api/agents/{a.id}/sessions").json()["sessions"]
-    assert out[0]["turn_count"] == 1 and out[0]["title"] == composed
+    turn = client.get(f"/api/agents/{a.id}/sessions/{_SID}").json()["turns"][0]
+    assert turn["question"] == composed and turn["answer"]["sql"] == r2["sql"]
+    assert client.get(f"/api/agents/{a.id}/sessions/{_SID}").json()["pending"] is None
+
+
+def test_hitl_discard_pending_asks_fresh(store, fixture_db):
+    """「新话题」通道：discard_pending 弃在途澄清、本条按新问走全新 thread——
+    旧 pending 不会把新话题拼进旧题（盲拼病随无状态合成一并退役）。"""
+    a = _agent_with_datasource(store, fixture_db)
+    ask = "按入学年还是毕业年算？"
+    llm = ScriptedLLM([_clar_blob(ask)] + _HAPPY_SCRIPT)
+    client = TestClient(create_app(llm=llm, settings=_S_CLAR, agents=store,
+                                   static_dir="__no_such_dist_for_tests__"))
+    b1 = client.post("/api/ask",
+                     json={"agent_id": a.id, "question": _Q1, "session_id": _SID}).json()
+    assert b1["clarification"] == ask
+    b2 = client.post("/api/ask", json={"agent_id": a.id, "question": "完全换个题",
+                                       "session_id": _SID, "discard_pending": True}).json()
+    assert b2["clarification"] is None and b2["sql"] is not None
+    turn = client.get(f"/api/agents/{a.id}/sessions/{_SID}").json()["turns"][0]
+    assert turn["question"] == "完全换个题"  # 归档是用户真话，不是合成串
+    assert llm.calls == 4  # 暂停 1＋新问全链 3（不是续答的 3——thread 全新）
+
+
+def test_hitl_pending_survives_on_stream_endpoint(store, fixture_db):
+    """SSE 端点同经 _route_clarification（唯一分流闸口）：暂停→指针→续答两端点同形。"""
+    a = _agent_with_datasource(store, fixture_db)
+    ask = "按入学年还是毕业年算？"
+    llm = ScriptedLLM([_clar_blob(ask), _clar_blob(ask)] + _HAPPY_SCRIPT[1:])
+    client = TestClient(create_app(llm=llm, settings=_S_CLAR, agents=store,
+                                   static_dir="__no_such_dist_for_tests__"))
+    _, data = _parse(client.post("/api/ask/stream", json={"agent_id": a.id,
+                                                          "question": _Q1, "session_id": _SID}).text)[-1]
+    assert data["clarification"] == ask and set(data) == _CONTRACT_KEYS
+    _, data2 = _parse(client.post("/api/ask/stream", json={"agent_id": a.id,
+                                                           "question": "毕业年", "session_id": _SID}).text)[-1]
+    assert data2["clarification"] is None and data2["sql"] is not None
+    assert client.get(f"/api/agents/{a.id}/sessions/{_SID}").json()["turns"][0]["question"] \
+        == f"{_Q1}补充说明：{ask} 毕业年"
+
+
+def test_clarification_off_state_replay_pending_null(store, fixture_db):
+    """关态逐行为一致的形状钉：回放响应带 pending 字段但恒 null；无档无 pending 照旧 404。"""
+    a = _agent_with_datasource(store, fixture_db)
+    client = _client(ScriptedLLM(_HAPPY_SCRIPT), store)
+    client.post("/api/ask", json={"agent_id": a.id, "question": _Q1, "session_id": _SID})
+    assert client.get(f"/api/agents/{a.id}/sessions/{_SID}").json()["pending"] is None
+    assert client.get(f"/api/agents/{a.id}/sessions/000000000000").status_code == 404
 
 
 def test_stream_session_persists_and_echoes(store, fixture_db):
