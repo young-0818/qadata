@@ -272,6 +272,56 @@ def test_respond_failure_path_carries_template_downgrade_note():
     assert "【校验标注】" in c and "- 指标模板「loan_count」执行失败：boom" in c
 
 
+# ── M8 票 07：答案报告化（markdown 结论原样穿三节组装）─────────────
+
+_REPORT = """## 总览
+本月贷款共 3 笔。
+
+- 违约：1 笔
+- 正常：2 笔
+
+| 状态 | 笔数 |
+| --- | --- |
+| B | 1 |
+| C | 2 |"""
+
+
+def test_respond_report_markdown_passes_through_untouched():
+    """版式测：多段 markdown 结论逐字进【结论】节（换行不折叠、表格不重排），
+    代码组装节照旧跟在报告之后。渲染元素实景归前端 Markdown.tsx＋真链路眼验
+    （壳不判卷、CI 纯 Python）——本钉的是后端零改动透传：报告化不碰组装。"""
+    llm = ScriptedLLM([_REPORT])
+    out = make_nodes(llm)["respond"](_respond_state())
+    assert llm.calls == 1  # 报告化零新增调用（纪律 #5）
+    c = out["answer"].conclusion
+    assert c.startswith("【结论】## 总览\n")  # 节头与报告首行同段共存
+    assert "\n| B | 1 |\n" in c              # 表格行原样，不转义不吞竖线
+    assert c.index("【数据依据】") > c.index("| C | 2 |")  # 代码节排在报告后
+
+
+def test_respond_report_section_headers_never_split():
+    """报告正文若含行首【…】（模型违令模仿节头），后端组装不为此改形——
+    分节白名单是前端唯一识别面（App.tsx SECTION_RE 白名单钉见 test_web_markdown）。"""
+    llm = ScriptedLLM(["## 小结\n【已完成】放款 3 笔。\n【未完成】催收 1 笔。"])
+    c = make_nodes(llm)["respond"](_respond_state())["answer"].conclusion
+    assert llm.calls == 1
+    assert "【已完成】放款 3 笔。" in c  # 载荷层不吞不改（前端白名单不当它节头）
+    assert c.count("【数据依据】") == 1  # 真节头唯一，由 compose_conclusion 单源产出
+
+
+def test_respond_long_report_not_truncated():
+    """超长策略如实记：**不截断**——报告长度被预览行输入天然有界，中间截断会切坏
+    markdown 形态（表格/围栏半具尸）；权威数字在结果表，与报告漂移可对照。本钉＝
+    超长结论原样过节点，无任何静默砍尾。"""
+    long_report = "## 长报告\n" + "\n".join(f"- 第 {i} 条发现：数值 {i}" for i in range(500))
+    llm = ScriptedLLM([long_report])
+    ans = make_nodes(llm)["respond"](_respond_state())["answer"]
+    assert llm.calls == 1
+    assert ans.conclusion.endswith("【数据依据】共取到 1 行（全部列示）；所用表：students")
+    assert "- 第 499 条发现：数值 499" in ans.conclusion  # 末行在场＝没被砍
+    assert len(ans.conclusion) > len(long_report)
+
+
 def test_last_good_sql_derived_from_attempts():
     from qadata.graph.nodes import _last_good_sql
     from qadata.types import SqlAttempt

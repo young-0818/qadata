@@ -45,11 +45,22 @@ def test_respond_prompt_contains_all_parts():
         assert part in p
 
 
-def test_respond_prompt_asks_only_one_line_conclusion():
-    """票 07：数据依据/口径说明/校验标注改由代码确定性拼接，模型只出一句话结论。"""
+def test_respond_prompt_asks_for_freeform_report():
+    """M8 票 07 报告化：索要「报告式总结＋量化发现」，不再要一句话（旧钉翻正）；
+    不套固定骨架＝指令里不得出现结构模板/字数骨架。"""
     p = respond_prompt(question="Q", sql="SELECT 1", rows_table="| a |", total=5, n=2)
-    assert "一句话结论" in p
+    assert "报告式总结" in p and "量化" in p
+    assert "一句话结论" not in p
     assert "简述数据依据" not in p  # 勿再索要——模型代劳数据依据会掺编造
+    assert "禁止编造" in p          # 数字仍只准来自结果集（永不编造不破）
+    assert "【】" in p              # 系统节头勿模仿（前端白名单是机制闸，此为纵深）
+
+
+def test_respond_prompt_keeps_token_cost_out_of_report():
+    """票 06 边界承袭（spec §3）：token/费用数字不进答案内容——指令显式排除。"""
+    p = respond_prompt(question="Q", sql="SELECT 1", rows_table="| a |", total=5, n=2)
+    assert "token" in p and "费用" in p  # 以「不要提」的形式在场
+    assert "不要提 token/耗时/费用" in p
 
 
 # ── M5 票 07：E1 三节组装（纯函数）────────────────────────────────

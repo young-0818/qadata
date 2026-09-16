@@ -22,6 +22,9 @@ import {
   uploadDatasource,
 } from "./api";
 import { ResultChart } from "./Chart";
+// M8 票 07 答案报告化：【结论】＝自由成文的 markdown 小报告，走子集安全渲染器
+// （纯文本插值、零 raw HTML——纪律钉 tests/test_web_markdown.py）。
+import { Markdown } from "./Markdown";
 // M8 票 06：帧词汇表（NODE/TOOL 标签）与任务控制台同单一源（Console.tsx），
 // 聊天气泡里的「工作过程」折叠与控制台读同一份帧、贴同一套签——两处字面漂移即违宪。
 import { Console, NODE_LABELS, TOOL_LABELS } from "./Console";
@@ -85,11 +88,15 @@ interface Section {
   body: string;
 }
 
-// 对齐 compose_conclusion（票 07）排版：每节以【节头】起行
-const SECTION_RE = /^【(.+?)】(.*)$/;
+// 对齐 compose_conclusion（票 07）排版：每节以【节头】起行。
+// M8 票 07 报告化后结论正文自由成文——分节白名单**只认后端实际产出的四个节头**
+// （单源一致钉见 tests/test_web_markdown.py）：模型违令在报告里模仿【】或写
+// 【已完成】式叙事，也不再被误切成节（机制闸不靠指令，M5 ⑨闸教训同款）。
+const SECTION_RE = /^【(结论|数据依据|口径说明|校验标注)】(.*)$/;
 
 // 票 04 分节折叠：结论与校验标注常开（诚实信息不打折），数据依据/口径说明可折
-// （支撑细节收起来让答案可读）；未知节头一律常开渲染——折叠名单之外的内容不许消失。
+// （支撑细节收起来让答案可读）。M8 票 07 白名单收紧后「未知节头」一径已不存在——
+// 白名单外的【…】不再成节、并入前节正文＝折叠名单之外的内容照样不许消失。
 const FOLD_SECTIONS = new Set(["数据依据", "口径说明"]);
 
 function parseSections(conclusion: string): Section[] {
@@ -165,6 +172,14 @@ function AnswerBubble({
         !s.title ? (
           <div className="section-body" key={i}>
             {s.body}
+          </div>
+        ) : s.title === "结论" ? (
+          // 票 07：结论＝报告式总结走 markdown 子集渲染器；其余节是代码组装纯文本照旧
+          <div className="section" key={i}>
+            <span className="section-title">结论</span>
+            <div className="section-body md">
+              <Markdown text={s.body} />
+            </div>
           </div>
         ) : FOLD_SECTIONS.has(s.title) ? (
           <details className="section-fold" key={i}>
