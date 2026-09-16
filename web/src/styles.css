@@ -676,6 +676,39 @@ button:disabled {
   font-size: 0.72rem;
 }
 
+/* 票 04 反馈：ghost 小按钮，投后禁用＋选中高亮（不靠颜色单传——emoji 即语义） */
+.feedback {
+  display: flex;
+  gap: 0.35rem;
+  margin-top: 0.4rem;
+}
+.feedback button {
+  padding: 0.1rem 0.5rem;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  border: 1px solid #d2d2d7;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: #48484d;
+  filter: grayscale(0.5);
+}
+.feedback button:hover:not(:disabled) {
+  filter: none;
+  border-color: #2f6feb;
+}
+.feedback button:disabled {
+  background: transparent;
+  cursor: not-allowed;
+  opacity: 0.45;
+  filter: grayscale(1);
+}
+.feedback button.on {
+  filter: none;
+  opacity: 1;
+  border-color: #2f6feb;
+  background: #eaf0ff;
+}
+
 /* 入坞后的 composer：不再需要顶部分隔线（dock 自带留白） */
 .composer {
   display: flex;

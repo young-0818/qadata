@@ -6,6 +6,7 @@ import {
   ModelCard,
   ProgressEvent,
   SessionHead,
+  Vote,
   askStream,
   createAgent,
   deleteAgent,
@@ -16,6 +17,7 @@ import {
   listRegistries,
   listSessions,
   patchAgent,
+  postFeedback,
   uploadDatasource,
 } from "./api";
 import { ResultChart } from "./Chart";
@@ -36,9 +38,11 @@ type View =
   | { page: "agent"; id: string }
   | { page: "chat"; id: string };
 
+// 票 04：agent 气泡带 ts（回放轮自带；当场轮问完回查会话档补上）——反馈票的锚点，
+// null＝投不了（单轮/澄清暂停/回查失败），按钮不出现
 type Msg =
   | { role: "user"; text: string }
-  | { role: "agent"; resp: AskResponse; trail: ProgressEvent[] }
+  | { role: "agent"; resp: AskResponse; trail: ProgressEvent[]; ts: string | null }
   | { role: "error"; text: string; trail: ProgressEvent[] };
 
 // 票 03 进度流行头标签（展示层稳定映射）：status 文案后端单源，未知节点名直显
@@ -117,7 +121,17 @@ function ResultTable({ columns, rows }: { columns: string[]; rows: unknown[][] }
   );
 }
 
-function AnswerBubble({ resp, trail }: { resp: AskResponse; trail: ProgressEvent[] }) {
+function AnswerBubble({
+  resp,
+  trail,
+  feedback,
+  onFeedback,
+}: {
+  resp: AskResponse;
+  trail: ProgressEvent[];
+  feedback?: Vote;
+  onFeedback?: (v: Vote) => void; // 缺省＝不可投（无 ts 锚点：单轮/澄清暂停/回查失败）
+}) {
   const sections = parseSections(resp.conclusion);
   // 单一守卫：图型判定存在且行列在场才画（answer_to_payload 失败态三者同 null，
   // 此处只兜形状完整性，不做第二处复测）
@@ -177,6 +191,30 @@ function AnswerBubble({ resp, trail }: { resp: AskResponse; trail: ProgressEvent
         {/* 票 05：session_id 出真值＝本轮活在会话里；null＝单轮请求照旧 */}
         <span>· {resp.session_id === null ? "单轮" : "会话"}</span>
       </div>
+      {/* M8 票 04：一票评价进旁挂票档（错题可攒卷）；投后禁用＋高亮＝改票走后端追加末票，
+          前端不做二次入口 */}
+      {onFeedback && (
+        <div className="feedback">
+          <button
+            type="button"
+            className={feedback === "up" ? "on" : ""}
+            disabled={feedback !== undefined}
+            onClick={() => onFeedback("up")}
+            title="答案对了"
+          >
+            👍
+          </button>
+          <button
+            type="button"
+            className={feedback === "down" ? "on" : ""}
+            disabled={feedback !== undefined}
+            onClick={() => onFeedback("down")}
+            title="答案不对"
+          >
+            👎
+          </button>
+        </div>
+      )}
       {/* 票 03：当场看过的自纠错不随答案落地而蒸发——收成折叠留档 */}
       {trail.length > 0 && (
         <details className="trail">
@@ -549,6 +587,8 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
   const [pending, setPending] = useState(false); // 在途锁前端侧：流式未结束锁一切发送
   const busyRef = useRef(false); // 同帧双发防呆：setPending 是异步的，闭包 pending 会失效
   const [msgs, setMsgs] = useState<Msg[]>([]);
+  // M8 票 04：ts → 票（回放轮从档内 feedback 播种，当场轮投后本地更新）
+  const [votes, setVotes] = useState<Record<string, Vote>>({});
   const [progress, setProgress] = useState<ProgressEvent[]>([]);
   const [err, setErr] = useState("");
   const tailRef = useRef<HTMLDivElement>(null);
@@ -593,7 +633,18 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
     if (busyRef.current) return; // 在途期间不清场（锁的展示面）
     rememberSid(newSid()); // 换会话号：当前会话已在侧栏历史里，下一问开新档
     setMsgs([]);
+    setVotes({}); // 票 04：投票镜像随会话换场清零
     setPendingClarify(null); // 新会话不认领上一档的待答澄清（旧 pending 原地过期）
+  }
+
+  // M8 票 04：投一票（旁挂档，与在途锁零交叠——回答中也可投票，后端不同文件不同锁）
+  async function vote(ts: string, v: Vote) {
+    try {
+      await postFeedback(id, sid, ts, v);
+      setVotes((s) => ({ ...s, [ts]: v }));
+    } catch (e) {
+      setErr(errMsg(e)); // 后端拒绝如实展示（无档/无轮＝404 文案原样）
+    }
   }
 
   // 会话载入（侧栏点击与刷新恢复共用）：回放＝问答本体（answer 即契约 payload；
@@ -603,14 +654,17 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
     try {
       const d = await getSession(id, targetSid);
       rememberSid(targetSid);
+      const seeded: Record<string, Vote> = {};
+      for (const t of d.turns) if (t.ts && t.feedback) seeded[t.ts] = t.feedback;
+      setVotes(seeded); // 票 04：已投轮高亮回放
       const restored: Msg[] = d.pending
         ? [{ role: "user", text: d.pending.question },
-           { role: "agent", resp: pendingAskResp(d.pending.clarification, targetSid), trail: [] }]
+           { role: "agent", resp: pendingAskResp(d.pending.clarification, targetSid), trail: [], ts: null }]
         : [];
       setMsgs([
         ...d.turns.flatMap((t): Msg[] => [
           { role: "user", text: t.question },
-          { role: "agent", resp: t.answer, trail: [] },
+          { role: "agent", resp: t.answer, trail: [], ts: t.ts },
         ]),
         ...restored,
       ]);
@@ -645,7 +699,19 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
         setProgress([...trail]);
       }, sid, discard);
       if (resp.clarification) setPendingClarify(resp.clarification);
-      setMsgs((m) => [...m, { role: "agent", resp, trail: [...trail] }]);
+      // 票 04：当场气泡也要可投——ts 住在后端轮次档案里（契约 14 字段不带，改形状＝改卷），
+      // 回查一次会话档拿末轮 ts（本地文件读、零 LLM；同会话在途锁保证末轮即本轮）。
+      // 澄清轮不落盘＝没有末轮可锚，跳过。回查失败如实降级＝本轮暂不可投，不拦答案呈现。
+      let ts: string | null = null;
+      if (resp.session_id && !resp.clarification) {
+        try {
+          const d = await getSession(id, resp.session_id);
+          ts = d.turns.length > 0 ? d.turns[d.turns.length - 1].ts : null;
+        } catch {
+          /* 拿不到 ts＝不可投，不伪装成功也不炸对话 */
+        }
+      }
+      setMsgs((m) => [...m, { role: "agent", resp, trail: [...trail], ts }]);
       refreshSessions(); // 懒建档：首问落盘后侧栏才有这一档
     } catch (e) {
       // 永不编造：链路错误如实展示，不伪装成答案；半截进度也如实留在错误里
@@ -724,7 +790,13 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
                   )}
                 </div>
               ) : (
-                <AnswerBubble resp={m.resp} trail={m.trail} key={i} />
+                <AnswerBubble
+                  resp={m.resp}
+                  trail={m.trail}
+                  key={i}
+                  feedback={m.ts ? votes[m.ts] : undefined}
+                  onFeedback={m.ts ? (v) => vote(m.ts as string, v) : undefined}
+                />
               ),
             )}
             {pending && (

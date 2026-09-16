@@ -45,6 +45,7 @@ from qadata.web.agents import (
     AgentStoreError,
 )
 from qadata.web.charts import decide_chart
+from qadata.web.feedback import FeedbackError, append_vote, latest_votes
 from qadata.web.sessions import (
     Session,
     SessionNotFound,
@@ -86,6 +87,14 @@ class AskRequest(BaseModel):
 class AgentCreateRequest(BaseModel):
     name: str
     description: str = ""
+
+
+class FeedbackRequest(BaseModel):
+    """M8 票 04：一票评价。ts＝被评轮的落盘时刻（回放接口给出），vote ∈ up/down。
+    反馈只在会话面存活（旁挂票档）——不进 AskResponse 契约、不进记忆与路由。"""
+    session_id: str
+    ts: str
+    vote: str
 
 
 class AgentPatchRequest(BaseModel):
@@ -283,15 +292,46 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
                 if p is None:
                     raise
                 s = Session(id=sid)
-        except (AgentStoreError, SessionStoreError) as e:
+        except (AgentStoreError, SessionStoreError, FeedbackError) as e:
             raise _bad(e) from None
-        return {"id": s.id,
-                "turns": [{"question": t["question"], "failed": t["failed"],
-                          "ts": t.get("ts"), "answer": t["answer"]} for t in s.turns],
+        # M8 票 04：旁挂票合并进回放——轮条目**可选尾键** feedback（chart 单点先例，
+        # 无票轮形状不动、既有回放钉零红；同 ts 多票取末票）
+        votes = latest_votes(store, agent_id, s.id)
+        turns = []
+        for t in s.turns:
+            entry = {"question": t["question"], "failed": t["failed"],
+                     "ts": t.get("ts"), "answer": t["answer"]}
+            if t.get("ts") in votes:
+                entry["feedback"] = votes[t["ts"]]
+            turns.append(entry)
+        return {"id": s.id, "turns": turns,
                 # M8 票 03 改判：在途澄清（进程内指针）——刷新/回放后前端据此恢复
-                # "待你补充"形态；None＝无待答（澄清轮本身照旧不落盘）
+                # “待你补充”形态；None＝无待答（澄清轮本身照旧不落盘）
                 "pending": None if p is None else
                 {"question": p.question, "clarification": p.ask}}
+
+    # ── M8 票 04：反馈面（旁挂票档，独立文件独立锁域）─────────────────
+    # 裁决旁挂维持：不重开 PATCH、会话主档零改动——「会话面无运行时写入口」精神
+    # 未被侵蚀（反馈不进 prompt/记忆/路由/AskResponse 契约）。写者不建会话：
+    # sid 无会话档＝404；ts 回查不中＝票无处附，404。与 ask 在途锁零交叠
+    # （不同文件不同锁，投票在回答中也可提交）。
+
+    @app.post("/api/agents/{agent_id}/feedback")
+    def post_feedback(agent_id: str, req: FeedbackRequest) -> dict[str, bool]:
+        try:
+            s = sessions.replay(agent_id, req.session_id)
+        except (AgentStoreError, SessionStoreError) as e:
+            raise _bad(e) from None
+        turn = next((t for t in s.turns if t.get("ts") == req.ts), None)
+        if turn is None:
+            raise HTTPException(status_code=404,
+                                detail=f"会话 {req.session_id} 无此轮（ts={req.ts}）")
+        try:
+            append_vote(store, agent_id, req.session_id, ts=req.ts, vote=req.vote,
+                        question=turn["question"], sql=turn["answer"].get("sql"))
+        except FeedbackError as e:
+            raise _bad(e) from None
+        return {"ok": True}
 
     # ── 问数：唯一入口，智能体定位数据源与默认业务知识 ───────────────
     # 在途锁（票 03→05）：/api/ask 与 /api/ask/stream 共用一把——防阻塞×流式交错。

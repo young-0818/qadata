@@ -35,7 +35,7 @@ SESSION_MEMORY_K = 5
 # 结果头部摘要的行数上限（喂 L1/L2 的记忆行，远小于显示行数——全量行不进上下文）
 HEAD_ROWS = 3
 
-_SESSIONS_SUBDIR = "sessions"
+SESSIONS_SUBDIR = "sessions"  # 票 04 起对 feedback 公开（旁挂档同目录单源，防两处字面量漂移）
 
 
 class SessionStoreError(ValueError):
@@ -161,7 +161,7 @@ class SessionStore:
             raise AgentNotFound(f"智能体不存在：{agent_id}")
 
     def _sessions_root(self, agent_id: str) -> Path:
-        return self._agents.agent_dir(agent_id) / _SESSIONS_SUBDIR
+        return self._agents.agent_dir(agent_id) / SESSIONS_SUBDIR
 
     def _file_of(self, agent_id: str, sid: str) -> Path:
         return self._sessions_root(agent_id) / f"{sid}.yaml"

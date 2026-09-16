@@ -74,6 +74,13 @@ def main(argv: list[str] | None = None) -> int:
     p_serve.add_argument("--agents-dir", default=DEFAULT_AGENTS_DIR,
                          help=f"智能体数据目录（每智能体一子目录 meta.yaml＋source.sqlite；默认 {DEFAULT_AGENTS_DIR}）")
 
+    p_fb = sub.add_parser("feedback-export",
+                          help="导出反馈票（M8 票 04）：扫旁挂票档×会话档出 JSONL，供人审手工成卷")
+    p_fb.add_argument("--agents-dir", default=DEFAULT_AGENTS_DIR,
+                      help=f"智能体数据目录（默认 {DEFAULT_AGENTS_DIR}）")
+    p_fb.add_argument("--out", default=None,
+                      help="输出 JSONL（默认 runs/feedback-<YYYYMMDD>.jsonl）")
+
     p_report = sub.add_parser("report", help="两轮评测对比：qadata report --baseline A --current B")
     p_report.add_argument("--baseline", required=True)
     p_report.add_argument("--current", required=True)
@@ -133,6 +140,19 @@ def main(argv: list[str] | None = None) -> int:
         from qadata.web.serve import run_server  # 薄壳：逻辑全在包内
 
         run_server(host=args.host, port=args.port, agents_dir=args.agents_dir)
+        return 0
+    if args.cmd == "feedback-export":
+        from datetime import datetime
+
+        from qadata.llm.tracing import BEIJING
+        from qadata.web.agents import AgentStore
+        from qadata.web.feedback import export_feedback  # 逻辑全在包内，CLI 薄壳
+
+        out = args.out or f"runs/feedback-{datetime.now(BEIJING):%Y%m%d}.jsonl"
+        n, skipped = export_feedback(AgentStore(args.agents_dir), Path(out))
+        console.print(f"导出 {n} 行票 → {out}"
+                      + (f"（跳过回查不中 {skipped} 行——票在轮不在，如实上报）" if skipped else ""))
+        console.print("提示：产物供人审手工成卷，gold 必须人签——不自动进 tests/*_ids.json")
         return 0
     if args.cmd == "report":
         from qadata.eval.report import (

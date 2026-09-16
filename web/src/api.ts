@@ -153,11 +153,15 @@ export interface SessionHead {
   turn_count: number;
 }
 
+// M8 票 04：反馈票值（后端 VOTES 单源）
+export type Vote = "up" | "down";
+
 export interface SessionTurn {
   question: string;
   failed: boolean;
   ts: string | null;
   answer: AskResponse; // 契约 payload 原样回放（trail 属现场观察，不入档）
+  feedback?: Vote; // 票 04 可选尾键（chart 先例）：该轮末票；缺省＝没投过
 }
 
 export interface SessionDetail {
@@ -176,6 +180,21 @@ export function listSessions(agentId: string): Promise<SessionHead[]> {
 
 export function getSession(agentId: string, sid: string): Promise<SessionDetail> {
   return getJson<SessionDetail>(`/api/agents/${agentId}/sessions/${sid}`);
+}
+
+// M8 票 04：一票评价进旁挂票档（不进会话主档、不进答案契约——裁决旁挂维持）。
+// 同轮再投＝追加末票覆盖（回放取末票），前端投后禁用不再有机会。
+export async function postFeedback(
+  agentId: string,
+  sessionId: string,
+  ts: string,
+  vote: Vote,
+): Promise<void> {
+  await sendJson<{ ok: boolean }>(`/api/agents/${agentId}/feedback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, ts, vote }),
+  });
 }
 
 // 票 03 问数主通道：POST /api/ask/stream（SSE）。EventSource 不支持 POST，
