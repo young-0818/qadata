@@ -160,10 +160,22 @@ export interface ToolEvent {
   duration_ms: number;
 }
 
-export type ProgressEvent = StepEvent | ToolEvent;
+// M8 票 08 思考流：understand/generate 流式旁路的 reasoning_content 增量帧（后端逐
+// chunk 转发、单流累计 ≤2000 字截断）。前端把同节点相邻 thinking 帧并成一块累积文本，
+// 渲进进度面板（治 12~30s 死寂转圈）；不参与「N 步」计数、不进控制台时间线。
+export interface ThinkingEvent {
+  node: string; // 归属步骤（恒 understand/generate）
+  kind: "thinking";
+  text: string; // 该 chunk 的思考文本增量（前端拼接）
+}
+
+export type ProgressEvent = StepEvent | ToolEvent | ThinkingEvent;
 
 export const isToolEvent = (ev: ProgressEvent): ev is ToolEvent =>
   ev.kind === "tool";
+
+export const isThinkingEvent = (ev: ProgressEvent): ev is ThinkingEvent =>
+  ev.kind === "thinking";
 
 // 票 05：会话面（tests/test_web_sessions.py 同构）。sid＝客户端生成的 hex12，
 // 懒建档——"＋ 新建会话"＝换新 sid、下一问开新档；列表只认有轮次的会话。

@@ -1,4 +1,4 @@
-import { AskResponse, ProgressEvent, isToolEvent } from "./api";
+import { AskResponse, ProgressEvent, isThinkingEvent, isToolEvent } from "./api";
 
 // M8 票 06 任务控制台：把票 03 既有进度帧喂厚的纯展示面——架构不动（固定状态机
 // 不是 tool loop），本组件只把帧流摆成 owner 截图形态：概览四卡＋追踪时间线。
@@ -49,6 +49,7 @@ interface Step {
 export function buildSteps(trail: ProgressEvent[]): Step[] {
   const steps: Step[] = [];
   for (const ev of trail) {
+    if (isThinkingEvent(ev)) continue; // 票 08 思考帧属进度面板，不进控制台步骤/时间线（不配当"一步"）
     if (isToolEvent(ev)) {
       // 归属认帧自带 node（开步中同 node 者）——不靠到达序赌时序（双轴评审 (c)2）
       const target = [...steps].reverse().find((s) => s.running && s.node === ev.node);

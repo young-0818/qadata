@@ -70,6 +70,25 @@ def _steps(frames):
     return [f for f in _progress(frames) if f.get("kind") != "tool"]
 
 
+def test_stream_carries_thinking_frames(store, fixture_db):
+    """票 08 传输面：thinking 帧原样过 SSE（形状 {node,kind,text}）、在 understand
+    结果帧之前到达，且不撼动末帧＝14 字段 answer 契约（末帧零动沿票 06）。"""
+    a = _agent_with_datasource(store, fixture_db)
+    think = "先把问题改写成可查的形式"
+    llm = ScriptedLLM(_HAPPY_SCRIPT, reasonings=[think, None, None])
+    res = _client(llm, store).post(
+        "/api/ask/stream", json={"agent_id": a.id, "question": "Bob 成绩如何"})
+    frames = _parse(res.text)
+    thinking = [d for _, d in frames if d.get("kind") == "thinking"]
+    assert thinking and all(set(d) == {"node", "kind", "text"} for d in thinking)
+    assert "".join(d["text"] for d in thinking) == think
+    # 到达序：thinking 属 understand 流式，夹在 understand start 与结果帧之间
+    seq = [d.get("kind") or d.get("status") for _, d in frames]
+    i_start = seq.index("start")
+    assert seq[i_start + 1] == "thinking" and seq[i_start] == "start"
+    assert frames[-1][0] == "answer" and set(frames[-1][1]) == _CONTRACT_KEYS
+
+
 def _strip_ms(frames):
     """剥 duration_ms（计时量防抖），并断言其只在结果/tool 帧上在场。"""
     out = []
@@ -205,11 +224,13 @@ class _GatedLLM(ScriptedLLM):
         self.entered = threading.Event()
         self.gate = threading.Event()
 
-    def invoke(self, prompt):
+    def _next(self, prompt):
+        # 卡在首次调用前——钩在 invoke/stream 共用的记账钩上（M8 票 08 起流式端点首调走
+        # stream()，只钩 invoke 会漏；两端点据此构造"在途"窗口，不依赖真实时延）。
         if self.calls == 0:
             self.entered.set()
             assert self.gate.wait(15), "门未被释放，测试结构失效"
-        return super().invoke(prompt)
+        return super()._next(prompt)
 
 
 def test_inflight_lock_rejects_and_releases(store, fixture_db):

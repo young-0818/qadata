@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from qadata.llm.gateway import invoke_with_backoff
+from qadata.llm.gateway import _is_retryable, backoff_delay, invoke_with_backoff
 
 BEIJING = timezone(timedelta(hours=8))
 
@@ -82,6 +82,17 @@ def extract_usage(message) -> dict:
     }
 
 
+def _log_node(tracer: TraceLogger | None, sink: dict | None, node: str,
+              usage: dict, latency: float) -> None:
+    """节点收口的两处落点（tracer 账本＋当前步 token 累计）——timed_invoke 与
+    timed_stream 共用，防两份字面漂移（tool_frame／compose_supplement 单源先例）。"""
+    if tracer is not None:
+        tracer.log(node, latency_s=latency, **usage)
+    if sink is not None:
+        sink["tin"] += usage["input_tokens"]
+        sink["tout"] += usage["output_tokens"]
+
+
 def timed_invoke(llm, prompt: str, node: str, tracer: TraceLogger | None, limiter=None,
                  sink: dict | None = None) -> str:
     """调用 LLM（带指数退避）并记录该节点的 token 与延迟。返回 response.content。
@@ -91,10 +102,53 @@ def timed_invoke(llm, prompt: str, node: str, tracer: TraceLogger | None, limite
     resp = invoke_with_backoff(llm, prompt, limiter=limiter)
     latency = round(time.perf_counter() - t0, 2)
     if tracer is not None or sink is not None:
-        usage = extract_usage(resp)
-    if tracer is not None:
-        tracer.log(node, latency_s=latency, **usage)
-    if sink is not None:
-        sink["tin"] += usage["input_tokens"]
-        sink["tout"] += usage["output_tokens"]
+        _log_node(tracer, sink, node, extract_usage(resp), latency)
     return resp.content
+
+
+_MAX_STREAM_RETRIES = 3  # 与 invoke_with_backoff 同额度（重试次数不是配置面，别处不变）
+
+
+def timed_stream(llm, prompt: str, node: str, tracer: TraceLogger | None, limiter=None,
+                 sink: dict | None = None, on_event=None, max_thinking: int = 2000,
+                 sleep=time.sleep) -> str:
+    """流式旁路（M8 票 08）：`timed_invoke` 的流式对偶——把 12~30s 死寂转圈变成「看着它想」。
+
+    逐 chunk 把 `reasoning_content` 增量转成 thinking 帧 `{node, kind, text}` 推 on_event
+    （单流累计截断 ≤max_thinking 字防灌 DOM）；收口经 `_log_node` 落成**与 timed_invoke 同形**
+    的 tracer 记录（账本形态不变、零新增调用）＋返回完整 content（同签名同返回）。
+
+    退避窄化：仅**首 token 前**的连接错重开流（此时一帧未发，重连无重复——复用 gateway
+    的 _is_retryable 判据＋ backoff_delay 同一支退避曲线）；首 token 后断流＝如实上抛
+    （thinking 帧不可回收，重播会灌前端——SSE 诚实中断先例）。
+
+    仅 on_event 在场才该调本函数（节点侧以 on_event 分流走本路）；CLI/eval 恒走 timed_invoke，
+    调用面零变化（关态源码扫描姊妹钉，on_event 纪律第三例）。"""
+    t0 = time.perf_counter()
+    for attempt in range(_MAX_STREAM_RETRIES + 1):
+        yielded = False  # 首 token 门：收到任一 chunk 后不再重连
+        try:
+            if limiter is not None:
+                limiter.acquire()
+            parts: list[str] = []
+            thinking_len = 0
+            usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+            for chunk in llm.stream(prompt):
+                yielded = True
+                rc = (getattr(chunk, "additional_kwargs", None) or {}).get("reasoning_content")
+                if rc and on_event is not None and thinking_len < max_thinking:
+                    take = rc[: max_thinking - thinking_len]
+                    thinking_len += len(take)
+                    on_event({"node": node, "kind": "thinking", "text": take})
+                if chunk.content:
+                    parts.append(chunk.content)
+                if getattr(chunk, "usage_metadata", None):
+                    usage = extract_usage(chunk)
+            if tracer is not None or sink is not None:
+                _log_node(tracer, sink, node, usage, round(time.perf_counter() - t0, 2))
+            return "".join(parts)
+        except Exception as e:
+            if yielded or attempt >= _MAX_STREAM_RETRIES or not _is_retryable(e):
+                raise
+            sleep(backoff_delay(attempt))
+    raise AssertionError("timed_stream 循环不可达终点")  # 兜编译器/防御：try 必 return 或 except 必 raise

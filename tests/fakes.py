@@ -14,18 +14,43 @@ class FakeMsg:
         self.usage_metadata = usage
 
 
+class FakeChunk:
+    """流式最小 chunk：.content／.additional_kwargs（含 reasoning_content）／.usage_metadata
+    （与 ReasoningChatOpenAI + timed_stream 消费的 real chunk 契约一致）。"""
+
+    def __init__(self, content="", reasoning=None, usage=None):
+        self.content = content
+        self.additional_kwargs = {"reasoning_content": reasoning} if reasoning else {}
+        self.usage_metadata = usage
+
+
+def _slice(text: str, size: int = 40):
+    """把整段文本切成固定宽度的 chunk（有损为 0：拼接还原即原文）——让流式路径
+    真正经过逐 chunk 累积与截断逻辑，而非退化成单次全量。"""
+    for i in range(0, len(text), size):
+        yield text[i:i + size]
+
+
 class ScriptedLLM:
     """按调用次序发脚本回复的假模型。
     usage（M8 票 06 起可选）＝每回复附带的 usage_metadata dict（token 进帧的
-    非零形钉用）；缺省 None＝无 usage 字段，与今日逐行为一致。"""
+    非零形钉用）；缺省 None＝无 usage 字段，与今日逐行为一致。
+    reasonings（M8 票 08 起可选）＝与 responses 等长的思考文本 list[str|None]：
+    仅 stream() 按 chunk 吐出成 thinking 增量（invoke() 不看它＝思考只在流式路活）；
+    缺省 None＝无思考，stream 与 invoke 内容一致（既有 on_event 测试全序列零扰动）。"""
 
-    def __init__(self, responses: list[str], usage: dict | None = None):
+    def __init__(self, responses: list[str], usage: dict | None = None,
+                 reasonings: list[str | None] | None = None):
         self.responses = list(responses)
         self.usage = usage
+        self.reasonings = (list(reasonings) if reasonings is not None
+                           else [None] * len(self.responses))
         self.calls = 0
         self.prompts: list[str] = []
+        self.stream_used = 0  # 关态姊妹钉：on_event=None 时必须恒 0（流式旁路未被触发）
 
-    def invoke(self, prompt):
+    def _next(self, prompt) -> int:
+        """invoke/stream 共用的记账：收 prompt、推进 calls、越界显式报错（纪律 #5）。"""
         self.prompts.append(str(prompt))
         i = self.calls
         self.calls += 1
@@ -34,4 +59,51 @@ class ScriptedLLM:
                 f"ScriptedLLM 第 {i + 1} 次调用超出脚本长度 {len(self.responses)}"
                 "——请显式补齐脚本，勿依赖循环"
             )
-        return FakeMsg(self.responses[i], self.usage)
+        return i
+
+    def invoke(self, prompt):
+        return FakeMsg(self.responses[self._next(prompt)], self.usage)
+
+    def stream(self, prompt):
+        self.stream_used += 1
+        i = self._next(prompt)
+        think = self.reasonings[i] if i < len(self.reasonings) else None
+        if think:
+            for piece in _slice(think):
+                yield FakeChunk(reasoning=piece)
+        for piece in _slice(self.responses[i]):
+            yield FakeChunk(content=piece, usage=self.usage)
+
+
+class FlakyStreamLLM:
+    """流式退避窄化专测的故障注入假模型（M8 票 08）——`attempts` 计建流次数。
+
+    `pre_fail`＝建流即抛（首 token 前，一帧未发＝可重试重开）；`mid_fail`＝吐出一个
+    chunk 后抛（首 token 后，帧不可回收＝如实炸）；`exc` 选异常类型（ConnectionError＝
+    可重试，ValueError＝不可重试）。
+
+    为何不塞进 ScriptedLLM（纪律 #5 的有意例外）：ScriptedLLM 把 calls↔脚本下标焊死，
+    重连会二次消费脚本，表达不了「同题重开流成功」——本类职责正交（注入流式故障而非
+    回放成功内容），非复制其角色。"""
+
+    def __init__(self, *, pre_fail=0, mid_fail=0, text="hello", think=None,
+                 usage=None, exc=ConnectionError):
+        self.pre_fail = pre_fail
+        self.mid_fail = mid_fail
+        self.text = text
+        self.think = think
+        self.usage = usage
+        self.exc = exc
+        self.attempts = 0
+
+    def stream(self, prompt):
+        self.attempts += 1
+        if self.pre_fail > 0:
+            self.pre_fail -= 1
+            raise self.exc("连接抖动")  # 首 token 前
+        if self.think:
+            yield FakeChunk(reasoning=self.think)
+        yield FakeChunk(content=self.text, usage=self.usage)
+        if self.mid_fail > 0:
+            self.mid_fail -= 1
+            raise self.exc("流中途断")  # 首 token 后

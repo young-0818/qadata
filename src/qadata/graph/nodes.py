@@ -37,7 +37,7 @@ from qadata.graph.prompts import (
     understand_prompt,
 )
 from qadata.graph.verify import verify_result
-from qadata.llm.tracing import BEIJING, timed_invoke, tool_frame
+from qadata.llm.tracing import BEIJING, timed_invoke, timed_stream, tool_frame
 from qadata.tools.db import open_readonly
 from qadata.tools.executor import execute_sql
 from qadata.tools.schema import build_schema_context
@@ -173,6 +173,15 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
 
         return wrapped
 
+    def _llm(prompt: str, node: str) -> str:
+        """M8 票 08：有进度流（on_event 在场）时走流式旁路把思考增量推 thinking 帧，
+        收口 token 与原路同形入账；关态（CLI/eval）恒 timed_invoke——逐字节一致。
+        仅 understand/generate 用（题面里那 12~30s 死寂最该「看着它想」），其余节点照旧。"""
+        if on_event is not None:
+            return timed_stream(llm, prompt, node, tracer, limiter, sink=sink,
+                                on_event=on_event)
+        return timed_invoke(llm, prompt, node, tracer, limiter, sink=sink)
+
     def understand(state: dict) -> dict:
         # 载体 A（M5 票 02）：改写＋六字段意图同调产出，零新增调用；意图只入状态供
         # metric_match 消费（票 05），generate 不读它（尾段注入线④判负已拆，见 graph/intent.py）；
@@ -180,11 +189,10 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         # 票 05：L2 会话历史并进这次改写的 prompt（指代消解复用"补全指代"既有机制，零新增调用）
         # 票 03（M8，默认关）：同一改写调用兼产澄清问（三元组，宁空勿造）——保险丝出口，
         # 关态与今日逐字节一致（prompt 不追加指令段、本节点不写 answer、路由 map 不含 END）。
-        text = timed_invoke(llm, understand_prompt(
+        text = _llm(understand_prompt(
             state["question"], state.get("evidence", ""),
             format_session_history(state.get("session_context")),
-            clarify=s.clarification),
-            "understand", tracer, limiter, sink=sink)
+            clarify=s.clarification), "understand")
         question, intent, clarification = parse_understand_response(text)
         attempt = len(state.get("attempts", []))
         if (s.clarification and clarification
@@ -293,7 +301,7 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
             # 多样性已探针验证）；提取失败的候选丢弃，全灭走提取失败入账路径
             sqls, extract_fails = [], 0
             for _ in range(s.precise_candidates):
-                text = timed_invoke(llm, prompt, "generate", tracer, limiter, sink=sink)
+                text = _llm(prompt, "generate")
                 try:
                     sqls.append(extract_sql(str(text)))
                 except ValueError:
@@ -309,7 +317,7 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
                         "precise_candidates": None}
             _emit("generate", len(state.get("attempts", [])), "生成 SQL")
             return {"current_sql": sqls[0], "last_error": None, "precise_candidates": sqls}
-        text = timed_invoke(llm, prompt, "generate", tracer, limiter, sink=sink)
+        text = _llm(prompt, "generate")
         try:
             sql = extract_sql(str(text))
         except ValueError as e:

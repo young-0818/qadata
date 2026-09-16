@@ -524,6 +524,32 @@ button:disabled {
   }
 }
 
+/* M8 票 08 思考流：合并后的思考块——label 在上、折行正文在下，muted 且限高滚动
+   （后端单流已 ≤2000 字截断，这里只兜一次思考成文的排布，不灌穿面板） */
+.progress-row.thinking {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.15rem;
+}
+
+.progress-row.thinking b {
+  color: #86868b;
+  font-weight: 500;
+}
+
+.progress-row.thinking pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 9rem;
+  overflow-y: auto;
+  color: #86868b;
+  font-size: 0.72rem;
+  font-family: inherit;
+  border-left: 2px solid #e4e4e7;
+  padding-left: 0.5rem;
+}
+
 .trail {
   margin-top: 0.5rem;
   font-size: 0.78rem;

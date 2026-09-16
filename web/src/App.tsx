@@ -8,6 +8,7 @@ import {
   SessionHead,
   Vote,
   askStream,
+  isThinkingEvent,
   isToolEvent,
   createAgent,
   deleteAgent,
@@ -56,6 +57,16 @@ type Msg =
 // 结果行带耗时与红绿标记。status 文案后端单源，未知节点/工具名直显不硬翻译
 // （永不编造纪律的展示面）。
 function ProgressRow({ ev }: { ev: ProgressEvent }) {
+  // M8 票 08 思考流：合并后的思考块（同节点相邻 thinking 已在 onProgress 并成一块）
+  // 渲成 muted 折行文本——治那 12~30s 死寂转圈「看着它想」，不参与步骤计数。
+  if (ev.kind === "thinking") {
+    return (
+      <div className="progress-row thinking">
+        <b>{NODE_LABELS[ev.node] ?? ev.node} · 思考</b>
+        <pre>{ev.text}</pre>
+      </div>
+    );
+  }
   if (ev.kind === "tool") {
     return (
       <div className="progress-row tool">
@@ -80,8 +91,9 @@ function ProgressRow({ ev }: { ev: ProgressEvent }) {
 
 // 票 06 后 trail 含 tool 子事件——「N 步」只数步帧（start＋结果成对，ceil 容断流半对），
 // 混计会稀释"步"语义（双轴评审 (c)1）
+// 票 08 thinking 帧同 tool 帧：不是「步」，计入会稀释步语义（思考块与重试步无关）。
 const stepCount = (trail: ProgressEvent[]) =>
-  Math.ceil(trail.filter((e) => !isToolEvent(e)).length / 2);
+  Math.ceil(trail.filter((e) => !isToolEvent(e) && !isThinkingEvent(e)).length / 2);
 
 interface Section {
   title: string;
@@ -738,7 +750,18 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
       // 有待答澄清时本条＝补充，服务端合成续跑（M8 票 03 改判，前端不再拼接）；
       // discard＝用户显式放弃续答，本条按新话题问
       const resp = await askStream(id, q, "", (ev) => {
-        trail.push(ev);
+        // 票 08：同节点相邻 thinking 帧并成一块（一次思考＝一条折行块，而非几十帧灌满面板）
+        const last = trail[trail.length - 1];
+        if (
+          ev.kind === "thinking" &&
+          last &&
+          last.kind === "thinking" &&
+          last.node === ev.node
+        ) {
+          trail[trail.length - 1] = { ...last, text: last.text + ev.text };
+        } else {
+          trail.push(ev);
+        }
         setProgress([...trail]);
       }, sid, discard);
       if (resp.clarification) setPendingClarify(resp.clarification);

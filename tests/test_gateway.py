@@ -101,7 +101,9 @@ def test_build_llm_precise_mode_uses_precise_temperature(monkeypatch):
         def __init__(self, **kw):
             captured.update(kw)
 
-    monkeypatch.setattr("qadata.llm.gateway.ChatOpenAI", FakeChatOpenAI)
+    # M8 票 08：build_llm 现构造 ReasoningChatOpenAI（其 __init__ 即 ChatOpenAI 的，
+    # kwargs 透传不变）——钩这个才是真正被构造的那一个。
+    monkeypatch.setattr("qadata.llm.gateway.ReasoningChatOpenAI", FakeChatOpenAI)
     build_llm(Settings(api_key="k", base_url="b", model="m",
                        precise_candidates=3, precise_temperature=0.3))
     assert captured["temperature"] == 0.3
@@ -116,6 +118,7 @@ def test_build_llm_passes_timeout(monkeypatch):
         def __init__(self, **kw):
             captured.update(kw)
 
-    monkeypatch.setattr("qadata.llm.gateway.ChatOpenAI", FakeChatOpenAI)
+    monkeypatch.setattr("qadata.llm.gateway.ReasoningChatOpenAI", FakeChatOpenAI)
     build_llm(Settings(api_key="k", base_url="b", model="m", llm_timeout_s=42))
     assert captured["request_timeout"] == 42
+    assert captured["stream_usage"] is True  # M8 票 08：流式末 chunk 带 usage（token 聚合来源）
