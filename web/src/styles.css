@@ -730,3 +730,151 @@ button:disabled {
   background: #fff;
   color: #48484a;
 }
+
+/* ── M8 票 06 任务控制台（右侧抽屉＝概览四卡＋追踪时间线；纯排版零新依赖）──── */
+.console-drawer {
+  width: 18rem;
+  flex-shrink: 0;
+  background: #fff;
+  border-left: 1px solid #e3e3e8;
+  overflow-y: auto;
+}
+
+.console {
+  padding: 1rem 0.9rem;
+  font-size: 0.78rem;
+  color: #48484e;
+}
+
+.console h4 {
+  margin: 0 0 0.7rem;
+  font-size: 0.88rem;
+  color: #1c1c1e;
+}
+
+.c-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  margin-bottom: 0.9rem;
+}
+
+.c-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  border: 1px solid #e3e3e8;
+  border-radius: 0.6rem;
+  padding: 0.5rem 0.6rem;
+}
+
+.c-card-label {
+  color: #86868b;
+  font-size: 0.7rem;
+}
+
+.c-card-value {
+  color: #1c1c1e;
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+
+.c-card-sub {
+  color: #86868b;
+  font-size: 0.66rem;
+}
+
+.c-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.c-step-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+.c-step-head b {
+  color: #1c1c1e;
+  flex-shrink: 0;
+}
+
+.c-step-head i {
+  color: #86868b;
+  font-style: normal;
+  font-size: 0.72rem;
+}
+
+/* 红绿点（owner 截图语义）：绿＝成功、红＝失败、蓝呼吸＝进行中——
+   颜色不单独承载语义，状态文案同屏在侧 */
+.dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.dot-ok {
+  background: #34c759;
+}
+
+.dot-bad {
+  background: #ff3b30;
+}
+
+.dot-run {
+  background: #2f6feb;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.c-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.3rem;
+  padding-left: 0.9rem;
+}
+
+.c-tools-count {
+  width: 100%;
+  color: #86868b;
+  font-size: 0.66rem;
+}
+
+.c-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border: 1px solid #e3e3e8;
+  border-radius: 999px;
+  padding: 0.1rem 0.5rem;
+  background: #f5f5f7;
+  font-size: 0.68rem;
+}
+
+.c-chip .dot {
+  width: 0.38rem;
+  height: 0.38rem;
+}
+
+.c-chip.bad {
+  border-color: #f2c7c7;
+  background: #fdf3f3;
+}
+
+/* 聊天气泡「工作过程」折叠同步：tool 子事件缩进胶囊＋失败步红字 */
+.progress-row.tool {
+  padding-left: 1rem;
+}
+
+.progress-row.tool .dot {
+  width: 0.4rem;
+  height: 0.4rem;
+}
+
+.progress-row .row-bad {
+  color: #d70015;
+}

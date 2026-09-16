@@ -11,7 +11,9 @@ owner 裁决**新增可选字段 chart**（图型判定＝web/charts.py 规则�
 两端点）；M8 票 03 经 owner 立项**新增可选字段 clarification**（澄清回合，默认关）
 ——共 14 字段。
 票 03：/api/ask/stream 以 SSE 直播节点级进度帧（node/attempt/status 三字段
-起步）＋末帧 event:answer（即契约本体，与 /api/ask 同源）。
+起步；M8 票 06 喂厚＝结果帧加 ok/duration_ms/tokens_in/tokens_out、tools 子步骤
+kind:"tool" 帧，start 帧与末帧契约零动）＋末帧 event:answer（即契约本体，与
+/api/ask 同源）。
 票 05：多轮会话落盘（web/sessions.py，owner 裁决 2026-09-14 推翻"内存态"）——
 请求可选 session_id 装载三层记忆（图侧零新增调用）、问完落盘一轮；在途锁键升格
 session_id（单轮请求维持 agent 级）；历史会话端点供侧栏列表与重开回放（回放＝
@@ -439,7 +441,8 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
     @app.post("/api/ask/stream")
     def ask_stream(req: AskRequest) -> StreamingResponse:
         """前置拒绝与 /api/ask 同序同文案（400/404/409 走普通 JSON 错误，不起流）；
-        起流后：进度帧＝data: {node,attempt,status}\n\n，末帧＝event: answer＋
+        起流后：进度帧＝data: {node,attempt,status(＋票 06 可选 ok/duration_ms/
+        tokens_in/tokens_out／kind:tool 子事件)}\n\n，末帧＝event: answer＋
         契约本体（含票 04 chart 字段，与 /api/ask 同源 answer_to_payload，不另造；
         票 05 会话轮次落盘同样两端点同源——同走 _finish_ask，落盘在 runner 收口内）。
         run_question 仍是最外层

@@ -137,12 +137,33 @@ export async function uploadDatasource(id: string, file: File): Promise<void> {
   if (!res.ok) throw new Error(await errorText(res, "上传失败"));
 }
 
-// 票 03：进度流帧（node/attempt/status 三字段，文案后端单源，前端只贴标签）
-export interface ProgressEvent {
+// 票 03：进度流帧三型（M8 票 06 喂厚，文案后端单源，前端只贴标签）：
+// start 帧三字段不动；结果帧加 ok/duration_ms/tokens_in/tokens_out（chart 可选字段
+// 先例——旧消费者忽略即得）；tool 子事件帧无 attempt/status，kind:"tool" 判别。
+// 联合类型＝编译器即帧型钉：忘判 kind 直接取 status 过不了 tsc。
+export interface StepEvent {
+  kind?: undefined; // 判别位（tool 帧专属 "tool"，此处显式 undefined 供联合收窄）
   node: string;
   attempt: number; // 该时刻已入账的 SQL 尝试数（重试环上单调递增）
   status: string; // "start"＝该步开跑，其余＝该步结果一行中文
+  ok?: boolean; // 结果帧：该步收口红绿（降级/可疑不算失败）
+  duration_ms?: number; // 该步耗时
+  tokens_in?: number; // 该步 LLM 调用 token 累计（纯码节点恒 0＝如实的零）
+  tokens_out?: number;
 }
+
+export interface ToolEvent {
+  node: string; // 归属步骤（explore/execute/respond）
+  kind: "tool";
+  tool: string; // list_tables/get_schema/select_tables/value_samples/execute_sql…
+  ok: boolean; // 绿点成功/红点失败（owner 截图语义）
+  duration_ms: number;
+}
+
+export type ProgressEvent = StepEvent | ToolEvent;
+
+export const isToolEvent = (ev: ProgressEvent): ev is ToolEvent =>
+  ev.kind === "tool";
 
 // 票 05：会话面（tests/test_web_sessions.py 同构）。sid＝客户端生成的 hex12，
 // 懒建档——"＋ 新建会话"＝换新 sid、下一问开新档；列表只认有轮次的会话。

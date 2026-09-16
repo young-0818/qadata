@@ -170,39 +170,59 @@ def column_value_samples(
 def build_schema_context(
     conn: sqlite3.Connection, question: str, llm=None, max_chars: int = FULL_SCHEMA_LIMIT,
     tracer=None, db_path: str | None = None, limiter=None, sample_values: bool = False,
+    on_event=None, sink=None,
 ) -> str:
     """构建给 LLM 的 schema 上下文：小库全量；大库让 LLM 先选相关表。
     db_path 提供时，附带选中表的 database_description 列注释（M3 #10）。
     sample_values＝票 02 值采样开关（对最终入选表追加样本块；False＝零查询
-    零文本与现状逐字节一致——专测钉，关态不探一条 DISTINCT）。"""
+    零文本与现状逐字节一致——专测钉，关态不探一条 DISTINCT）。
+    on_event/sink（M8 票 06 帧喂厚）＝explore 子步骤发 kind:"tool" 帧
+    （list_tables/get_schema/select_tables/value_samples），选表 LLM 调用的 token
+    经 sink 流进该步结果帧；缺省 None 零发、与现状逐行为一致。"""
+    from qadata.llm.tracing import tool_frame  # 帧形单源（timed_invoke 同款惰性路）
+
+    def _tool(name: str, t0: float, ok: bool = True) -> None:
+        if on_event is not None:
+            on_event(tool_frame("explore", name, t0, ok))
 
     def _ctx(names: list[str]) -> str:
+        t0 = time.perf_counter()
         parts = [get_schema(conn, t) for t in names]
         parts += [_load_description(db_path, t) for t in names]
+        _tool("get_schema", t0)
         return "\n\n".join(p for p in parts if p)
 
     def _final(ctx: str, names: list[str]) -> str:
         if not sample_values:
             return ctx
+        t0 = time.perf_counter()
         block = column_value_samples(conn, names)
+        _tool("value_samples", t0)
         return f"{ctx}\n\n{block}" if block else ctx
 
+    t0 = time.perf_counter()
     tables = list_tables(conn)
+    _tool("list_tables", t0)
     full = _ctx(tables)
     if len(full) <= max_chars or llm is None:
         return _final(full, tables)
-    picked = _pick_tables_with_llm(llm, tables, question, tracer, limiter)
+    picked = _pick_tables_with_llm(llm, tables, question, tracer, limiter,
+                                   on_tool=_tool, sink=sink)
     if picked is None:  # LLM 输出解析失败 → 回退全量（宁可多给不可编造）
         return _final(full, tables)
     return _final(_ctx(picked), picked)
 
 
 def _pick_tables_with_llm(llm, tables: list[str], question: str, tracer=None,
-                          limiter=None) -> list[str] | None:
+                          limiter=None, on_tool=None, sink=None) -> list[str] | None:
     # 走 timed_invoke：选表调用也进 tracing（M1 观测盲区修复）
     from qadata.llm.tracing import timed_invoke
+    t0 = time.perf_counter()
     content = timed_invoke(llm, _PICK_PROMPT.format(tables=", ".join(tables), question=question),
-                           "explore", tracer, limiter)
+                           "explore", tracer, limiter, sink=sink)
     names = [w.strip() for w in str(content).split(",")]
     valid = [n for n in names if n in tables]
-    return valid if valid else None
+    picked = valid if valid else None
+    if on_tool is not None:  # 解析失败＝红点（回退照常发生，胶囊如实说）
+        on_tool("select_tables", t0, ok=picked is not None)
+    return picked

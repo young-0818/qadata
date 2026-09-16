@@ -8,6 +8,7 @@ import {
   SessionHead,
   Vote,
   askStream,
+  isToolEvent,
   createAgent,
   deleteAgent,
   getAgent,
@@ -21,6 +22,9 @@ import {
   uploadDatasource,
 } from "./api";
 import { ResultChart } from "./Chart";
+// M8 票 06：帧词汇表（NODE/TOOL 标签）与任务控制台同单一源（Console.tsx），
+// 聊天气泡里的「工作过程」折叠与控制台读同一份帧、贴同一套签——两处字面漂移即违宪。
+import { Console, NODE_LABELS, TOOL_LABELS } from "./Console";
 
 // 渲染纪律（spec）：一律 React 文本插值（＝textContent），全文件禁 dangerouslySetInnerHTML。
 // M7-rev2 票 02.5：三视图状态路由（首页/智能体详情/对话页），不引 router 依赖。
@@ -45,30 +49,36 @@ type Msg =
   | { role: "agent"; resp: AskResponse; trail: ProgressEvent[]; ts: string | null }
   | { role: "error"; text: string; trail: ProgressEvent[] };
 
-// 票 03 进度流行头标签（展示层稳定映射）：status 文案后端单源，未知节点名直显
-// 不硬翻译（永不编造纪律的展示面）
-const NODE_LABELS: Record<string, string> = {
-  understand: "理解问题",
-  metric_match: "指标匹配",
-  explore: "探查库表",
-  generate: "生成 SQL",
-  execute: "执行 SQL",
-  verify: "校验结果",
-  respond: "组织答案",
-};
-
+// 票 03 进度行＋M8 票 06 喂厚：tool 子事件渲染成缩进胶囊（绿/红点＝owner 截图语义），
+// 结果行带耗时与红绿标记。status 文案后端单源，未知节点/工具名直显不硬翻译
+// （永不编造纪律的展示面）。
 function ProgressRow({ ev }: { ev: ProgressEvent }) {
+  if (ev.kind === "tool") {
+    return (
+      <div className="progress-row tool">
+        <span className={ev.ok ? "dot dot-ok" : "dot dot-bad"} />
+        <span>{TOOL_LABELS[ev.tool] ?? ev.tool}</span>
+        <i>{ev.duration_ms}ms</i>
+      </div>
+    );
+  }
   const running = ev.status === "start";
   return (
     <div className="progress-row">
       <b>{NODE_LABELS[ev.node] ?? ev.node}</b>
-      <span className={running ? "running" : undefined}>
+      <span className={running ? "running" : ev.ok === false ? "row-bad" : undefined}>
         {running ? "进行中…" : ev.status}
       </span>
+      {ev.duration_ms !== undefined && <i>{ev.duration_ms}ms</i>}
       {ev.attempt > 0 && <i>已试 {ev.attempt} 次</i>}
     </div>
   );
 }
+
+// 票 06 后 trail 含 tool 子事件——「N 步」只数步帧（start＋结果成对，ceil 容断流半对），
+// 混计会稀释"步"语义（双轴评审 (c)1）
+const stepCount = (trail: ProgressEvent[]) =>
+  Math.ceil(trail.filter((e) => !isToolEvent(e)).length / 2);
 
 interface Section {
   title: string;
@@ -218,7 +228,7 @@ function AnswerBubble({
       {/* 票 03：当场看过的自纠错不随答案落地而蒸发——收成折叠留档 */}
       {trail.length > 0 && (
         <details className="trail">
-          <summary>自纠错过程（{trail.length} 步）</summary>
+          <summary>自纠错过程（{stepCount(trail)} 步）</summary>
           {trail.map((ev, i) => (
             <ProgressRow key={i} ev={ev} />
           ))}
@@ -579,6 +589,24 @@ const pendingAskResp = (ask: string, sid: string): AskResponse => ({
   clarification: ask,
 });
 
+// 票 06 控制台数据源：直播＝当前 trail；收口＝最近一条**现场**气泡的 trail
+// （回放轮 trail 恒空——现场观察不入档，M7 票 05 口径，控制台如实显示空态）。
+function consoleSource(msgs: Msg[], pending: boolean, progress: ProgressEvent[]) {
+  if (pending) return { trail: progress, resp: null as AskResponse | null, replay: false };
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m.role !== "user" && m.trail.length > 0) {
+      return { trail: m.trail, resp: m.role === "agent" ? m.resp : null, replay: false };
+    }
+  }
+  // 空 trail 分两态：有对话消息＝回放载入（现场观察不入档）；无消息＝还没跑过
+  return {
+    trail: [] as ProgressEvent[],
+    resp: null as AskResponse | null,
+    replay: msgs.length > 0,
+  };
+}
+
 function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
   const [agent, setAgent] = useState<AgentDetail | null>(null);
   const [sid, setSid] = useState(newSid); // 票 05：会话号前端自生成，进页＝新会话
@@ -782,7 +810,7 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
                   {/* 断流前的半截进度不蒸发（与 catch 注释同真：治黑盒的反面是装干净） */}
                   {m.trail.length > 0 && (
                     <details className="trail">
-                      <summary>中断前的进度（{m.trail.length} 步）</summary>
+                      <summary>中断前的进度（{stepCount(m.trail)} 步）</summary>
                       {m.trail.map((ev, j) => (
                         <ProgressRow key={j} ev={ev} />
                       ))}
@@ -861,6 +889,13 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
           </form>
         </div>
       </main>
+      {/* M8 票 06：右侧任务控制台抽屉（概览四卡＋追踪时间线，数据源＝既有进度帧） */}
+      <aside className="console-drawer">
+        {(() => {
+          const cs = consoleSource(msgs, pending, progress);
+          return <Console trail={cs.trail} resp={cs.resp} streaming={pending} replay={cs.replay} />;
+        })()}
+      </aside>
     </div>
   );
 }

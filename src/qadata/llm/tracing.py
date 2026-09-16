@@ -31,6 +31,15 @@ def now_beijing() -> str:
     return datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def tool_frame(node: str, name: str, t0: float, ok: bool = True) -> dict:
+    """M8 票 06 tool 子事件帧形状唯一源（{node,kind,tool,ok,duration_ms}）。
+    帧形是契约面——graph（execute/respond）与 tools（explore 子步骤）两处发、
+    前端联合类型按此收窄，形状绝不许漂移，故收敛于此（compose_supplement 单源先例）。
+    t0 为 time.perf_counter() 起点，duration_ms 就地算。"""
+    return {"node": node, "kind": "tool", "tool": name, "ok": ok,
+            "duration_ms": round((time.perf_counter() - t0) * 1000)}
+
+
 class TraceLogger:
     def __init__(self, path: str | Path, run_id: str | None = None):
         self.path = Path(path)
@@ -73,12 +82,19 @@ def extract_usage(message) -> dict:
     }
 
 
-def timed_invoke(llm, prompt: str, node: str, tracer: TraceLogger | None, limiter=None) -> str:
-    """调用 LLM（带指数退避）并记录该节点的 token 与延迟。返回 response.content。"""
+def timed_invoke(llm, prompt: str, node: str, tracer: TraceLogger | None, limiter=None,
+                 sink: dict | None = None) -> str:
+    """调用 LLM（带指数退避）并记录该节点的 token 与延迟。返回 response.content。
+    sink（M8 票 06）＝{"tin","tout"} 累计 dict：逐调用 token 旁路进当前步的进度帧
+    （费用/ token 卡的数据源）；缺省 None 与现状逐行为一致（CLI/eval 零染指）。"""
     t0 = time.perf_counter()
     resp = invoke_with_backoff(llm, prompt, limiter=limiter)
     latency = round(time.perf_counter() - t0, 2)
-    if tracer is not None:
+    if tracer is not None or sink is not None:
         usage = extract_usage(resp)
+    if tracer is not None:
         tracer.log(node, latency_s=latency, **usage)
+    if sink is not None:
+        sink["tin"] += usage["input_tokens"]
+        sink["tout"] += usage["output_tokens"]
     return resp.content

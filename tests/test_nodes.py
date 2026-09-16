@@ -24,8 +24,9 @@ def test_nodes_pass_limiter_to_timed_invoke(monkeypatch):
     """限速器透传：make_nodes 注入的 limiter 必须进全部 timed_invoke 调用。"""
     captured = {}
 
-    def fake_timed_invoke(llm, prompt, node, tracer, limiter=None):
+    def fake_timed_invoke(llm, prompt, node, tracer, limiter=None, sink=None):
         captured[node] = limiter
+        captured["sink_" + node] = sink
         return "ok"
 
     monkeypatch.setattr("qadata.graph.nodes.timed_invoke", fake_timed_invoke)
@@ -33,6 +34,8 @@ def test_nodes_pass_limiter_to_timed_invoke(monkeypatch):
     nodes = make_nodes(None, None, limiter=sentinel)
     nodes["understand"]({"question": "q"})
     assert captured["understand"] is sentinel
+    # M8 票 06：on_event 缺省 None＝sink 也为 None（关态零 token 累计，逐行为一致）
+    assert captured["sink_understand"] is None
 
 
 def test_skip_respond_placeholder_conclusion_without_llm(fixture_db):

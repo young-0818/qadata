@@ -15,10 +15,13 @@ class FakeMsg:
 
 
 class ScriptedLLM:
-    """按调用次序发脚本回复的假模型。"""
+    """按调用次序发脚本回复的假模型。
+    usage（M8 票 06 起可选）＝每回复附带的 usage_metadata dict（token 进帧的
+    非零形钉用）；缺省 None＝无 usage 字段，与今日逐行为一致。"""
 
-    def __init__(self, responses: list[str]):
+    def __init__(self, responses: list[str], usage: dict | None = None):
         self.responses = list(responses)
+        self.usage = usage
         self.calls = 0
         self.prompts: list[str] = []
 
@@ -31,4 +34,4 @@ class ScriptedLLM:
                 f"ScriptedLLM 第 {i + 1} 次调用超出脚本长度 {len(self.responses)}"
                 "——请显式补齐脚本，勿依赖循环"
             )
-        return FakeMsg(self.responses[i])
+        return FakeMsg(self.responses[i], self.usage)

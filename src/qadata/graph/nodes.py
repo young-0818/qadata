@@ -3,6 +3,7 @@
 M5 票 05：metric_match 为可选插入节点（总开关 Settings.metric_layer，默认关＝现状在
 路由/调用数/账本/评测字段上逐行为一致；票 07 三节展示属两态共用的展示层）。"""
 import re
+import time
 from datetime import date, datetime
 from pathlib import Path
 
@@ -36,7 +37,7 @@ from qadata.graph.prompts import (
     understand_prompt,
 )
 from qadata.graph.verify import verify_result
-from qadata.llm.tracing import BEIJING, timed_invoke
+from qadata.llm.tracing import BEIJING, timed_invoke, tool_frame
 from qadata.tools.db import open_readonly
 from qadata.tools.executor import execute_sql
 from qadata.tools.schema import build_schema_context
@@ -128,20 +129,46 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
     修复建议）。缺省 None 零发射、零包装，与现状逐行为一致。
     hitl（M8 票 03 owner 改判 2026-09-16）：澄清走经典 HITL——understand 节点内
     interrupt() 暂停等人类（需调用侧配好 checkpointer＋thread_id），缺省 False＝
-    澄清落 answer 直达 END（无会话/CLI/评测形态）。"""
-    s = settings or FALLBACK_SETTINGS
+    澄清落 answer 直达 END（无会话/CLI/评测形态）。
 
-    def _emit(node: str, attempt: int, status: str) -> None:
+    M8 票 06 帧喂厚：结果帧追加 ok/duration_ms/tokens_in/tokens_out（start 帧与
+    末帧 answer 契约零动）；tools 层子步骤发 kind:"tool" 帧（explore 内
+    list_tables/get_schema/…、execute 内 execute_sql）。token 流走 timed_invoke 的
+    sink（_step_box）＝逐调用累计，图与 tools 每请求各建一份（build_graph 在
+    run_question 内），闭包无跨请求串扰。缺省 None 关态零发逐行为一致不变。"""
+    s = settings or FALLBACK_SETTINGS
+    # 票 06：当前步的计时起点与 token 累计（_wrap 每次进入重置；仅 on_event 在时读写）
+    _step_box = {"t0": 0.0, "tin": 0, "tout": 0}
+    sink = _step_box if on_event is not None else None
+
+    def _ms(t0: float) -> int:
+        return round((time.perf_counter() - t0) * 1000)
+
+    def _emit(node: str, attempt: int, status: str, ok: bool = True) -> None:
+        """结果帧（该步收口）：票 06 起带 ok/耗时/token——ok 二值＝红绿点语义，
+        降级/可疑/未命中不改红（那不是失败，status 文案如实说）。"""
         if on_event is not None:
-            on_event({"node": node, "attempt": attempt, "status": status})
+            on_event({"node": node, "attempt": attempt, "status": status, "ok": ok,
+                      "duration_ms": _ms(_step_box["t0"]),
+                      "tokens_in": _step_box["tin"], "tokens_out": _step_box["tout"]})
+
+    def _tool(node: str, name: str, t0: float, ok: bool = True) -> None:
+        """tool 子事件帧（票 06）：图不是 tool loop（架构不动裁决），但 tools 层的
+        真实子步骤值得有自己的胶囊——绿点成功/红点失败，duration 各自计时。
+        形状经 tool_frame 单源（与 explore 子步骤同源，防帧形两处漂移）。"""
+        if on_event is not None:
+            on_event(tool_frame(node, name, t0, ok))
 
     def _wrap(name: str, fn):
-        """start 帧统一由包装层发（少一处节点内样板）；关态直接返回原函数。"""
+        """start 帧统一由包装层发（少一处节点内样板）＋步盒重置；关态直接返回原函数。"""
         if on_event is None:
             return fn
 
         def wrapped(state: dict) -> dict:
-            _emit(name, len(state.get("attempts", [])), "start")
+            _step_box["t0"] = time.perf_counter()
+            _step_box["tin"] = _step_box["tout"] = 0
+            on_event({"node": name, "attempt": len(state.get("attempts", [])),
+                      "status": "start"})
             return fn(state)
 
         return wrapped
@@ -157,7 +184,7 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
             state["question"], state.get("evidence", ""),
             format_session_history(state.get("session_context")),
             clarify=s.clarification),
-            "understand", tracer, limiter)
+            "understand", tracer, limiter, sink=sink)
         question, intent, clarification = parse_understand_response(text)
         attempt = len(state.get("attempts", []))
         if (s.clarification and clarification
@@ -217,7 +244,7 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
             level = "L2"
             text = timed_invoke(llm, metric_review_prompt(state["question"],
                                                           state.get("evidence", ""), metrics),
-                                "metric_match", tracer, limiter)
+                                "metric_match", tracer, limiter, sink=sink)
             m = parse_metric_review(text, metrics)
         if m is None:
             return _miss(state, "两级匹配未命中（L2 判 NONE 或解析失败）")
@@ -240,7 +267,8 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         try:
             ctx = build_schema_context(conn, state["question"], llm=llm, tracer=tracer,
                                        db_path=state["db_path"], limiter=limiter,
-                                       sample_values=s.value_sampling)
+                                       sample_values=s.value_sampling,
+                                       on_event=on_event, sink=sink)
         finally:
             conn.close()
         _emit("explore", len(state.get("attempts", [])), "取到 Schema")
@@ -265,7 +293,7 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
             # 多样性已探针验证）；提取失败的候选丢弃，全灭走提取失败入账路径
             sqls, extract_fails = [], 0
             for _ in range(s.precise_candidates):
-                text = timed_invoke(llm, prompt, "generate", tracer, limiter)
+                text = timed_invoke(llm, prompt, "generate", tracer, limiter, sink=sink)
                 try:
                     sqls.append(extract_sql(str(text)))
                 except ValueError:
@@ -276,18 +304,18 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
                 err = f"精准模式 {s.precise_candidates} 次采样均未提取出合法 SQL"
                 attempts = list(state.get("attempts", []))
                 attempts.append(SqlAttempt(sql="", error=err))
-                _emit("generate", len(attempts), f"提取失败：{err}")
+                _emit("generate", len(attempts), f"提取失败：{err}", ok=False)
                 return {"current_sql": None, "last_error": err, "attempts": attempts,
                         "precise_candidates": None}
             _emit("generate", len(state.get("attempts", [])), "生成 SQL")
             return {"current_sql": sqls[0], "last_error": None, "precise_candidates": sqls}
-        text = timed_invoke(llm, prompt, "generate", tracer, limiter)
+        text = timed_invoke(llm, prompt, "generate", tracer, limiter, sink=sink)
         try:
             sql = extract_sql(str(text))
         except ValueError as e:
             attempts = list(state.get("attempts", []))
             attempts.append(SqlAttempt(sql="", error=str(e)))
-            _emit("generate", len(attempts), f"提取失败：{str(e).splitlines()[0]}")
+            _emit("generate", len(attempts), f"提取失败：{str(e).splitlines()[0]}", ok=False)
             return {"current_sql": None, "last_error": str(e), "attempts": attempts}
         _emit("generate", len(state.get("attempts", [])), "生成 SQL")
         return {"current_sql": sql, "last_error": None}
@@ -296,16 +324,18 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         candidates = state.get("precise_candidates")
         if candidates and len(candidates) > 1:
             # 票决轮（M4-C）：批量=一轮账本，attempts 只记一条；用完显式清载荷键
+            t0 = time.perf_counter()
             outcome = run_precise_batch(state["db_path"], candidates,
                                         max_rows=s.max_rows, timeout_s=s.sql_timeout_s,
                                         tracer=tracer)
+            _tool("execute", "execute_sql_batch", t0, ok=outcome.winner_sql is not None)
             attempts = list(state.get("attempts", []))
             if outcome.winner_sql is None:
                 err = f"精准模式 {len(candidates)} 个候选全部执行失败"
                 if outcome.fail_excerpt:
                     err += f"：{outcome.fail_excerpt}"
                 attempts.append(SqlAttempt(sql="", error=err))
-                _emit("execute", len(attempts), _exec_fail_status(err))
+                _emit("execute", len(attempts), _exec_fail_status(err), ok=False)
                 return {"attempts": attempts, "result": None, "last_error": err,
                         "precise_candidates": None}
             if outcome.no_majority:
@@ -325,24 +355,27 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         if not sql:
             # generate 阶段已失败：显式清掉上一轮残留的 result（整值覆盖语义下
             # "清除"必须显式返回），否则条件边①会拿陈旧 result 误走 verify 路径
-            _emit("execute", len(state.get("attempts", [])), "无可执行 SQL，转重试")
+            _emit("execute", len(state.get("attempts", [])), "无可执行 SQL，转重试", ok=False)
             return {"result": None}
         attempts = list(state.get("attempts", []))
+        t0 = time.perf_counter()
         try:
             res = execute_sql(
                 state["db_path"], sql,
                 max_rows=s.max_rows, timeout_s=s.sql_timeout_s,
             )
         except Exception as e:  # noqa: BLE001 自纠错账本：任何执行失败都要入账供重试
+            _tool("execute", "execute_sql", t0, ok=False)  # 失败红点胶囊（截图语义）
             msg = str(e)
             attempts.append(SqlAttempt(sql=sql, error=msg))
-            _emit("execute", len(attempts), _exec_fail_status(msg))
+            _emit("execute", len(attempts), _exec_fail_status(msg), ok=False)
             out = {"attempts": attempts, "result": None, "last_error": msg}
             matched = state.get("matched_metric")
             if matched:
                 # 模板 SQL 失败：入账后降级兜底（路由判 matched_metric → explore）
                 out["metric_note"] = f"指标模板「{matched}」执行失败：{msg.splitlines()[0]}"
             return out
+        _tool("execute", "execute_sql", t0)
         attempts.append(SqlAttempt(sql=sql, row_count=res.row_count))
         _emit("execute", len(attempts), f"执行成功：{res.row_count} 行")
         return {"attempts": attempts, "result": res, "last_error": None}
@@ -389,6 +422,7 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
             # 回退重执行最近成功候选，答案不丢失；重执行失败则维持原诚实失败路径
             good_sql = _last_good_sql(attempts)
             if good_sql:
+                t0 = time.perf_counter()
                 try:
                     res = execute_sql(state["db_path"], good_sql,
                                       max_rows=s.max_rows, timeout_s=s.sql_timeout_s)
@@ -396,6 +430,7 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
                     fallback_note = "最终尝试失败，以下为最近一次成功执行的查询结果"
                 except Exception:  # noqa: BLE001, S110 回退是锦上添花：炸了不得连累原诚实失败路径
                     pass
+                _tool("respond", "execute_sql", t0, ok=res is not None)
         if res is None:
             # 永不编造：失败路径不调 LLM；汇报全部尝试（比 M1 单错误版信息量更高）
             # 票 07：仍按三节组装——数据依据如实记无结果集，模板降级原因进校验节
@@ -409,7 +444,7 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
                 conclusion = f"未能完成查询：{state.get('last_error') or '未知错误'}"
             notes = [metric_note] if metric_note else []
             # 失败态不走命中指标口径（模板没答出来，展示其口径会误导"已由该口径作答"）
-            _emit("respond", len(attempts), "如实报失败")
+            _emit("respond", len(attempts), "如实报失败", ok=False)
             return {
                 "answer": Answer(
                     conclusion=compose_conclusion(
@@ -445,6 +480,7 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
                 "respond",
                 tracer,
                 limiter,
+                sink=sink,
             )
             conclusion = strip_conclusion_prefix(str(text))
         # 口径说明节（票 07）：命中→注册表零 token 引用口径与血缘；查不到→evidence 命中项
