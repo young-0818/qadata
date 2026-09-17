@@ -160,13 +160,17 @@ export function Markdown({ text }: { text: string }) {
             );
           }
           case "table":
-            // 复用 .result-table 样式（与权威结果表同一张皮，零新 CSS）
+            // 复用 .result-table 样式（与权威结果表同一张皮，零新 CSS）。
+            // 格内走行内解析（票 09.5 实拍修 bug：报告爱用 **合计** 加粗表尾行，
+            // 格不走 inline() 星号就裸奔——与正文同一子集，不加新记号）
             return (
               <table className="result-table" key={i}>
                 <thead>
                   <tr>
                     {b.head.map((c, j) => (
-                      <th key={j}>{c}</th>
+                      <th key={j}>
+                        <Parts parts={inline(c)} />
+                      </th>
                     ))}
                   </tr>
                 </thead>
@@ -174,7 +178,9 @@ export function Markdown({ text }: { text: string }) {
                   {b.rows.map((r, j) => (
                     <tr key={j}>
                       {r.map((c, k) => (
-                        <td key={k}>{c}</td>
+                        <td key={k}>
+                          <Parts parts={inline(c)} />
+                        </td>
                       ))}
                     </tr>
                   ))}

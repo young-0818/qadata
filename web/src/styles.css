@@ -383,7 +383,7 @@ button:disabled {
 
 .chatmain > .note {
   margin: 0.6rem auto 0;
-  max-width: 48rem;
+  max-width: 58rem;
   width: 100%;
   padding: 0 1.25rem;
 }
@@ -396,16 +396,24 @@ button:disabled {
   flex-direction: column;
 }
 
-/* 页面拉宽≠行长拉爆：内容列居中限宽，宽屏靠留白呼吸 */
+/* 页面拉宽≠行长拉爆：内容列居中限宽，宽屏靠留白呼吸。
+   票 09.5（owner 重裁）：48→58rem——宽窗下灰边吃回一档，行长仍扛得住（面板以列表/表格为主） */
 .chatcol {
   width: 100%;
-  max-width: 48rem;
+  max-width: 58rem;
   margin: 0 auto;
   padding: 1.5rem 1.25rem 1rem;
   display: flex;
   flex-direction: column;
   gap: 0.7rem;
   flex: 1;
+}
+
+/* 贴底空档（票 09.5）：短对话最后一条挨着 composer、空档挤到顶上；
+   内容超高时空档自然缩零、滚动从顶不裁剪（flex:auto margin 同族坑绕开） */
+.chatfill {
+  flex: 1;
+  min-height: 0;
 }
 
 .welcome {
@@ -427,7 +435,7 @@ button:disabled {
 .dock {
   flex-shrink: 0;
   width: 100%;
-  max-width: 48rem;
+  max-width: 58rem;
   margin: 0 auto;
   padding: 0 1.25rem 1.1rem;
 }
@@ -830,11 +838,53 @@ button:disabled {
 
 /* ── M8 票 06 任务控制台（右侧抽屉＝概览四卡＋追踪时间线；纯排版零新依赖）──── */
 .console-drawer {
+  position: relative; /* 票 09.5：折叠钮钉在抽屉头右上角 */
   width: 18rem;
   flex-shrink: 0;
   background: #fff;
   border-left: 1px solid #e3e3e8;
   overflow-y: auto;
+}
+
+/* 票 09.5（owner 裁 Q12）：手动折叠——默认恒展开；收起＝窄轨留一枚钮（可供性不蒸发）。
+   描边 ghost 方钮复用 .rail-back 语言，图标＝VS Code 式面板字形内联 SVG */
+.console-toggle {
+  position: absolute;
+  top: 0.85rem;
+  right: 0.7rem;
+  width: 1.7rem;
+  height: 1.7rem;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: #48484e;
+  border: none;
+  border-radius: 0.45rem;
+}
+
+.console-toggle:hover {
+  background: #f4f4f7;
+  color: #2f6feb;
+}
+
+.console-drawer.collapsed {
+  width: 2.25rem;
+  overflow: visible;
+}
+
+.console-drawer.collapsed .console-toggle {
+  position: static;
+  display: flex; /* margin auto 居中只吃块级盒，inline-flex 不领情 */
+  margin: 0.85rem auto 0;
+}
+
+/* 收起态让宽：内容列/入坞/提示条三处 58rem 同升 68rem（一行 CSS 判类，零 JS 测量） */
+.chatshell.console-min .chatcol,
+.chatshell.console-min .dock,
+.chatshell.console-min .chatmain > .note {
+  max-width: 68rem;
 }
 
 .console {
