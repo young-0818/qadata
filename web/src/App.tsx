@@ -217,9 +217,13 @@ function AnswerBubble({
           <ResultTable columns={resp.columns} rows={resp.rows} />
         ))}
       {resp.sql && (
-        <pre className="sql">
-          <code>{resp.sql}</code>
-        </pre>
+        <>
+          {/* 票 09：SQL 常开＝信任锚，眉标清身份（灰块别被误读成表格内容） */}
+          <span className="sql-label">查询语句</span>
+          <pre className="sql">
+            <code>{resp.sql}</code>
+          </pre>
+        </>
       )}
       <div className="meta">
         <span>{resp.path === "metric" ? "指标命中" : "兜底路线"}</span>

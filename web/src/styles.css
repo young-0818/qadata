@@ -458,27 +458,33 @@ button:disabled {
 }
 
 .bubble {
-  max-width: 92%;
-  padding: 0.65rem 0.9rem;
-  border-radius: 0.9rem;
-  font-size: 0.9rem;
-  line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
 .bubble.user {
   align-self: flex-end;
+  max-width: 92%;
+  padding: 0.65rem 0.9rem;
+  border-radius: 0.9rem;
+  border-bottom-right-radius: 0.25rem;
   background: #2f6feb;
   color: #fff;
-  border-bottom-right-radius: 0.25rem;
+  font-size: 0.9rem;
+  line-height: 1.55;
 }
 
+/* 票 09 答案面板化：脱离气泡隐喻——吃满内容列、四角均匀小圆角（与 .card/.panel
+   同族）、文档式内边距；零投影（仓库容器全是描边语言，不搞特殊）。
+   在途进度盒/报错盒随 bubble agent 同类名自动换皮（思考流限高滚动正需横向空间） */
 .bubble.agent {
-  align-self: flex-start;
+  align-self: stretch;
+  padding: 1rem 1.2rem;
+  border-radius: 0.6rem;
   background: #fff;
   border: 1px solid #e3e3e8;
-  border-bottom-left-radius: 0.25rem;
+  font-size: 0.95rem;
+  line-height: 1.65;
 }
 
 .bubble.agent.failed {
@@ -569,40 +575,57 @@ button:disabled {
   margin-bottom: 0.35rem;
 }
 
+/* 票 09：节头 chip 退役→独立标题行——左蓝竖条撑面板骨架（思考流 border-left 先例，
+   零新视觉词汇）；层级靠色彩+竖条分角色不靠尺寸肉搏，黑大字让给报告自身标题。
+   四节头全保留＝compose_conclusion 契约形状，白名单机制闸不添例外 */
 .section-title {
-  display: inline-block;
-  margin-right: 0.4rem;
-  padding: 0 0.35rem;
-  border-radius: 0.3rem;
-  background: #ececf1;
+  display: block;
+  margin-bottom: 0.3rem;
+  padding-left: 0.5rem;
+  border-left: 3px solid #2f6feb;
   color: #48484e;
-  font-size: 0.75rem;
-  font-weight: 600;
+  font-size: 0.9rem;
+  font-weight: 700;
 }
 
 /* ── 票 04：三节分节折叠＋校验徽标＋规则图表 ───────────────────── */
 
-/* 折叠节（数据依据/口径说明/数据表格）：节头即摘要行，内容 textContent 照旧 */
+/* 折叠节（数据依据/口径说明/数据表格）：summary 行式灰条节头＋▸ 箭头（Q5 同待遇，
+   灰条分主次：折叠＝支撑细节不是头条），内容 textContent 照旧。
+   折内正文 0.8rem 支撑档保留——阶梯表未裁它，折起来的本就是二级 */
 .section-fold {
-  margin: 0.3rem 0;
+  margin: 0.45rem 0;
   font-size: 0.8rem;
   color: #48484e;
 }
 
 .section-fold summary {
   cursor: pointer;
-  display: inline-block;
-  padding: 0 0.35rem;
-  border-radius: 0.3rem;
-  background: #ececf1;
-  font-size: 0.75rem;
-  font-weight: 600;
+  display: block;
+  padding-left: 0.5rem;
+  border-left: 3px solid #d1d1d6;
   color: #48484e;
+  font-size: 0.9rem;
+  font-weight: 700;
+  list-style: none; /* 原生三角各家不一，箭头统一走 ::before */
+}
+
+.section-fold summary::-webkit-details-marker {
+  display: none;
+}
+
+.section-fold summary::before {
+  content: "▸ ";
+  color: #86868b;
+}
+
+.section-fold[open] summary::before {
+  content: "▾ ";
 }
 
 /* 校验标注节：常开＋琥珀提示（徽标同款纪律：颜色不单传，节头文字承载语义） */
 .section.warn .section-title {
-  background: #fdf3d7;
+  border-left-color: #8a6d1a;
   color: #8a6d1a;
 }
 
@@ -623,11 +646,12 @@ button:disabled {
   line-height: 1.35;
 }
 .md h4 {
-  font-size: 0.95rem;
+  font-size: 1.15rem;
 }
 .md h5,
 .md h6 {
-  font-size: 0.85rem;
+  font-size: 1rem;
+  font-weight: 650;
 }
 .md ul,
 .md ol {
@@ -680,7 +704,7 @@ button:disabled {
 }
 
 .number-value {
-  font-size: 2rem;
+  font-size: 2.4rem;
   font-weight: 650;
   line-height: 1.15;
   color: #1c1c1e;
@@ -695,7 +719,8 @@ button:disabled {
 .result-table {
   margin-top: 0.5rem;
   border-collapse: collapse;
-  font-size: 0.8rem;
+  font-size: 0.88rem;
+  font-variant-numeric: tabular-nums; /* 数字列纵向对齐（全宽面板下更吃这一眼） */
   max-width: 100%;
   overflow-x: auto;
   display: block;
@@ -712,14 +737,28 @@ button:disabled {
   background: #f5f5f7;
 }
 
+/* SQL 块常开保留＝信任锚（判分在结果集层的兑现物，见天日不折叠）；
+   眉标清身份——别叫它被误读成表格内容 */
+.sql-label {
+  display: inline-block;
+  margin-top: 0.6rem;
+  color: #86868b;
+  font-size: 0.75rem;
+}
+
 .sql {
-  margin: 0.5rem 0 0;
+  margin: 0.15rem 0 0;
   padding: 0.5rem 0.7rem;
   background: #f5f5f7;
   border: 1px solid #e3e3e8;
   border-radius: 0.5rem;
-  font-size: 0.75rem;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; /* 等宽钉死，不吃 UA 彩票 */
+  font-size: 0.82rem;
   overflow-x: auto;
+}
+
+.md .sql {
+  margin-top: 0.5rem; /* 报告围栏块无眉标，恢复自带间距 */
 }
 
 .note {
@@ -731,7 +770,7 @@ button:disabled {
 .meta {
   margin-top: 0.5rem;
   color: #86868b;
-  font-size: 0.72rem;
+  font-size: 0.78rem;
 }
 
 /* 票 04 反馈：ghost 小按钮，投后禁用＋选中高亮（不靠颜色单传——emoji 即语义） */
