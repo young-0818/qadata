@@ -217,9 +217,13 @@ function AnswerBubble({
           <ResultTable columns={resp.columns} rows={resp.rows} />
         ))}
       {resp.sql && (
-        <pre className="sql">
-          <code>{resp.sql}</code>
-        </pre>
+        <>
+          {/* 票 09：SQL 常开＝信任锚，眉标清身份（灰块别被误读成表格内容） */}
+          <span className="sql-label">查询语句</span>
+          <pre className="sql">
+            <code>{resp.sql}</code>
+          </pre>
+        </>
       )}
       <div className="meta">
         <span>{resp.path === "metric" ? "指标命中" : "兜底路线"}</span>
@@ -646,6 +650,9 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
   const [votes, setVotes] = useState<Record<string, Vote>>({});
   const [progress, setProgress] = useState<ProgressEvent[]>([]);
   const [err, setErr] = useState("");
+  // 票 09.5（Q14 改判 Q12）：空态默认收起（回放/还没跑过＝白墙不撞脸），
+  // 提问自动展开；折叠钮保留手动否决权，状态不跨会话记忆
+  const [consoleOpen, setConsoleOpen] = useState(false);
   const tailRef = useRef<HTMLDivElement>(null);
   // M8 票 03 改判（owner 裁 2026-09-16）：无状态前端合成退役——澄清暂停态住服务端
   // checkpoint，下一条消息**原样**发回即自动续答（服务端合成归档）；本状态只是 UI
@@ -739,6 +746,7 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
     const q = text.trim();
     if (!q || busyRef.current) return;
     busyRef.current = true;
+    setConsoleOpen(true); // 票 09.5：真发问才自动展开控制台（空态默认收起的对偶）
     setQuestion("");
     setMsgs((m) => [...m, { role: "user", text: q }]);
     setPendingClarify(null); // 乐观清提示；若本问又起新澄清（非续答形态）响应后重设
@@ -826,6 +834,8 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
         {err && <div className="note">未完成：{err}</div>}
         <div className="chatscroll">
           <div className="chatcol">
+            {/* 票 09.5 贴底空档：短对话挨着 composer、空档上移；超高时自然缩零不裁顶 */}
+            <div className="chatfill" />
             {msgs.length === 0 && !pending &&
               (agent ? (
                 <div className="welcome">
@@ -878,11 +888,19 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
           </div>
         </div>
         <div className="dock">
-          {/* 预设 pill＝仅空对话（owner 裁 A1）；点击发送逻辑零改动、零新通道 */}
-          {agent && msgs.length === 0 && !pending && agent.preset_questions.length > 0 && (
+          {/* 票 09.5（owner 裁 Q17 B，改判票 05 A1「仅空对话＋竖排」）：预设 pill 常驻
+              composer 上方横排——对话下方的空白被利用、下一问有引导；
+              在途锁同款纪律禁用；点击＝与手输同路 send，零新通道 */}
+          {agent && agent.preset_questions.length > 0 && (
             <div className="presets">
               {agent.preset_questions.map((q, i) => (
-                <button key={i} type="button" className="preset-pill" onClick={() => send(q)}>
+                <button
+                  key={i}
+                  type="button"
+                  className="preset-pill"
+                  disabled={pending}
+                  onClick={() => send(q)}
+                >
                   {q}
                 </button>
               ))}
@@ -927,12 +945,29 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
           </form>
         </div>
       </main>
-      {/* M8 票 06：右侧任务控制台抽屉（概览四卡＋追踪时间线，数据源＝既有进度帧） */}
-      <aside className="console-drawer">
-        {(() => {
-          const cs = consoleSource(msgs, pending, progress);
-          return <Console trail={cs.trail} resp={cs.resp} streaming={pending} replay={cs.replay} />;
-        })()}
+      {/* M8 票 06：右侧任务控制台抽屉（概览四卡＋追踪时间线，数据源＝既有进度帧）；
+          票 09.5：头部右上角面板字形钮手动折叠，收起＝2.25rem 窄轨留镜像钮 */}
+      <aside className={`console-drawer${consoleOpen ? "" : " collapsed"}`}>
+        <button
+          type="button"
+          className="console-toggle"
+          title={consoleOpen ? "收起控制台" : "展开控制台"}
+          aria-label={consoleOpen ? "收起任务控制台" : "展开任务控制台"}
+          onClick={() => setConsoleOpen(!consoleOpen)}
+        >
+          {/* VS Code 式面板字形（内联 SVG，零新依赖）：描边方框＋左分隔条 */}
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2" />
+            <line x1="6.25" y1="2.75" x2="6.25" y2="13.25" />
+          </svg>
+        </button>
+        {consoleOpen &&
+          (() => {
+            const cs = consoleSource(msgs, pending, progress);
+            return (
+              <Console trail={cs.trail} resp={cs.resp} streaming={pending} replay={cs.replay} />
+            );
+          })()}
       </aside>
     </div>
   );
