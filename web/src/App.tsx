@@ -834,8 +834,10 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
         {err && <div className="note">未完成：{err}</div>}
         <div className="chatscroll">
           <div className="chatcol">
-            {/* 票 09.5 贴底空档：短对话挨着 composer、空档上移；超高时自然缩零不裁顶 */}
-            <div className="chatfill" />
+            {/* 票 09.5 贴底空档：短对话挨着 composer、空档上移；超高时自然缩零不裁顶。
+                票 09.6（owner 实拍纠正）：空对话不放——否则 flex-grow 抢光 free space，
+                welcome 的 margin:auto 垂直居中失效、被顶到 composer 跟前 */}
+            {msgs.length > 0 && <div className="chatfill" />}
             {msgs.length === 0 && !pending &&
               (agent ? (
                 <div className="welcome">
@@ -913,23 +915,45 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
               send(question);
             }}
           >
-            <input
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              placeholder={
-                pending
-                  ? "正在回答上一个问题…"
-                  : pendingClarify
-                    ? "回答上方澄清问即自动续答；点右侧按钮可另起新话题…"
-                    : agent
-                      ? `向 ${agent.name} 提问…`
-                      : "加载中…"
-              }
-              disabled={!agent || pending}
-            />
-            <button type="submit" disabled={!agent || pending || !question.trim()}>
-              {pendingClarify ? "补充" : "提问"}
-            </button>
+            {/* 票 09.6（owner 裁）：提交钮融入输入框——右缘圆形 ↑（ChatGPT 式），
+                「提问/补充」语义移入 title 与占位文案（澄清态占位已把玩法说全） */}
+            <div className="composer-field">
+              <input
+                value={question}
+                onChange={(e) => setQuestion(e.target.value)}
+                placeholder={
+                  pending
+                    ? "正在回答上一个问题…"
+                    : pendingClarify
+                      ? "回答上方澄清问即自动续答；点右侧按钮可另起新话题…"
+                      : agent
+                        ? `向 ${agent.name} 提问…`
+                        : "加载中…"
+                }
+                disabled={!agent || pending}
+              />
+              <button
+                type="submit"
+                className="send"
+                disabled={!agent || pending || !question.trim()}
+                title={pendingClarify ? "补充" : "提问"}
+                aria-label={pendingClarify ? "补充" : "提问"}
+              >
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M8 12.5v-9" />
+                  <path d="M3.8 7.2 8 3l4.2 4.2" />
+                </svg>
+              </button>
+            </div>
             {/* M8 票 03 改判：有待答澄清时显式放弃＝本条按新话题问（服务端弃 checkpoint 续档） */}
             {pendingClarify && (
               <button

@@ -278,7 +278,7 @@ button:disabled {
 }
 
 .rail {
-  width: 13.5rem;
+  width: 16rem; /* 票 09.6（owner 裁）：13.5→16rem，历史会话标题少截几个字 */
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -824,13 +824,35 @@ button:disabled {
   gap: 0.6rem;
 }
 
-.composer input {
+/* 票 09.6（owner 裁）：提交钮融入输入框——场区相对定位，圆形 ↑ 钉右缘内侧；
+   「新话题」次要钮在场时仍是 flex 兄弟，绝对定位只吃场区不抢位 */
+.composer-field {
+  position: relative;
   flex: 1;
+  min-width: 0;
+}
+
+.composer input {
+  width: 100%;
   font: inherit;
-  padding: 0.6rem 0.95rem;
+  padding: 0.6rem 3.2rem 0.6rem 0.95rem; /* 右侧留圆钮道，文字不钻钮底 */
   border: 1px solid #d1d1d6;
   border-radius: 0.8rem;
   background: #fff;
+}
+
+.composer-field button.send {
+  position: absolute;
+  right: 0.4rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 2.15rem;
+  height: 2.15rem;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
 }
 
 /* M8 票 03 改判：composer 次要按钮（「新话题」＝放弃在途澄清），弱于主按钮存在感 */
