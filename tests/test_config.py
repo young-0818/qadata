@@ -25,6 +25,8 @@ def _isolate_env(monkeypatch):
     monkeypatch.delenv("QADATA_METRICS_DIR", raising=False)
     monkeypatch.delenv("QADATA_VALUE_SAMPLING", raising=False)
     monkeypatch.delenv("QADATA_CLARIFICATION", raising=False)
+    monkeypatch.delenv("QADATA_OTEL_ENABLED", raising=False)
+    monkeypatch.delenv("QADATA_OTEL_ENDPOINT", raising=False)
 
 
 def test_load_settings_reads_env(monkeypatch):
@@ -205,3 +207,25 @@ def test_metrics_dir_from_env(monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
     monkeypatch.setenv("QADATA_METRICS_DIR", "other_metrics")
     assert load_settings().metrics_dir == "other_metrics"
+
+
+def test_otel_defaults_off(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    s = load_settings()
+    assert s.otel_enabled is False and s.otel_endpoint == ""
+
+
+def test_otel_env_on(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setenv("QADATA_OTEL_ENABLED", "1")
+    monkeypatch.setenv("QADATA_OTEL_ENDPOINT", "http://localhost:3000/api/public/otel")
+    s = load_settings()
+    assert s.otel_enabled is True
+    assert s.otel_endpoint == "http://localhost:3000/api/public/otel"
+
+
+def test_bad_otel_enabled_rejected(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setenv("QADATA_OTEL_ENABLED", "maybe")
+    with pytest.raises(RuntimeError, match="QADATA_OTEL_ENABLED"):
+        load_settings()

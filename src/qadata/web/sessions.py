@@ -197,12 +197,18 @@ class SessionStore:
         atomic_write(f, yaml.safe_dump(body, allow_unicode=True, sort_keys=False))
 
 
+def turn_ts() -> str:
+    """轮档 ts 唯一式（M9 票 01：web trace 的 turn_ts 串联键共用——「与 feedback 锚点
+    同源」钉到表达式级。归档在收口盖、trace 在起念盖，秒级差在册；session_id 是主过滤键）。"""
+    return datetime.now(BEIJING).isoformat(timespec="seconds")
+
+
 def append_turn(session: Session, question: str, *, res: QueryResult | None,
                 failed: bool, payload: dict[str, Any]) -> Session:
     """跑完一问 → 新会话对象（纯函数，落盘归 caller）。failed 轮如实标失败并剥净
     结果摘要（不给下游留草稿素材）。"""
     turn = {"question": question,
-            "ts": datetime.now(BEIJING).isoformat(timespec="seconds"),
+            "ts": turn_ts(),
             "failed": failed,
             "row_count": res.row_count if (res and not failed) else None,
             "head": "" if failed else result_head(res),

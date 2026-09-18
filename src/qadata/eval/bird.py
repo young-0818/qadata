@@ -15,6 +15,7 @@ from rich.table import Table
 from qadata.eval.match import results_match
 from qadata.graph.build import run_question
 from qadata.llm.tracing import TRACE_PATH, TraceLogger, now_beijing
+from qadata.obs import obs_for, shutdown
 from qadata.tools.db import open_readonly
 
 console = Console()
@@ -99,9 +100,11 @@ def run_eval(questions_path: str, db_dir: str, sample: int | None = None,
         # 前置校验：账本不存在直接拒绝开跑——绝不等到烧完整轮钱之后才报路径写错
         raise FileNotFoundError(f"预算账本不存在：{budget_path}（先建表头再跑，避免追加孤儿行）")
     if concurrency > 1:
-        return _run_concurrent_path(questions, db_dir, llm, max_rows, out, resume,
-                                    concurrency, settings, limiter, skip_respond,
-                                    budget_path)
+        summary = _run_concurrent_path(questions, db_dir, llm, max_rows, out, resume,
+                                       concurrency, settings, limiter, skip_respond,
+                                       budget_path)
+        shutdown()  # M9 票 01：轮末冲刷观测批缓冲（关态 noop provider 无 shutdown＝如实跳过）
+        return summary
 
     tracer = TraceLogger(TRACE_PATH)
     done_ids: set[int] = set()
@@ -125,6 +128,7 @@ def run_eval(questions_path: str, db_dir: str, sample: int | None = None,
     _print_summary(summary)
     _emit_run_stats(tracer.run_id, settings, out, {q["question_id"] for q in todo},
                     records, budget_path)
+    shutdown()  # M9 票 01：轮末冲刷观测批缓冲（同并发路）
     return summary
 
 
@@ -228,9 +232,12 @@ def _run_one(q: dict, db_dir: str, llm, max_rows: int, tracer, settings=None,
             "difficulty": q.get("difficulty"), "question": q["question"],
             "gold_sql": q["SQL"], "gold_failed": False}
     try:
+        # M9 票 01：出口开时一题＝一条 trace，串联键 run_id＋question_id（判卷回查同锚）
+        obs = obs_for(settings, q["question"], {
+            "run_id": getattr(tracer, "run_id", ""), "question_id": str(q["question_id"])})
         answer = run_question(str(db_path), q["question"], evidence=q.get("evidence", ""),
                               llm=llm, tracer=tracer, settings=settings, limiter=limiter,
-                              skip_respond=skip_respond)
+                              skip_respond=skip_respond, obs=obs)
     except Exception as e:  # noqa: BLE001 单题隔离：评测器最外层，单题任何失败不阻塞整批
         return {**base, **_run_stats(tracer, q), "pred_sql": None, "correct": False, "error": str(e),
                 "error_class": "answer_failed", **_FALLBACK_PATH}

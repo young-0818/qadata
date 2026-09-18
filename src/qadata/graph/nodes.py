@@ -176,8 +176,10 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
     def _llm(prompt: str, node: str) -> str:
         """M8 票 08：有进度流（on_event 在场）时走流式旁路把思考增量推 thinking 帧，
         收口 token 与原路同形入账；关态（CLI/eval）恒 timed_invoke——逐字节一致。
-        仅 understand/generate 用（题面里那 12~30s 死寂最该「看着它想」），其余节点照旧。"""
-        if on_event is not None:
+        仅 understand/generate 用（题面里那 12~30s 死寂最该「看着它想」），其余节点照旧。
+        M9 票 01 窄例外：qadata_no_stream 标记（obs-only 镜像、无直播消费者）不开流式——
+        观测出口不得改变 LLM 调用形态（eval 开配对轮与历史可比的前提）。"""
+        if on_event is not None and not getattr(on_event, "qadata_no_stream", False):
             return timed_stream(llm, prompt, node, tracer, limiter, sink=sink,
                                 on_event=on_event)
         return timed_invoke(llm, prompt, node, tracer, limiter, sink=sink)

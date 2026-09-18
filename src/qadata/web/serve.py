@@ -21,4 +21,6 @@ def run_server(host: str = "127.0.0.1", port: int = 8000,
                      tracer=TraceLogger(TRACE_PATH))
     print(f"问数 web demo：http://{host}:{port}"
           f"（当前模型 {settings.model}·真源 .env·只读展示；智能体目录 {agents_dir}）")
+    if settings.otel_enabled:  # M9 票 01：开态如实播报出口（关态零字＝默认形态不嚷嚷）
+        print(f"OTel 上报开：{settings.otel_endpoint or '端点回落 OTEL_EXPORTER_OTLP_ENDPOINT'}")
     uvicorn.run(app, host=host, port=port)

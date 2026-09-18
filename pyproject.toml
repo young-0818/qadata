@@ -17,6 +17,8 @@ dependencies = [
     "pyyaml>=6.0",
     "fastapi>=0.110",   # M7 票 01：web 薄壳 API＋静态同源服务
     "uvicorn>=0.29",    # M7 票 01：qadata serve 单进程启动器
+    "opentelemetry-sdk>=1.27",                       # M9 票 01：帧流→span 镜像（测试用内存 exporter，零联网）
+    "opentelemetry-exporter-otlp-proto-http>=1.27",  # M9 票 01：OTLP→Langfuse 出口（懒 import，默认关进程不碰）
 ]
 
 [project.optional-dependencies]

@@ -96,6 +96,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "ask":
         tracer = TraceLogger(TRACE_PATH)
         answer = run_question(args.db_path, args.question, evidence=args.evidence, tracer=tracer)
+        from qadata.obs import (
+            shutdown,  # M9 票 01：出口开时冲刷批缓冲（关态＝跳过，惰性 import 同 serve 姿势）
+        )
+        shutdown()
         _print_answer(answer)
         return 0
     if args.cmd == "eval":

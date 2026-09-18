@@ -6,6 +6,7 @@ from qadata.config import FALLBACK_SETTINGS, Settings, load_settings
 from qadata.graph.nodes import make_nodes
 from qadata.graph.state import AgentState
 from qadata.llm.gateway import build_llm
+from qadata.obs import obs_for
 from qadata.types import Answer
 
 
@@ -128,7 +129,7 @@ def _honest_failure(e: Exception) -> Answer:
 def run_question(db_path: str, question: str, evidence: str = "", llm=None,
                  tracer=None, settings: Settings | None = None, limiter=None,
                  skip_respond: bool = False, on_event=None, session_context=None,
-                 thread_id: str | None = None, checkpointer=None) -> Answer:
+                 thread_id: str | None = None, checkpointer=None, obs=None) -> Answer:
     """跑一题到底。on_event（票 03）＝节点级进度回调 `Callable[[dict], None]`，
     帧形如 {node, attempt, status}；缺省 None 时与现状逐行为一致（CLI/eval 调用面
     零改动，专测钉死于 tests/test_on_event.py）。
@@ -138,11 +139,17 @@ def run_question(db_path: str, question: str, evidence: str = "", llm=None,
     thread_id＋checkpointer（M8 票 03 经典 HITL，owner 改判 2026-09-16）：成对给出时
     澄清走节点内 interrupt() 暂停（invoke 正常返回 __interrupt__ 面→_final_answer 收成
     澄清 Answer），人类补充经 resume_question 同 thread 续跑；缺省 None＝澄清落 answer
-    直达 END（CLI/eval/无会话单轮形态，与本参数存在前逐行为一致）。"""
+    直达 END（CLI/eval/无会话单轮形态，与本参数存在前逐行为一致）。
+    obs（M9 票 01，qadata.obs.Obs）：帧流→OTel span 镜像器，缺省 None＝调用面零挂接
+    （默认关逐字节照旧）；调用方不带＝出口开着时按问自造一条（CLI ask 形态，串联键 run_id）。"""
     try:
         if llm is None:
             settings = settings or load_settings()
             llm = build_llm(settings)
+        if obs is None:
+            obs = obs_for(settings, question, {"run_id": getattr(tracer, "run_id", "")})
+        if obs is not None:
+            on_event = obs.mirror(on_event)
         # 成对纪律在唯一闸口守死（langgraph 会拒收"带 checkpointer 无 thread"的裸跑——
         # 单轮/CLI/评测自然双双缺省，直 END 形态与本参数存在前逐行为一致）
         hitl = thread_id is not None and checkpointer is not None
@@ -158,19 +165,28 @@ def run_question(db_path: str, question: str, evidence: str = "", llm=None,
     except Exception as e:  # noqa: BLE001 run_question 是最外层守护：有意收敛一切裸异常
         # 永不编造（面向 CLI 用户）：收敛图内未兜住的裸异常为诚实失败答案。
         return _honest_failure(e)
+    finally:
+        if obs is not None:  # 观测收口挂守护出口：暂停/失败/成功三路 span 都不悬空
+            obs.close()
 
 
 def resume_question(thread_id: str, supplement: str, llm=None,
                     tracer=None, settings: Settings | None = None, limiter=None,
-                    skip_respond: bool = False, on_event=None, checkpointer=None) -> Answer:
+                    skip_respond: bool = False, on_event=None, checkpointer=None,
+                    obs=None) -> Answer:
     """经典 HITL 续跑（M8 票 03 改判）：人类补充经 Command(resume) 送回暂停 thread，
     understand 节点重放（＝understand 共 2 次调用的既定代价）后走常规路线。
     session_context 不用重传——暂停态连记忆一起在 checkpoint 里。守护同 run_question：
-    任何裸异常（含 thread 不存在/无 checkpointer）收敛为诚实失败。"""
+    任何裸异常（含 thread 不存在/无 checkpointer）收敛为诚实失败。
+    obs（M9 票 01）＝续跑问自己的 trace（暂停与续答是两条 web 请求、各一条，靠
+    session_id 串联；缺省 None＝不镜像——无内部自造分支，续跑唯一入口是 web，串联键
+    只有那里有，CLI/eval 不触此门）。"""
     try:
         if llm is None:
             settings = settings or load_settings()
             llm = build_llm(settings)
+        if obs is not None:
+            on_event = obs.mirror(on_event)
         graph = build_graph(llm, tracer, settings=settings, limiter=limiter,
                             skip_respond=skip_respond, on_event=on_event,
                             checkpointer=checkpointer, hitl=True)
@@ -179,3 +195,6 @@ def resume_question(thread_id: str, supplement: str, llm=None,
         return _final_answer(final)
     except Exception as e:  # noqa: BLE001 同 run_question：最外层守护收敛一切裸异常
         return _honest_failure(e)
+    finally:
+        if obs is not None:
+            obs.close()

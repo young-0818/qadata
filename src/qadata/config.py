@@ -21,6 +21,8 @@ class Settings:
     metrics_dir: str = "metrics"  # 注册表目录（按库名寻址 metrics/<db>.yaml）
     value_sampling: bool = False  # M8 票 02 值采样注入（False 时 schema 上下文与现状逐字节一致）
     clarification: bool = False  # M8 票 03 澄清回合（False 时 understand prompt 与路由 map 与今日逐字节一致）
+    otel_enabled: bool = False  # M9 票 01 OTLP 上报出口（False＝noop，埋点帧流零挂接、行为逐字节照旧）
+    otel_endpoint: str = ""     # OTLP HTTP 收集端点（Langfuse 等；空＝回落 OTEL_EXPORTER_OTLP_ENDPOINT）
 
 
 def _env_int(name: str, default: int, *, minimum: int | None = None) -> int:
@@ -80,6 +82,8 @@ def load_settings() -> Settings:
         metrics_dir=os.getenv("QADATA_METRICS_DIR", "metrics"),
         value_sampling=_env_bool("QADATA_VALUE_SAMPLING", False),
         clarification=_env_bool("QADATA_CLARIFICATION", False),
+        otel_enabled=_env_bool("QADATA_OTEL_ENABLED", False),
+        otel_endpoint=os.getenv("QADATA_OTEL_ENDPOINT", ""),
     )
 
 

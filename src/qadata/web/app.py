@@ -37,6 +37,7 @@ from pydantic import BaseModel, Field
 from qadata.config import Settings
 from qadata.graph.build import resume_question, run_question
 from qadata.graph.prompts import compose_supplement
+from qadata.obs import obs_for
 from qadata.tools.db import open_readonly
 from qadata.tools.schema import list_tables
 from qadata.types import Answer
@@ -55,6 +56,7 @@ from qadata.web.sessions import (
     SessionStoreError,
     append_turn,
     build_session_context,
+    turn_ts,
 )
 
 # 前端未构建时的诚实占位页（侦察笔记：别白屏，写明构建命令）
@@ -408,10 +410,15 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
         pend = _pending.pop(pkey, None) if pkey else None
         if req.discard_pending:
             pend = None
+        # M9 票 01：一问＝一条 trace，串联键与 feedback 锚点同源（turn_ts 用轮档 ts 唯一式
+        # turn_ts()——起念盖、归档收口盖，秒级差在册；session_id 是 Langfuse 主过滤键）
+        obs = obs_for(settings, req.question, {
+            "agent_id": req.agent_id, "session_id": req.session_id or "",
+            "turn_ts": turn_ts()})
         if pend is not None:
             answer = resume_question(pend.thread, req.question.strip(), llm=llm,
                                      settings=settings, tracer=tracer, on_event=on_event,
-                                     checkpointer=checkpoint)
+                                     checkpointer=checkpoint, obs=obs)
             if answer.clarification:  # 不该发生（标记复闸保证续轮必答）；万一即塞回，不装没发生过
                 _pending[pkey] = pend
             return answer, compose_supplement(pend.question, pend.ask, req.question)
@@ -419,7 +426,8 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
         thread = f"{pkey}:{uuid.uuid4().hex[:8]}" if (pkey and checkpoint) else None
         answer = run_question(path, req.question, evidence=evidence, llm=llm,
                               settings=settings, tracer=tracer, on_event=on_event,
-                              session_context=ctx, thread_id=thread, checkpointer=checkpoint)
+                              session_context=ctx, thread_id=thread, checkpointer=checkpoint,
+                              obs=obs)
         if thread is not None and answer.clarification:
             _pending[pkey] = _PendingAsk(thread=thread, question=req.question.strip(),
                                          ask=answer.clarification)

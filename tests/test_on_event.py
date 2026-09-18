@@ -67,10 +67,10 @@ def test_run_question_signature_tail_default_none():
     （M8 票 03 改判＝经典 HITL）都在 evidence 之后以缺省 None 的末位参数追加——
     既有位置参/关键字调用面零改动，CLI/eval 不受影响。
     （本断言原钉 on_event 为末位；票 05 合法追加后钉"末两位皆缺省 None"；
-    HITL 改判追加后钉"末四位皆缺省 None"。）"""
+    HITL 改判追加后钉"末四位皆缺省 None"；M9 票 01 观测出口追加后钉"末五位"。）"""
     params = list(inspect.signature(run_question).parameters.values())
-    for tail, want in ((-1, "checkpointer"), (-2, "thread_id"),
-                       (-3, "session_context"), (-4, "on_event")):
+    for tail, want in ((-1, "obs"), (-2, "checkpointer"), (-3, "thread_id"),
+                       (-4, "session_context"), (-5, "on_event")):
         assert params[tail].name == want and params[tail].default is None
 
 
