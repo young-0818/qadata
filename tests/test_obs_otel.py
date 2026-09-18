@@ -236,6 +236,7 @@ def test_web_ask_attaches_correlation(tmp_path, fixture_db, monkeypatch):
                                         "session_id": "abc123def456"})
     assert res.status_code == 200
     assert seen[0]["agent_id"] == a.id and seen[0]["session_id"] == "abc123def456"
+    assert seen[0]["langfuse.session.id"] == "abc123def456"  # Langfuse Sessions 视图只认这个字面
     # turn_ts 与轮档/feedback 锚点同式（isoformat 秒级）——只钉形不钉值（防跨秒抖动）
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}",
                         seen[0]["turn_ts"])

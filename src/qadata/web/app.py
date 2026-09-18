@@ -411,10 +411,13 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
         if req.discard_pending:
             pend = None
         # M9 票 01：一问＝一条 trace，串联键与 feedback 锚点同源（turn_ts 用轮档 ts 唯一式
-        # turn_ts()——起念盖、归档收口盖，秒级差在册；session_id 是 Langfuse 主过滤键）
-        obs = obs_for(settings, req.question, {
-            "agent_id": req.agent_id, "session_id": req.session_id or "",
-            "turn_ts": turn_ts()})
+        # turn_ts()——起念盖、归档收口盖，秒级差在册；session_id 是 Langfuse 主过滤键——
+        # 其 OTLP 映射只认 langfuse.session.id 字面（官方文档），underscore 键进不了 Sessions 视图）
+        attrs = {"agent_id": req.agent_id, "session_id": req.session_id or "",
+                 "turn_ts": turn_ts()}
+        if req.session_id:
+            attrs["langfuse.session.id"] = req.session_id
+        obs = obs_for(settings, req.question, attrs)
         if pend is not None:
             answer = resume_question(pend.thread, req.question.strip(), llm=llm,
                                      settings=settings, tracer=tracer, on_event=on_event,
