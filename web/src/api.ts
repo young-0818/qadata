@@ -193,8 +193,9 @@ export interface SessionTurn {
   question: string;
   failed: boolean;
   ts: string | null;
-  answer: AskResponse; // 契约 payload 原样回放（trail 属现场观察，不入档）
+  answer: AskResponse; // 契约 payload 原样回放
   feedback?: Vote; // 票 04 可选尾键（chart 先例）：该轮末票；缺省＝没投过
+  trail?: ProgressEvent[]; // M9 票 02 可选尾键：步骤＋tool 帧留痕（thinking 不入档），回放控制台复形用
 }
 
 export interface SessionDetail {

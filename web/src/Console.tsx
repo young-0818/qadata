@@ -3,7 +3,8 @@ import { AskResponse, ProgressEvent, isThinkingEvent, isToolEvent } from "./api"
 // M8 票 06 任务控制台：把票 03 既有进度帧喂厚的纯展示面——架构不动（固定状态机
 // 不是 tool loop），本组件只把帧流摆成 owner 截图形态：概览四卡＋追踪时间线。
 // 边界（owner 裁 2026-09-15）：token/费用只活在控制台，答案报告内容里不出现。
-// 回放态为空（trail 属现场观察不入档，M7 票 05 裁决沿袭）。零新依赖。
+// M9 票 02：回放态复形——档案轮尾键 trail（步骤＋tool 帧、thinking 不入档）与直播
+// 帧同形同源，buildSteps 原样消费；旧档（无尾键）照实显示空态。零新依赖。
 
 // 影子折算锚价（与 CLAUDE.md 账本口径同款 ~¥3.9/M）：真链路走 coding plan 订阅，
 // 逐行无现金实付——卡面如实标「影子折算」，不装真实账单（数字诚实纪律）。
@@ -97,7 +98,7 @@ export function Console({
   trail: ProgressEvent[];
   resp: AskResponse | null;
   streaming: boolean;
-  replay: boolean; // 空 trail 的两种成因分开说：新会话（还没跑过）≠ 历史回放（跑过但不入档）
+  replay: boolean; // 空 trail 的两种成因分开说：新会话（还没跑过）≠ 历史回放（旧档未入留痕）
 }) {
   const steps = buildSteps(trail);
   const done = steps.filter((s) => !s.running);
@@ -120,7 +121,7 @@ export function Console({
           {streaming
             ? "连接进度流…"
             : replay
-              ? "本次为历史回放——任务过程属现场观察，不随会话入档。"
+              ? "本次为历史回放——该轮会话档未含任务留痕（旧档案）。"
               : "提问后这里逐帧直播任务过程（概览与时间均为现场量）。"}
         </p>
       ) : (

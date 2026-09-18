@@ -17,7 +17,8 @@ kind:"tool" 帧，start 帧与末帧契约零动）＋末帧 event:answer（即�
 票 05：多轮会话落盘（web/sessions.py，owner 裁决 2026-09-14 推翻"内存态"）——
 请求可选 session_id 装载三层记忆（图侧零新增调用）、问完落盘一轮；在途锁键升格
 session_id（单轮请求维持 agent 级）；历史会话端点供侧栏列表与重开回放（回放＝
-问答本体，自纠错 trail 属现场观察不入档）。口径优先级照旧＝请求显式 > 智能体
+问答本体＋M9 票 02 起轮条目可选尾键 trail＝步骤/tool 帧精简留痕、thinking 不入档，
+回放控制台与直播同组件同形状）。口径优先级照旧＝请求显式 > 智能体
 业务知识 > 空（会话级叠加框经 owner 裁 2026-09-15 撤销，票 05 修订见 spec）。
 """
 import json
@@ -56,6 +57,7 @@ from qadata.web.sessions import (
     SessionStoreError,
     append_turn,
     build_session_context,
+    trail_sink,
     turn_ts,
 )
 
@@ -270,8 +272,9 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
         return {"ok": True}
 
     # ── 票 05：会话面（侧栏列表／重开回放）──────────────────────────────
-    # 会话懒建档＝首问落盘才建文件；回放只渲问答本体（answer 即契约 payload），
-    # 自纠错 trail 属现场观察不入档（owner 裁决）。无 PATCH 端点（票 09 随
+    # 会话懒建档＝首问落盘才建文件；回放＝问答本体（answer 即契约 payload）
+    # ＋M9 票 02 起轮条目可选尾键 trail（留痕透传，旧档无此键形状不动）。
+    # 无 PATCH 端点（票 09 随
     # fresh_topic 闸撤除——话题连续性模型隐式判，会话面无运行时写入口）、
     # 无 DELETE 端点（票未划；删智能体连带清会话）。
 
@@ -307,6 +310,8 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
                      "ts": t.get("ts"), "answer": t["answer"]}
             if t.get("ts") in votes:
                 entry["feedback"] = votes[t["ts"]]
+            if "trail" in t:  # M9 票 02：留痕透传（可选尾键，旧档无此键形状不动）
+                entry["trail"] = t["trail"]
             turns.append(entry)
         return {"id": s.id, "turns": turns,
                 # M8 票 03 改判：在途澄清（进程内指针）——刷新/回放后前端据此恢复
@@ -381,7 +386,8 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
         return str(path), evidence, meta.name, session
 
     def _finish_ask(req: AskRequest, session: Session | None, answer: Answer,
-                    question: str | None = None) -> dict[str, Any]:
+                    question: str | None = None,
+                    trail: list[dict] | None = None) -> dict[str, Any]:
         """两端点共同的收口：契约 payload（session_id 回显）＋会话轮次落盘。
         落盘＝L3 归档追加一轮；失败轮也入账（如实标失败，供下轮消解）。
         question＝入账题面，缺省取 req.question；HITL 续答轮显式传合成全句
@@ -391,21 +397,26 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
         重开回放经 pending 字段恢复"待补充"形态（澄清史不再只活在标签页里）。
         写前重载合并原为 PATCH×ask 闸位竞态兜底（双轴评审收紧），票 09 随
         fresh_topic 闸与 PATCH 端点一并裁撤——闸撤后同会话写者只剩受在途锁
-        排他的 ask 本身，装载快照即最新状态。"""
+        排他的 ask 本身，装载快照即最新状态。
+        M9 票 02：trail＝该轮帧留痕（_route_clarification 采集，thinking 已剔），
+        作可选尾键入档（chart/feedback 先例）——补「回放控制台空白」老洞；
+        无会话通道传 None＝轮条目逐字节照旧。"""
         payload = answer_to_payload(answer, session_id=req.session_id)
         if session is not None and not answer.clarification:
             merged = append_turn(session, question or req.question, res=answer.result,
-                                 failed=answer.failed, payload=payload)
+                                 failed=answer.failed, payload=payload, trail=trail)
             sessions.save(req.agent_id, merged)
         return payload
 
     def _route_clarification(req: AskRequest, path: str, evidence: str, ctx,
-                             on_event=None) -> tuple[Answer, str]:
+                             on_event=None,
+                             trail: list[dict] | None = None) -> tuple[Answer, str]:
         """经典 HITL 分流（M8 票 03 改判；两端点唯一闸口，在途锁内调用）：
         有待答澄清且未显式放弃＝本条消息按"补充"续跑原 thread（归档题面＝合成全句）；
         否则新问——**带会话且开了 checkpoint 才配 thread**（单轮/CLI/评测无 key 可续，
         照旧直 END 形态）。新问若以澄清收口＝落 pending 指针供下一条续跑。
-        返回 (Answer, 归档题面)。"""
+        返回 (Answer, 归档题面)。trail（M9 票 02）＝留痕表——非 None 时帧流经此
+        单点收口入表（两端点＋HITL 续答三路同源；无直播消费者时保 timed_invoke 形态）。"""
         pkey = f"{req.agent_id}:{req.session_id}" if req.session_id else None
         pend = _pending.pop(pkey, None) if pkey else None
         if req.discard_pending:
@@ -418,6 +429,8 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
         if req.session_id:
             attrs["langfuse.session.id"] = req.session_id
         obs = obs_for(settings, req.question, attrs)
+        if trail is not None:
+            on_event = trail_sink(on_event, trail)
         if pend is not None:
             answer = resume_question(pend.thread, req.question.strip(), llm=llm,
                                      settings=settings, tracer=tracer, on_event=on_event,
@@ -440,10 +453,12 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
     def ask(req: AskRequest) -> dict[str, Any]:
         path, evidence, agent_name, session = _resolve_ask_target(req)
         key = _acquire_ask_lock(req, agent_name)
+        trail: list[dict] | None = [] if session is not None else None
         try:
             answer, turn_q = _route_clarification(
-                req, path, evidence, build_session_context(session) if session else None)
-            return _finish_ask(req, session, answer, question=turn_q)
+                req, path, evidence, build_session_context(session) if session else None,
+                trail=trail)
+            return _finish_ask(req, session, answer, question=turn_q, trail=trail)
         finally:
             _release(key)
 
@@ -468,12 +483,14 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
         box: dict[str, Any] = {}
         sentinel = object()
         ctx = build_session_context(session) if session else None
+        trail: list[dict] | None = [] if session is not None else None
 
         def _runner() -> None:
             try:
                 answer, turn_q = _route_clarification(req, path, evidence, ctx,
-                                                      on_event=events.put)
-                box["payload"] = _finish_ask(req, session, answer, question=turn_q)
+                                                      on_event=events.put, trail=trail)
+                box["payload"] = _finish_ask(req, session, answer, question=turn_q,
+                                             trail=trail)
             finally:
                 events.put(sentinel)
                 _release(key)  # 在途＝计算在途：投递侧任何路径不持锁

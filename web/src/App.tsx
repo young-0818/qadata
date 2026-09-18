@@ -620,8 +620,8 @@ const pendingAskResp = (ask: string, sid: string): AskResponse => ({
   clarification: ask,
 });
 
-// 票 06 控制台数据源：直播＝当前 trail；收口＝最近一条**现场**气泡的 trail
-// （回放轮 trail 恒空——现场观察不入档，M7 票 05 口径，控制台如实显示空态）。
+// 票 06 控制台数据源：直播＝当前 trail；收口＝最近一条有留痕气泡的 trail
+// （M9 票 02 起回放轮自带档案 trail——同组件同形状复形；旧档无留痕照实空态）。
 function consoleSource(msgs: Msg[], pending: boolean, progress: ProgressEvent[]) {
   if (pending) return { trail: progress, resp: null as AskResponse | null, replay: false };
   for (let i = msgs.length - 1; i >= 0; i--) {
@@ -709,8 +709,8 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
     }
   }
 
-  // 会话载入（侧栏点击与刷新恢复共用）：回放＝问答本体（answer 即契约 payload；
-  // trail 属现场观察不入档，owner 裁）；在途澄清不落盘，经 pending 字段恢复成
+  // 会话载入（侧栏点击与刷新恢复共用）：回放＝问答本体（answer 即契约 payload）
+  // ＋trail 留痕复形（M9 票 02：档案尾键，旧档无＝空态照实）；在途澄清不落盘，经 pending 字段恢复成
   // 末尾两气泡（原问＋待补充的问句）＝M8 票 03 改判。quiet＝刷新自动恢复不弹错。
   async function loadSession(targetSid: string, quiet: boolean = false) {
     try {
@@ -726,7 +726,8 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
       setMsgs([
         ...d.turns.flatMap((t): Msg[] => [
           { role: "user", text: t.question },
-          { role: "agent", resp: t.answer, trail: [], ts: t.ts },
+          // M9 票 02：trail 入档→回放复形（旧档无尾键＝空，控制台如实显示旧空态）
+          { role: "agent", resp: t.answer, trail: t.trail ?? [], ts: t.ts },
         ]),
         ...restored,
       ]);

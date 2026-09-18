@@ -122,7 +122,9 @@ class Obs:
             if on_event is not None:
                 on_event(frame)
 
-        if on_event is None:
+        # 无直播消费者＝原回调缺位，或其本身已是无流消费者（如 M9 票 02 trail 留痕表）——
+        # 标记照传，观测/入档链任何组合都不启流式
+        if on_event is None or getattr(on_event, "qadata_no_stream", False):
             cb.qadata_no_stream = True
         return cb
 

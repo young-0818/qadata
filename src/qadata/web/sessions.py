@@ -203,14 +203,50 @@ def turn_ts() -> str:
     return datetime.now(BEIJING).isoformat(timespec="seconds")
 
 
+def trail_entry(frame: dict[str, Any]) -> dict[str, Any] | None:
+    """帧 → trail 条目（M9 票 02，裁决链 spec §三 Q9）：步骤帧＋tool 帧**原样入档**、
+    thinking 帧拒收（直播安慰剂，内容已凝结进答案；内部全量看 Langfuse）。
+
+    原样＝不挑键不抄字面——trail 条目与直播帧同形同源（前端回放复用 Console
+    同组件同形状），帧契约再演进也不会在这里漂出第二份形状。精简相对的是
+    thinking 流（单流可数百帧 ≤2000 字），其余帧本就一行字段 ≈1KB/轮。"""
+    return None if frame.get("kind") == "thinking" else frame
+
+
+def trail_sink(on_event, out: list[dict[str, Any]]):
+    """包一层的 on_event：帧先精简入 trail 留痕表，再转原消费者（obs.mirror 同款姿势）。
+
+    原消费者缺位（阻塞 /api/ask）＝打 qadata_no_stream 标——thinking 流式旁路只该被
+    直播消费者开启，入档观测不得改变 LLM 调用形态（M9 票 01 姊妹纪律，_llm 闸认此标）。
+    thinking 帧即便在场也进不了 trail（trail_entry 拒收），入档面与直播面各走各的。"""
+
+    def cb(frame: dict[str, Any]) -> None:
+        entry = trail_entry(frame)
+        if entry is not None:
+            out.append(entry)
+        if on_event is not None:
+            on_event(frame)
+
+    if on_event is None:
+        cb.qadata_no_stream = True  # type: ignore[attr-defined]
+    return cb
+
+
 def append_turn(session: Session, question: str, *, res: QueryResult | None,
-                failed: bool, payload: dict[str, Any]) -> Session:
+                failed: bool, payload: dict[str, Any],
+                trail: list[dict[str, Any]] | None = None) -> Session:
     """跑完一问 → 新会话对象（纯函数，落盘归 caller）。failed 轮如实标失败并剥净
-    结果摘要（不给下游留草稿素材）。"""
+    结果摘要（不给下游留草稿素材）。
+
+    trail（M9 票 02 可选尾键，chart/feedback 先例）＝该轮步骤帧＋tool 帧精简留痕
+    （会话档管「用户当时看见什么」，trace 管「机器内部怎么跑」——分工入册）；
+    缺省/空＝不写键，轮条目与入档前逐字节一致（eval/CLI 与无会话通道零染指）。"""
     turn = {"question": question,
             "ts": turn_ts(),
             "failed": failed,
             "row_count": res.row_count if (res and not failed) else None,
             "head": "" if failed else result_head(res),
             "answer": payload}
+    if trail:
+        turn["trail"] = list(trail)
     return replace(session, turns=session.turns + (turn,))

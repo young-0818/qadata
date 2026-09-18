@@ -6,7 +6,8 @@
 ＋result_head 摘要（全量行不进上下文在此源头钉）。
 API 层钉：session_id 真值回显、轮次落盘两端点同源（_finish_ask 一个收口）、口径
 优先级不随会话变（请求显式 > 智能体业务知识 > 空，叠加框已裁 owner 2026-09-15）、
-在途锁升格 session_id 键（同会话拒、新会话放行）、回放＝问答本体无 trail（owner 裁）、
+在途锁升格 session_id 键（同会话拒、新会话放行）、回放＝问答本体＋trail 留痕
+（M9 票 02 改判：精简入档补「回放控制台空白」老洞，旧档无尾键形状不动）、
 会话 PATCH 端点已随票 09 撤除（405 钉）、旧档案残留 overlay/fresh_topic 键向后
 兼容忽略。
 图侧注入纪律在 tests/test_session_context.py，本文件不重复。
@@ -32,6 +33,7 @@ from qadata.web.sessions import (
     build_session_context,
     new_session_id,
     result_head,
+    trail_entry,
 )
 from tests.fakes import ScriptedLLM
 from tests.test_web_api import (
@@ -42,7 +44,7 @@ from tests.test_web_api import (
     _agent_with_datasource,
     _client,
 )
-from tests.test_web_sse import _GatedLLM, _parse
+from tests.test_web_sse import _GatedLLM, _parse, _progress
 
 _SID = "aabbccddeeff"
 _Q1 = "2026 年有多少新生"
@@ -280,7 +282,8 @@ def test_replay_shape_qa_only(store, fixture_db):
     assert r["id"] == _SID and set(r) == {"id", "turns", "pending"} and r["pending"] is None
     assert len(r["turns"]) == 1
     t = r["turns"][0]
-    assert set(t) == {"question", "failed", "ts", "answer"}  # 回放＝问答本体（trail 不入档）
+    # 回放＝问答本体＋trail 留痕（M9 票 02：旧「不入档」裁决就此翻转）
+    assert set(t) == {"question", "failed", "ts", "answer", "trail"}
     assert t["question"] == _Q1 and t["answer"] == ask  # answer＝契约 payload 原样（含 chart）
 
 
@@ -396,6 +399,74 @@ def test_stream_session_persists_and_echoes(store, fixture_db):
     assert ev == "answer" and data["session_id"] == _SID and set(data) == _CONTRACT_KEYS
     out = _client(None, store).get(f"/api/agents/{a.id}/sessions").json()["sessions"]
     assert out[0]["id"] == _SID and out[0]["turn_count"] == 1  # 落盘与阻塞端点同源
+
+
+# ── M9 票 02：trail 精简入档＋回放留痕透传 ─────────────────────────────
+
+
+def test_trail_entry_frames_pass_through_thinking_rejected():
+    """thinking 不入档专测＋形状单源：步骤帧/tool 帧**原样**入档（trail 条目即帧
+    本身——不抄键即无第二处字面可漂，前端回放按直播同一联合类型直读），thinking 拒收。"""
+    start = {"node": "understand", "attempt": 0, "status": "start"}
+    result = {"node": "execute", "attempt": 1, "status": "执行成功：3 行",
+              "ok": True, "duration_ms": 42, "tokens_in": 0, "tokens_out": 0}
+    tool = {"node": "explore", "kind": "tool", "tool": "list_tables", "ok": True,
+            "duration_ms": 2}
+    assert all(trail_entry(f) is f for f in (start, result, tool))
+    assert trail_entry({"node": "generate", "kind": "thinking", "text": "唔"}) is None
+
+
+def test_append_turn_without_trail_byte_identical(monkeypatch):
+    """缺省/空 trail＝轮条目与入档前逐字节一致——eval/CLI 根本不经 append_turn、
+    无会话 web 请求传 None，落盘面「不写」在此钉死。"""
+    monkeypatch.setattr("qadata.web.sessions.turn_ts",
+                        lambda: "2026-09-18T00:00:00+08:00")
+    payload = dict.fromkeys(_CONTRACT_KEYS)
+    a = append_turn(Session(id=_SID), _Q1, res=None, failed=False, payload=payload)
+    b = append_turn(Session(id=_SID), _Q1, res=None, failed=False, payload=payload,
+                    trail=[])
+    assert a.turns == b.turns and "trail" not in a.turns[0]
+
+
+def test_stream_trail_archived_equals_live_frames(store, fixture_db):
+    """帧形单源端到端钉：SSE 直播帧流的非 thinking 帧 ＝＝ 档案轮 trail（同帧同形，
+    回放 Console 原样消费）；thinking 在场于直播、缺席于档案。"""
+    a = _agent_with_datasource(store, fixture_db)
+    llm = ScriptedLLM(_HAPPY_SCRIPT,
+                      reasonings=["先把问题改写成可查的形式", "核对表列", None])
+    res = _client(llm, store).post(
+        "/api/ask/stream",
+        json={"agent_id": a.id, "question": _Q1, "session_id": _SID})
+    frames = _progress(_parse(res.text))
+    assert any(f.get("kind") == "thinking" for f in frames)  # thinking 确在直播面
+    turn = SessionStore(store).load(a.id, _SID).turns[0]
+    assert turn["trail"] == [f for f in frames if f.get("kind") != "thinking"]
+    assert list(turn)[-1] == "trail"  # 可选尾键（chart/feedback 先例位）
+
+
+def test_blocking_ask_archives_trail_without_streaming(store, fixture_db):
+    """阻塞端点无直播消费者：trail 照样入档（会话档管「用户当时看见什么」一视同仁），
+    但入档观测不开流式旁路——timed_invoke 形态姊妹钉 stream_used==0（M8 票 08 纪律）。"""
+    a = _agent_with_datasource(store, fixture_db)
+    llm = ScriptedLLM(_HAPPY_SCRIPT)
+    _client(llm, store).post("/api/ask",
+                             json={"agent_id": a.id, "question": _Q1, "session_id": _SID})
+    assert llm.stream_used == 0
+    turn = SessionStore(store).load(a.id, _SID).turns[0]
+    assert [f["node"] for f in turn["trail"]][:2] == ["understand", "understand"]
+    assert all(f.get("kind") != "thinking" for f in turn["trail"])
+
+
+def test_replay_entry_trail_passthrough_and_legacy_files(store, fixture_db):
+    """回放接口 payload 兼容：新档 trail 透传；旧档（票 02 前、无尾键）形状不动。"""
+    a = _agent_with_datasource(store, fixture_db)
+    client = _client(ScriptedLLM(_HAPPY_SCRIPT), store)
+    client.post("/api/ask", json={"agent_id": a.id, "question": _Q1, "session_id": _SID})
+    t = client.get(f"/api/agents/{a.id}/sessions/{_SID}").json()["turns"][0]
+    assert set(t) == {"question", "failed", "ts", "answer", "trail"} and t["trail"]
+    SessionStore(store).save(a.id, Session(id="0123456789ab", turns=(_turn("旧问"),)))
+    tl = client.get(f"/api/agents/{a.id}/sessions/0123456789ab").json()["turns"][0]
+    assert set(tl) == {"question", "failed", "ts", "answer"}
 
 
 def test_inflight_lock_key_upgraded_to_session(store, fixture_db):
