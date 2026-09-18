@@ -630,7 +630,7 @@ function consoleSource(msgs: Msg[], pending: boolean, progress: ProgressEvent[])
       return { trail: m.trail, resp: m.role === "agent" ? m.resp : null, replay: false };
     }
   }
-  // 空 trail 分两态：有对话消息＝回放载入（现场观察不入档）；无消息＝还没跑过
+  // 空 trail 分两态：有对话消息＝回放载入（旧档未含留痕）；无消息＝还没跑过
   return {
     trail: [] as ProgressEvent[],
     resp: null as AskResponse | null,

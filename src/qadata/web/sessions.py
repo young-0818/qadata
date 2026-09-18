@@ -209,7 +209,10 @@ def trail_entry(frame: dict[str, Any]) -> dict[str, Any] | None:
 
     原样＝不挑键不抄字面——trail 条目与直播帧同形同源（前端回放复用 Console
     同组件同形状），帧契约再演进也不会在这里漂出第二份形状。精简相对的是
-    thinking 流（单流可数百帧 ≤2000 字），其余帧本就一行字段 ≈1KB/轮。"""
+    thinking 流（单流可数百帧 ≤2000 字），其余帧本就一行字段 ≈1KB/轮。
+
+    ponytail: 返回同一 dict 引用（与直播帧别名）——帧 emit 即弃、无人回改，现实安全；
+    若哪天有节点复用已发帧，这里换 dict(frame)。"""
     return None if frame.get("kind") == "thinking" else frame
 
 

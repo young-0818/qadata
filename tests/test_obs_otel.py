@@ -145,6 +145,17 @@ def test_obs_only_keeps_invoke_path(fixture_db):
     assert llm2.stream_used == 3 and len(fr2) > 0
 
 
+def test_mirror_propagates_no_stream_marker():
+    """双包链路（M9 票 02：web 阻塞端点 OTel 开态＝trail_sink→mirror）：入档留痕表
+    不是直播消费者，marker 经 mirror 照传——_llm 分流仍认 timed_invoke；真直播在位照旧不传。"""
+    from qadata.web.sessions import trail_sink
+
+    tracer, _ = _mem()
+    obs = Obs(tracer, "q", {})
+    assert getattr(obs.mirror(trail_sink(None, [])), "qadata_no_stream", False)
+    assert not getattr(obs.mirror(lambda f: None), "qadata_no_stream", False)
+
+
 # ── ② 默认关双跑＝逐字节一致姊妹钉 ─────────────────────────────────
 
 

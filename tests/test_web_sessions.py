@@ -469,6 +469,23 @@ def test_replay_entry_trail_passthrough_and_legacy_files(store, fixture_db):
     assert set(tl) == {"question", "failed", "ts", "answer"}
 
 
+def test_hitl_resume_archives_trail_without_streaming(store, fixture_db):
+    """续答轮（暂停 1＋续跑 3＝合成归档一轮）也入 trail；且全程 timed_invoke——
+    trail_sink 的 qadata_no_stream 标经 mirror 双包照传（obs 开态链路有
+    test_mirror_propagates_no_stream_marker 单钉，此处端到端 stream_used==0）。"""
+    a = _agent_with_datasource(store, fixture_db)
+    ask = "按入学年还是毕业年算？"
+    llm = ScriptedLLM([_clar_blob(ask), _clar_blob(ask)] + _HAPPY_SCRIPT[1:])
+    client = TestClient(create_app(llm=llm, settings=_S_CLAR, agents=store,
+                                   static_dir="__no_such_dist_for_tests__"))
+    client.post("/api/ask", json={"agent_id": a.id, "question": _Q1, "session_id": _SID})
+    client.post("/api/ask", json={"agent_id": a.id, "question": "入学年",
+                                  "session_id": _SID})
+    assert llm.calls == 4 and llm.stream_used == 0
+    turn = SessionStore(store).load(a.id, _SID).turns[0]
+    assert turn["trail"] and all(f.get("kind") != "thinking" for f in turn["trail"])
+
+
 def test_inflight_lock_key_upgraded_to_session(store, fixture_db):
     """同会话并发拒（两端点一把锁）；换会话号即放行（单用户同智能体多会话合法并存）。"""
     a = _agent_with_datasource(store, fixture_db)
