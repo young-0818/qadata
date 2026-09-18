@@ -1,4 +1,9 @@
-"""提示词。纪律：SYSTEM_RULES 永远位于 prompt 最前端（吃前缀缓存，见设计文档优化 #7）。"""
+"""提示词。纪律：SYSTEM_RULES 永远位于 prompt 最前端（吃前缀缓存，见设计文档优化 #7）。
+
+M9 票 03 收编后本模块双角色：①模板字面单源（gssc 长静态块从这里 split 派生）；
+②五个装配函数（understand_prompt/sql_prompt/respond_prompt/metric_review_prompt 与
+schema 选表旧路）原样保留，充当双跑金标准测的参照实现（oracle）——改措辞必须连
+tests/test_gssc.py 一起过（新旧两路 diff 零差异即收编不漂移的铁证）。"""
 from collections.abc import Sequence
 
 from qadata.graph.error_hints import error_hint
@@ -70,13 +75,25 @@ _METRIC_REVIEW_TMPL = """你是指标口径审查员。下面是人工审定的�
 你的输出："""
 
 
-def metric_review_prompt(question: str, evidence: str, metrics: list) -> str:
-    """L2 复核 prompt：整表 ≤18 条一次装入（spec 匹配机制第二级）。"""
-    table = "\n".join(
+# explore 选表 prompt（M9 票 03 自 tools/schema.py 迁入——五场景模板字面在此统一当家；
+# gssc split 派生装配，此处保留原样作双跑 oracle）。
+_PICK_PROMPT = (
+    "数据库有如下表：{tables}。用户问题：{question}。"
+    "请选出回答该问题最可能相关的表名，用英文逗号分隔，只输出表名："
+)
+
+
+def metric_table(metrics: list) -> str:
+    """注册表整表渲染（内部名｜展示名｜含义｜口径逐行）——复核 prompt 的唯一表料。"""
+    return "\n".join(
         f"- {m.name}｜{m.display_name}｜{m.meaning}｜{m.definition}" for m in metrics
     )
+
+
+def metric_review_prompt(question: str, evidence: str, metrics: list) -> str:
+    """L2 复核 prompt（旧路／oracle）：整表 ≤18 条一次装入（spec 匹配机制第二级）。"""
     return _METRIC_REVIEW_TMPL.format(question=question, evidence=evidence or "（无）",
-                                      table=table)
+                                      table=metric_table(metrics))
 
 
 _SQL_TMPL = SYSTEM_RULES + """
@@ -106,6 +123,10 @@ _RESPOND_TMPL = """你是数据分析助手。请根据查询结果用中文写�
 ## 查询结果（前 {n} 行，共取到 {total} 行）
 {rows_table}
 结论："""
+
+# 截断提示（M9 票 03 自 nodes 提常量收编——respond 预览表的 prompt 素材，与模板同住；
+# gssc 装配与双跑 oracle 共读本串，防字面两处漂移）
+TRUNCATION_HINT = "\n（注意：结果已截断，实际行数可能更多）"
 
 
 # ── M7 票 05 三层记忆渲染（L2→understand 消解、L1→generate 尾部草稿）──────────

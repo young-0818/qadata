@@ -162,19 +162,27 @@ def _reads_session_context(fn) -> bool:
 
 
 def test_only_understand_and_generate_read_session_context():
+    """M9 票 03 收编后同款纪律换址：拿料住 gssc.gather_*——nodes.py 任何节点函数不得
+    出现 session_context（节点只交整份 state，伸手即红）；gssc 内 gather_* 中仅
+    understand/generate 两路许读，且都确实在读（防全空转的假通过）。"""
+    import qadata.graph.gssc as gssc_mod
     import qadata.graph.nodes as nodes_mod
 
     parsed = ast.parse(inspect.getsource(nodes_mod))
-    allowed = {"understand", "generate"}
-    found = set()
     for node in ast.walk(parsed):
         if isinstance(node, ast.FunctionDef) and node.name in {
                 "understand", "metric_match", "explore", "generate", "execute", "verify", "respond"}:
+            assert not _reads_session_context(node), \
+                f"节点 {node.name} 直接伸手拿会话素材——应整份 state 交 gssc 收编"
+    allowed = {"gather_understand", "gather_generate"}
+    found = set()
+    for node in ast.walk(ast.parse(inspect.getsource(gssc_mod))):
+        if isinstance(node, ast.FunctionDef) and node.name.startswith("gather_"):
             assert not _reads_session_context(node) or node.name in allowed, \
-                f"节点 {node.name} 读取了 session_context——越权消费"
+                f"{node.name} 读取了 session_context——越权消费"
             if _reads_session_context(node):
                 found.add(node.name)
-    assert found == allowed  # 两个合法消费者都确实在读（防全空转的假通过）
+    assert found == allowed
 
 
 # ── 纯函数单测（渲染层）────────────────────────────────────────────

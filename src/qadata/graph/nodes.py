@@ -11,6 +11,13 @@ from langgraph.types import interrupt
 
 from qadata.config import FALLBACK_SETTINGS, Settings
 from qadata.graph.error_hints import error_hint
+from qadata.graph.gssc import (
+    assemble,
+    gather_generate,
+    gather_metric_review,
+    gather_respond,
+    gather_understand,
+)
 from qadata.graph.intent import parse_understand_response
 from qadata.graph.metrics import (
     RegistryError,
@@ -27,14 +34,7 @@ from qadata.graph.prompts import (
     SUPPLEMENT_MARK,
     compose_conclusion,
     compose_supplement,
-    format_failure_history,
-    format_session_draft,
-    format_session_history,
-    metric_review_prompt,
-    respond_prompt,
-    sql_prompt,
     strip_conclusion_prefix,
-    understand_prompt,
 )
 from qadata.graph.verify import verify_result
 from qadata.llm.tracing import BEIJING, timed_invoke, timed_stream, tool_frame
@@ -191,10 +191,9 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         # 票 05：L2 会话历史并进这次改写的 prompt（指代消解复用"补全指代"既有机制，零新增调用）
         # 票 03（M8，默认关）：同一改写调用兼产澄清问（三元组，宁空勿造）——保险丝出口，
         # 关态与今日逐字节一致（prompt 不追加指令段、本节点不写 answer、路由 map 不含 END）。
-        text = _llm(understand_prompt(
-            state["question"], state.get("evidence", ""),
-            format_session_history(state.get("session_context")),
-            clarify=s.clarification), "understand")
+        text = _llm(assemble("understand",
+                             gather_understand(state, clarify=s.clarification)),
+                    "understand")
         question, intent, clarification = parse_understand_response(text)
         attempt = len(state.get("attempts", []))
         if (s.clarification and clarification
@@ -252,8 +251,8 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         level = "L1"
         if m is None:  # 第一级确定性未中 → 第二级 LLM 复核整表（禁写 SQL，只判身份）
             level = "L2"
-            text = timed_invoke(llm, metric_review_prompt(state["question"],
-                                                          state.get("evidence", ""), metrics),
+            text = timed_invoke(llm, assemble("metric_match",
+                                              gather_metric_review(state, metrics)),
                                 "metric_match", tracer, limiter, sink=sink)
             m = parse_metric_review(text, metrics)
         if m is None:
@@ -287,17 +286,10 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         return {"db_schema": ctx, "matched_metric": None}
 
     def generate(state: dict) -> dict:
-        history = format_failure_history(state.get("attempts", []), state.get("verify_note"),
-                                         state.get("metric_note"))
         # 票 05：L1 上轮 SQL 草稿进尾部（增量改写参考）——仅素材不进路由，
         # 沙箱/校验/账本三层零改动，草稿写法照走完整 execute＋verify
-        prompt = sql_prompt(
-            schema=state.get("db_schema", ""),
-            evidence=state.get("evidence", ""),
-            question=state["question"],
-            history=history,
-            draft=format_session_draft(state.get("session_context")),
-        )
+        # M9 票 03：失败历史（状态）＋草稿（记忆）等素材收编进 GSSC 出口，逐字节同旧路
+        prompt = assemble("generate", gather_generate(state))
         if s.precise_candidates > 1:
             # 精准模式：同一 prompt 连打 K 发（temperature 由 build_llm 按候选数切换，
             # 多样性已探针验证）；提取失败的候选丢弃，全灭走提取失败入账路径
@@ -474,19 +466,12 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
             # 一次 LLM 调用；verify/回退标注仍按原逻辑挂上（确定性，不烧 token）
             conclusion = "（评测模式：跳过结论生成）"
         else:
-            rows_table = _format_preview(res.columns, preview)
-            if res.truncated:
-                # 截断提示：让模型如实措辞、勿把截断行当全量（仅影响 prompt 呈现，不参与判分）
-                rows_table += "\n（注意：结果已截断，实际行数可能更多）"
             text = timed_invoke(
                 llm,
-                respond_prompt(
-                    question=state["question"],
-                    sql=sql or "",
-                    rows_table=rows_table,
-                    total=res.row_count,
-                    n=len(preview),
-                ),
+                assemble("respond", gather_respond(
+                    state, result=res, sql=sql,
+                    rows_table=_format_preview(res.columns, preview),
+                    n=len(preview))),
                 "respond",
                 tracer,
                 limiter,

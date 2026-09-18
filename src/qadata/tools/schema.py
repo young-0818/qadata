@@ -21,11 +21,6 @@ _VALUE_QUERY_TIMEOUT_S = 2.0   # 单查询兜底超时（视图背后巨型 join
 # 采样候选声明类型（sqlite 亲和性粗筛；BLOB/数值列枚举值对 WHERE 字面量病灶无益）
 _SAMPLE_TYPE_KEYS = ("CHAR", "CLOB", "TEXT", "DATE", "TIME")
 
-_PICK_PROMPT = (
-    "数据库有如下表：{tables}。用户问题：{question}。"
-    "请选出回答该问题最可能相关的表名，用英文逗号分隔，只输出表名："
-)
-
 
 def list_tables(conn: sqlite3.Connection) -> list[str]:
     rows = conn.execute(
@@ -216,9 +211,12 @@ def build_schema_context(
 def _pick_tables_with_llm(llm, tables: list[str], question: str, tracer=None,
                           limiter=None, on_tool=None, sink=None) -> list[str] | None:
     # 走 timed_invoke：选表调用也进 tracing（M1 观测盲区修复）
+    # M9 票 03：选表 prompt 经 GSSC 唯一出口装配（explore 场景收编，逐字节同旧路；
+    # gssc→prompts→precise→executor→本模块成环，惰性 import 同 timed_invoke 先例）
+    from qadata.graph.gssc import assemble, gather_schema_pick
     from qadata.llm.tracing import timed_invoke
     t0 = time.perf_counter()
-    content = timed_invoke(llm, _PICK_PROMPT.format(tables=", ".join(tables), question=question),
+    content = timed_invoke(llm, assemble("explore", gather_schema_pick(tables, question)),
                            "explore", tracer, limiter, sink=sink)
     names = [w.strip() for w in str(content).split(",")]
     valid = [n for n in names if n in tables]
