@@ -92,6 +92,42 @@ class BoomOnceLLM(ScriptedLLM):
         return super().invoke(prompt)
 
 
+class FakeEmbedder:
+    """M9 票 06 向量化离线假通道：脚本表 {文本: 向量}，未脚本化文本显式报错
+    （ScriptedLLM 同纪律——"召回多向量化了一次"这类 bug 不许静默通过）。
+    calls＝embed 调用次数（批量＝一次，与生产协议同语义：签库一批＋每问一发）。"""
+
+    model = "fake-embed"  # 与 EmbeddingsClient 同面（账本 model 字段有真值可记）
+
+    def __init__(self, table: dict[str, list[float]]):
+        self.table = dict(table)
+        self.calls = 0
+        self.batches: list[list[str]] = []
+
+    def embed(self, texts):
+        self.calls += 1
+        self.batches.append(list(texts))
+        missing = [t for t in texts if t not in self.table]
+        if missing:
+            raise AssertionError(f"FakeEmbedder 收到未脚本化文本：{missing}")
+        return [list(self.table[t]) for t in texts]
+
+
+class BoomEmbedder:
+    """向量化端点故障注入（纪律 #5 的有意例外，BoomOnceLLM 同理＝表达"这一发真炸"，
+    非回放成功内容；职责正交）。"""
+
+    model = "boom-embed"
+
+    def __init__(self, exc: Exception | None = None):
+        self.exc = exc or ValueError("embedding 端点炸了")
+        self.calls = 0
+
+    def embed(self, texts):
+        self.calls += 1
+        raise self.exc
+
+
 class FlakyStreamLLM:
     """流式退避窄化专测的故障注入假模型（M8 票 08）——`attempts` 计建流次数。
 

@@ -147,8 +147,9 @@ def test_partition_landing_per_scenario():
 
 
 def test_select_and_compress_are_identity_stages():
-    """恒等通过＝票 04/06 的入住插座在位且当前不改一分：Select 原样返回、
-    Compress 仅拼接（分区序列不重排、空段不吞脚手架）。"""
+    """未挂接＝恒等不改一分：Select 缺省 recall＝原样返回（票 06 上岗后默认关形态、
+    空池逐字节现状的插座面），Compress 限内＝仅拼接（分区序列不重排、空段不吞脚手架）。
+    挂接态与降级态的钉在 tests/test_embedding_recall.py。"""
     slots = _LIVE_SLOTS["generate"]()
     assert gssc.select("generate", slots) is slots
     sections = gssc.structure("generate", slots)

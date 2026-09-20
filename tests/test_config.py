@@ -27,6 +27,7 @@ def _isolate_env(monkeypatch):
     monkeypatch.delenv("QADATA_CLARIFICATION", raising=False)
     monkeypatch.delenv("QADATA_OTEL_ENABLED", raising=False)
     monkeypatch.delenv("QADATA_OTEL_ENDPOINT", raising=False)
+    monkeypatch.delenv("QADATA_EMBED_MODEL", raising=False)
 
 
 def test_load_settings_reads_env(monkeypatch):
@@ -229,3 +230,16 @@ def test_bad_otel_enabled_rejected(monkeypatch):
     monkeypatch.setenv("QADATA_OTEL_ENABLED", "maybe")
     with pytest.raises(RuntimeError, match="QADATA_OTEL_ENABLED"):
         load_settings()
+
+
+def test_embed_model_defaults_empty(monkeypatch):
+    """M9 票 06：向量化模型默认空＝召回未配置（例题库有货也如实入账不召回；
+    真启用＝签题日 owner 显式配置，见票 06 判据）。"""
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    assert load_settings().embed_model == ""
+
+
+def test_embed_model_from_env(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setenv("QADATA_EMBED_MODEL", "text-embedding-v3")
+    assert load_settings().embed_model == "text-embedding-v3"

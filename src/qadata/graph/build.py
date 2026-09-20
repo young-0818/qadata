@@ -59,10 +59,10 @@ def _route_after_verify(state: dict, budget: int) -> str:
 
 def build_graph(llm, tracer=None, settings: Settings | None = None, limiter=None,
                 skip_respond: bool = False, on_event=None, checkpointer=None,
-                hitl: bool = False):
+                hitl: bool = False, recall=None):
     s = settings or FALLBACK_SETTINGS
     nodes = make_nodes(llm, tracer, settings=s, limiter=limiter, skip_respond=skip_respond,
-                       on_event=on_event, hitl=hitl)
+                       on_event=on_event, hitl=hitl, recall=recall)
     g = StateGraph(AgentState)
     for name in ("understand", "metric_match", "explore", "generate", "execute",
                  "verify", "respond"):
@@ -129,7 +129,8 @@ def _honest_failure(e: Exception) -> Answer:
 def run_question(db_path: str, question: str, evidence: str = "", llm=None,
                  tracer=None, settings: Settings | None = None, limiter=None,
                  skip_respond: bool = False, on_event=None, session_context=None,
-                 thread_id: str | None = None, checkpointer=None, obs=None) -> Answer:
+                 thread_id: str | None = None, checkpointer=None, obs=None,
+                 recall=None) -> Answer:
     """跑一题到底。on_event（票 03）＝节点级进度回调 `Callable[[dict], None]`，
     帧形如 {node, attempt, status}；缺省 None 时与现状逐行为一致（CLI/eval 调用面
     零改动，专测钉死于 tests/test_on_event.py）。
@@ -141,7 +142,11 @@ def run_question(db_path: str, question: str, evidence: str = "", llm=None,
     澄清 Answer），人类补充经 resume_question 同 thread 续跑；缺省 None＝澄清落 answer
     直达 END（CLI/eval/无会话单轮形态，与本参数存在前逐行为一致）。
     obs（M9 票 01，qadata.obs.Obs）：帧流→OTel span 镜像器，缺省 None＝调用面零挂接
-    （默认关逐字节照旧）；调用方不带＝出口开着时按问自造一条（CLI ask 形态，串联键 run_id）。"""
+    （默认关逐字节照旧）；调用方不带＝出口开着时按问自造一条（CLI ask 形态，串联键 run_id）。
+    recall（M9 票 06）：例题库召回回调（web/examples.build_recall 装配，question→注入块），
+    经 build_graph 闭包进 generate 的 Select 格——**不进状态键**（可调用对象×checkpointer
+    序列化不相宜；session_context 显式载荷纪律在此不适用）；缺省 None＝逐字节现状
+    （CLI/eval 零挂接）。"""
     try:
         if llm is None:
             settings = settings or load_settings()
@@ -155,7 +160,8 @@ def run_question(db_path: str, question: str, evidence: str = "", llm=None,
         hitl = thread_id is not None and checkpointer is not None
         graph = build_graph(llm, tracer, settings=settings, limiter=limiter,
                             skip_respond=skip_respond, on_event=on_event,
-                            checkpointer=checkpointer if hitl else None, hitl=hitl)
+                            checkpointer=checkpointer if hitl else None, hitl=hitl,
+                            recall=recall)
         initial = {"db_path": db_path, "question": question, "evidence": evidence}
         if session_context is not None:
             initial["session_context"] = session_context
@@ -173,11 +179,13 @@ def run_question(db_path: str, question: str, evidence: str = "", llm=None,
 def resume_question(thread_id: str, supplement: str, llm=None,
                     tracer=None, settings: Settings | None = None, limiter=None,
                     skip_respond: bool = False, on_event=None, checkpointer=None,
-                    obs=None) -> Answer:
+                    obs=None, recall=None) -> Answer:
     """经典 HITL 续跑（M8 票 03 改判）：人类补充经 Command(resume) 送回暂停 thread，
     understand 节点重放（＝understand 共 2 次调用的既定代价）后走常规路线。
     session_context 不用重传——暂停态连记忆一起在 checkpoint 里。守护同 run_question：
     任何裸异常（含 thread 不存在/无 checkpointer）收敛为诚实失败。
+    recall（M9 票 06）＝同 run_question 的召回回调（续跑轮的 generate 重新装配时消费），
+    缺省 None＝逐字节现状。
     obs（M9 票 01）＝续跑问自己的 trace（暂停与续答是两条 web 请求、各一条，靠
     session_id 串联；缺省 None＝不镜像——无内部自造分支，续跑唯一入口是 web，串联键
     只有那里有，CLI/eval 不触此门）。"""
@@ -189,7 +197,7 @@ def resume_question(thread_id: str, supplement: str, llm=None,
             on_event = obs.mirror(on_event)
         graph = build_graph(llm, tracer, settings=settings, limiter=limiter,
                             skip_respond=skip_respond, on_event=on_event,
-                            checkpointer=checkpointer, hitl=True)
+                            checkpointer=checkpointer, hitl=True, recall=recall)
         final = graph.invoke(Command(resume=supplement),
                              {"configurable": {"thread_id": thread_id}})
         return _final_answer(final)

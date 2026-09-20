@@ -81,6 +81,16 @@ def main(argv: list[str] | None = None) -> int:
     p_fb.add_argument("--out", default=None,
                       help="输出 JSONL（默认 runs/feedback-<YYYYMMDD>.jsonl）")
 
+    p_sign = sub.add_parser("examples-sign",
+                            help="人签题对入例题库（M9 票 06 唯一进料口：JSONL 每行 "
+                                 "{q, sql, signed_by}；成功轮永不自动吸收）")
+    p_sign.add_argument("--agents-dir", default=DEFAULT_AGENTS_DIR,
+                        help=f"智能体数据目录（默认 {DEFAULT_AGENTS_DIR}）")
+    p_sign.add_argument("--agent", required=True, help="目标智能体 id（hex12）")
+    p_sign.add_argument("--file", required=True,
+                        help="人审题对 JSONL（feedback-export 产物人工筛选后改写为每行 "
+                             "{q, sql, signed_by}——question 改名 q、逐行补签名）")
+
     p_report = sub.add_parser("report", help="两轮评测对比：qadata report --baseline A --current B")
     p_report.add_argument("--baseline", required=True)
     p_report.add_argument("--current", required=True)
@@ -157,6 +167,36 @@ def main(argv: list[str] | None = None) -> int:
         console.print(f"导出 {n} 行票 → {out}"
                       + (f"（跳过回查不中 {skipped} 行——票在轮不在，如实上报）" if skipped else ""))
         console.print("提示：产物供人审手工成卷，gold 必须人签——不自动进 tests/*_ids.json")
+        return 0
+    if args.cmd == "examples-sign":
+        from qadata.config import load_settings
+        from qadata.llm.gateway import build_embedder  # 唯一生产位向量化通道
+        from qadata.web.agents import AgentStore
+        from qadata.web.examples import (
+            sign_examples,  # 逻辑全在包内，CLI 薄壳；唯一进料口
+        )
+
+        settings = load_settings()
+        if not settings.embed_model:
+            console.print("[red]未配置 QADATA_EMBED_MODEL（.env）——例题库向量化无从谈起[/red]")
+            return 1
+        store = AgentStore(args.agents_dir)
+        try:
+            meta = store.get(args.agent)  # 不存在/非法 id → 诚实报错，不建孤儿档
+        except Exception as e:  # noqa: BLE001 CLI 薄壳：存储面一切拒绝转人话
+            console.print(f"[red]{e}[/red]")
+            return 1
+        try:
+            pairs = [json.loads(ln) for ln in
+                     Path(args.file).read_text(encoding="utf-8").splitlines() if ln.strip()]
+        except (OSError, ValueError) as e:
+            console.print(f"[red]题对文件读不动：{e}[/red]")
+            return 1
+        n, skipped = sign_examples(store.agent_dir(meta.id), pairs,
+                                   build_embedder(settings).embed)
+        console.print(f"人签 {n} 对题 → {store.agent_dir(meta.id)}"
+                      + (f"（拒收无签/坏行 {skipped} 条——人签纪律，不静默）" if skipped else ""))
+        console.print("提示：进料口唯一——会话成功轮永不自动吸收（错误自我强化，spec §五 被否在案）")
         return 0
     if args.cmd == "report":
         from qadata.eval.report import (

@@ -45,6 +45,39 @@ def build_llm(settings: Settings | None = None) -> ChatOpenAI:
     )
 
 
+class EmbeddingsClient:
+    """M9 票 06 例题库召回的向量化通道：OpenAI 兼容 /v1/embeddings（与正文模型同端点）。
+
+    协议面只有 `embed(texts) -> 向量组`——召回账本记的是「一次向量化调用」本体
+    （spec §二 Q6 花费如实入账），端点 usage 不经此协议进账。限速器自持一把
+    （QADATA_MAX_QPS 语义＝只限这条向量线——eval 结构上到不了 embedder，web 正文
+    模型调用本也不经 limiter，双轴评审如实注）。不做退避重试：召回失败＝降级不召回
+    （票 06 失败纪律），重试属锦上添花的第二次花费，不值。"""
+
+    def __init__(self, settings: Settings, limiter=None):
+        self.model = settings.embed_model
+        self._limiter = limiter
+        self._client = openai.OpenAI(api_key=settings.api_key,
+                                     base_url=settings.base_url,
+                                     timeout=settings.llm_timeout_s)
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        if self._limiter is not None:
+            self._limiter.acquire()
+        resp = self._client.embeddings.create(model=self.model, input=list(texts))
+        return [d.embedding for d in resp.data]
+
+
+def build_embedder(settings: Settings | None = None) -> EmbeddingsClient:
+    """生产位构造（serve 只在 settings.embed_model 非空时调用——空＝召回未配置）。"""
+    from qadata.llm.ratelimit import (
+        RateLimiter,  # 惰性 import 防环（config::check_vocab 先例）
+    )
+    s = settings or load_settings()
+    limiter = RateLimiter(s.max_qps) if s.max_qps > 0 else None
+    return EmbeddingsClient(s, limiter=limiter)
+
+
 def _is_retryable(exc: Exception) -> bool:
     """只有"再试一次可能成功"的错误才重试；鉴权/参数错立即失败。"""
     if isinstance(exc, openai.APIConnectionError):  # 含 APITimeoutError 子类

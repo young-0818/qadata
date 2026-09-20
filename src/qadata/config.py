@@ -23,6 +23,8 @@ class Settings:
     clarification: bool = False  # M8 票 03 澄清回合（False 时 understand prompt 与路由 map 与今日逐字节一致）
     otel_enabled: bool = False  # M9 票 01 OTLP 上报出口（False＝noop，埋点帧流零挂接、行为逐字节照旧）
     otel_endpoint: str = ""     # OTLP HTTP 收集端点（Langfuse 等；空＝回落 OTEL_EXPORTER_OTLP_ENDPOINT）
+    embed_model: str = ""  # M9 票 06 例题库召回的向量化模型（空＝召回未配置——例题库有货也如实入账不召回；
+    # 端点与正文模型共用 base_url/api_key，走现成 OpenAI 兼容 /v1/embeddings）
 
 
 def _env_int(name: str, default: int, *, minimum: int | None = None) -> int:
@@ -88,6 +90,7 @@ def load_settings() -> Settings:
         clarification=_env_bool("QADATA_CLARIFICATION", False),
         otel_enabled=_env_bool("QADATA_OTEL_ENABLED", False),
         otel_endpoint=os.getenv("QADATA_OTEL_ENDPOINT", ""),
+        embed_model=os.getenv("QADATA_EMBED_MODEL", "").strip(),
     )
 
 

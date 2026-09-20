@@ -268,6 +268,20 @@ def sql_prompt(schema: str, evidence: str, question: str, history: str = "",
 # STATE 分区但无此后缀料，单源闸让"SQL 永不砍"成为结构保证而非行首样式运气）
 FAILURE_HISTORY_HEADER = "## 之前的失败尝试"
 
+# ── M9 票 06 例题库召回块（Select 格上岗的注入料，进 generate；零 LLM 确定性拼装）──
+# 节头＝渲染（本模块）与保险丝淘汰序（gssc._cut_examples）共读的单源字面
+# （FAILURE_HISTORY_HEADER 先例）；授权句延伸票 09「无关则忽略」姿势——人签例题可信
+# 但不保证与本题有关，且写法数字仍须按 schema 核实（错误样例不复读：料池只收已验证对）。
+EXAMPLES_HEADER = ("## 参考例题（人工签入的历史已验证问答，按相似度升序、最后一条最接近本题；"
+                  "仅供参考不是本题答案，写法与数字仍须按上方 Schema 与本题核实；"
+                  "与本题无关则忽略，按本题独立完整生成）")
+
+
+def format_examples_block(pairs: Sequence[tuple[str, str]]) -> str:
+    """召回块拼装：pairs＝(问题, SQL) 已按相似度**升序**（最像的排最后、贴「## 用户问题」
+    节头最近——DB-GPT 论文形态；Anthropic 静前动后的局部版）。空列表调用方负责不发生。"""
+    return EXAMPLES_HEADER + "\n" + "\n".join(f"问：{q}\nSQL：{sql}" for q, sql in pairs)
+
 
 def format_failure_history(attempts: list, verify_note: str | None,
                            metric_note: str | None = None) -> str:

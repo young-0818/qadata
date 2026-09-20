@@ -120,7 +120,8 @@ def _evidence_caliber(state: dict) -> str:
 
 
 def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
-               skip_respond: bool = False, on_event=None, hitl: bool = False):
+               skip_respond: bool = False, on_event=None, hitl: bool = False,
+               recall=None):
     """节点工厂：闭包注入 llm/tracer/settings/limiter，便于测试时替换假模型与配置。
     skip_respond：评测模式——成功路径不生成结论文本（判分只读 answer.sql 的执行结果），
     失败诚实汇报与回退重执行不受影响。产品路径（ask/Web）默认 False，全家桶保留。
@@ -131,6 +132,8 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
     hitl（M8 票 03 owner 改判 2026-09-16）：澄清走经典 HITL——understand 节点内
     interrupt() 暂停等人类（需调用侧配好 checkpointer＋thread_id），缺省 False＝
     澄清落 answer 直达 END（无会话/CLI/评测形态）。
+    recall（M9 票 06）＝例题库召回回调（question→注入块），只被 generate 经装配器
+    Select 格消费；缺省 None＝逐字节现状（CLI/eval 零挂接，on_event 纪律同族）。
 
     M8 票 06 帧喂厚：结果帧追加 ok/duration_ms/tokens_in/tokens_out（start 帧与
     末帧 answer 契约零动）；tools 层子步骤发 kind:"tool" 帧（explore 内
@@ -303,7 +306,8 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         # 票 05：L1 上轮 SQL 草稿进尾部（增量改写参考）——仅素材不进路由，
         # 沙箱/校验/账本三层零改动，草稿写法照走完整 execute＋verify
         # M9 票 03：失败历史（状态）＋草稿（记忆）等素材收编进 GSSC 出口，逐字节同旧路
-        prompt = assemble("generate", gather_generate(state), on_compress=_fuse("generate"))
+        prompt = assemble("generate", gather_generate(state), on_compress=_fuse("generate"),
+                          recall=recall)
         if s.precise_candidates > 1:
             # 精准模式：同一 prompt 连打 K 发（temperature 由 build_llm 按候选数切换，
             # 多样性已探针验证）；提取失败的候选丢弃，全灭走提取失败入账路径

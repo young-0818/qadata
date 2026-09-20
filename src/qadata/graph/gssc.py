@@ -4,7 +4,9 @@
  理由与封顶注记见 web/sessions.catch_up_digest——票 07 文档收口时一并转正。）
 
 Gather 收齐候选（gather_*＝读状态、格式化素材，节点侧不再伸手拿料）
-→ Select 挑选（本票恒等通过；票 06 embedding top-K＋关键词保底在此入住）
+→ Select 挑选（M9 票 06 上岗：generate 场景经 recall 回调做一次 embedding 召回
+  ＋关键词保底（hybrid），料池＝人签例题库，装配在 web/examples——本模块只认
+  「question→注入块」的回调形状；其余场景与未挂接＝恒等通过，不演不撒谎）
 → Structure 分区落位（六分区＝装配器内部分类法、非统一字节顺序——各场景按现状
   字节序落位，ADR-0002 在案；分区骨架重排已被否，勿回锅）
 → Compress 预算压缩（M9 票 04 tiktoken 保险丝在此入住，见下方 FUSE 段）。
@@ -28,6 +30,7 @@ from qadata.graph.prompts import (
     _UNDERSTAND_TMPL,
     DIGEST_LINE_HEADER,
     DIGEST_PARA_HEADER,
+    EXAMPLES_HEADER,
     FAILURE_HISTORY_HEADER,
     MEMORY_TURN_PREFIX,
     SUPPLEMENT_MARK,
@@ -131,13 +134,15 @@ def gather_schema_pick(tables: list[str], question: str) -> dict[str, str]:
     return {"tables": ", ".join(tables), "question": question}
 
 
-# ── Select／Compress：本票恒等通过（不撒谎、不造特殊通道）──────────────
-
-
-def select(scenario: str, slots: dict[str, str]) -> dict[str, str]:
-    """挑选阶段：原样通过。票 06（embedding 召回＋hybrid 保底）在此入住——
-    届时候选料池（例题库/schema 条目/业务术语）从 slots 进出，默认关＝本函数形状照旧。"""
-    return slots
+def select(scenario: str, slots: dict[str, str], *, recall=None) -> dict[str, str]:
+    """挑选阶段（M9 票 06 上岗）：generate 场景经 recall 回调（question→注入块，
+    例题库 embedding top-K＋关键词保底，web/examples 装配）把召回块放进 "examples" 槽；
+    回调空串＝本无料或降级，槽不加。recall 缺省 None／非 generate 场景＝恒等通过
+    （原对象返回——默认关与空池＝逐字节现状，金标准测网共守；select 测试钉 identity）。"""
+    if recall is None or scenario != "generate":
+        return slots
+    block = recall(slots["question"])
+    return {**slots, "examples": block} if block else slots
 
 
 # ── Compress 总闸：tiktoken 预算保险丝（M9 票 04，spec §二 Q3／ADR-0002）──────
@@ -149,9 +154,10 @@ def select(scenario: str, slots: dict[str, str]) -> dict[str, str]:
 # cl100k 对中文计量粒度比订阅端词表更细（同文计数只高不低），真载荷距闸更远。
 # 评测形态永不触发＝行为零变化；触发只可能出现在生产长会话/巨 schema 形态。
 # 淘汰序（资料类只有程序硬砍，spec §五 勿回锅）：先丢最老窗口原文行、次摘要行、
-# 再纪要段（M9 票 05 接线＝先丢行、后丢段——密度越高越守得住），次砍值采样、
-# 再缩失败历史——按 Zone 优先级逐级、确定性、零 LLM；任务与输出分区永不砍，
-# 无料可砍的分区（respond 结果表、explore 表清单等）如实入账不硬砍。
+# 再纪要段（M9 票 05 接线＝先丢行、后丢段——密度越高越守得住），次撤参考例题
+# （票 06 注入料在此吃兜底），次砍值采样、再缩失败历史——按 Zone 优先级逐级、
+# 确定性、零 LLM；任务与输出分区永不砍，无料可砍的分区（respond 结果表、
+# explore 表清单等）如实入账不硬砍。
 FUSE_TOKENS: dict[str, int] = {
     "understand": 4293,    # 账本最大 1431 × 3
     "generate": 15645,     # 5215 × 3
@@ -253,6 +259,17 @@ def _evict_digest(sections: list[Section], header: str, action: str) -> str | No
     return None
 
 
+def _cut_examples(sections: list[Section]) -> str | None:
+    """撤参考例题（M9 票 06 注入料吃保险丝兜底）：召回块整段撤（确定性一刀，
+    值采样同款姿势）。排序在摘要面之后、值采样之前——few-shot 是最可再生的资料类，
+    schema 素材是本题答案的地板。EXAMPLES_HEADER 定位（单源共读，FAILURE_HISTORY_HEADER 先例）。"""
+    for i, s in enumerate(sections):
+        if s.zone is Zone.EVIDENCE and EXAMPLES_HEADER in s.text:
+            sections[i] = s._replace(text="")
+            return "撤参考例题"
+    return None
+
+
 def _cut_value_samples(sections: list[Section]) -> str | None:
     """第二级：砍值采样＝整块切除（确定性一刀；标记头＝schema.py 单源字面，
     惰性 import 防环，同 timed_invoke 姿势）。"""
@@ -280,8 +297,8 @@ def _shrink_failure_history(sections: list[Section]) -> str | None:
 
 def compress(scenario: str, sections: list[Section], *, on_compress=None) -> str:
     """预算压缩阶段：限内＝恒等拼接（逐字节零变化）；超限＝按 Zone 优先级确定性淘汰
-    （窗口原文行→摘要行→纪要段→值采样→失败历史，任务/输出永不砍），每步一单位
-    直至限内或无料可砍。
+    （窗口原文行→摘要行→纪要段→参考例题→值采样→失败历史，任务/输出永不砍），
+    每步一单位直至限内或无料可砍。
     on_compress（降级入账回调）仅在真压缩时触发一次——账本＋直播帧流两出口由挂点自持。"""
     budget = FUSE_TOKENS[scenario]
     cur = "".join(s.text for s in sections)
@@ -296,6 +313,7 @@ def compress(scenario: str, sections: list[Section], *, on_compress=None) -> str
         action = (_evict_memory(sections)
                   or _evict_digest(sections, DIGEST_LINE_HEADER, "丢最老摘要行")
                   or _evict_digest(sections, DIGEST_PARA_HEADER, "丢最老纪要段")
+                  or _cut_examples(sections)
                   or _cut_value_samples(sections) or _shrink_failure_history(sections))
         if action is None:
             break
@@ -323,16 +341,23 @@ def _structure_understand(p: dict[str, str]) -> list[Section]:
 
 def _structure_generate(p: dict[str, str]) -> list[Section]:
     history, draft = p["failure_history"], p["draft"]
-    return [
+    examples = p.get("examples") or ""  # 票 06：Select 格召回块（select 未挂接＝无此槽＝逐字节现状）
+    sections = [
         Section(Zone.ROLE, SYSTEM_RULES),
         Section(Zone.EVIDENCE, "\n\n## 数据库 Schema\n" + p["schema"]),
         Section(Zone.EVIDENCE, "\n\n## 背景信息\n" + (p["evidence"] or "（无）")),
+    ]
+    if examples:
+        # 贴「## 用户问题」最近落位（块内已升序、最像的在块尾——DB-GPT 论文形态）
+        sections.append(Section(Zone.EVIDENCE, "\n\n" + examples + "\n"))
+    sections += [
         Section(Zone.TASK, "\n\n## 用户问题\n" + p["question"] + "\n"),
         # 空节省略＝整段连前导换行一起不进（sql_prompt 的 h 组装逐字节同款）
         Section(Zone.STATE, "\n" + history if history else ""),
         Section(Zone.MEMORY, "\n" + draft if draft else ""),
         Section(Zone.OUTPUT, "\n输出一条 SQL："),
     ]
+    return sections
 
 
 def _structure_metric_review(p: dict[str, str]) -> list[Section]:
@@ -385,8 +410,11 @@ def structure(scenario: str, slots: dict[str, str]) -> list[Section]:
 # ── 唯一出口 ──────────────────────────────────────────────────────────
 
 
-def assemble(scenario: str, slots: dict[str, str], *, on_compress=None) -> str:
+def assemble(scenario: str, slots: dict[str, str], *, on_compress=None,
+             recall=None) -> str:
     """跑完 Select→Structure→Compress，产出进模型的最终 prompt。
-    on_compress（票 04）＝保险丝降级入账回调（仅在真压缩时触发），缺省 None＝只压缩不入账。"""
-    return compress(scenario, structure(scenario, select(scenario, slots)),
+    on_compress（票 04）＝保险丝降级入账回调（仅在真压缩时触发），缺省 None＝只压缩不入账。
+    recall（票 06）＝例题库召回回调（question→注入块），缺省 None＝Select 恒等照旧。"""
+    return compress(scenario,
+                    structure(scenario, select(scenario, slots, recall=recall)),
                     on_compress=on_compress)

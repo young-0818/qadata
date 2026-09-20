@@ -22,6 +22,9 @@ session_id（单轮请求维持 agent 级）；历史会话端点供侧栏列表
 业务知识 > 空（会话级叠加框经 owner 裁 2026-09-15 撤销，票 05 修订见 spec）。
 M9 票 05：记忆格换代——两问数端点锁内同源挂 `_catch_up`（滚存摘要链懒补：滑出
 预算窗口的轮在组装前顺手补齐，无后台任务；无滑出＝零触发零花费，旧档无尾键逐字节现状）。
+M9 票 06：例题库召回挂 `_route_clarification` 单点（`_recall_for` 逐请求现读智能体目录
+内人签档 examples.yaml，embedder 注入＝DI 缝；空池/未配置/坏档/端点挂＝恒等或降级入账，
+问数两端点与 HITL 续答同源，CLI/eval 不经此门）。
 """
 import json
 import queue
@@ -51,6 +54,7 @@ from qadata.web.agents import (
     AgentStoreError,
 )
 from qadata.web.charts import decide_chart
+from qadata.web.examples import ExampleError, build_recall, load_examples
 from qadata.web.feedback import FeedbackError, append_vote, latest_votes
 from qadata.web.sessions import (
     Session,
@@ -149,13 +153,15 @@ def answer_to_payload(answer: Answer, session_id: str | None = None) -> dict[str
 
 def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
                static_dir: str | Path | None = None,
-               tracer=None) -> FastAPI:
+               tracer=None, embedder=None) -> FastAPI:
     """应用工厂：agents（AgentStore）必填、llm/settings/static_dir/tracer 注入——
     契约测试注 tmp 存储＋假模型，工厂不摸文件系统做装配（评审收紧：删 None 兜底，
     不给"自己造真目录 store"留后路）。
 
     llm=None 时逐题经 run_question 内部 build_llm（需密钥）；生产路径由 serve 注入
     共享实例。static_dir 默认 web/dist 沿仓库根 cwd 约定（与 TRACE_PATH 同款）。
+    embedder（M9 票 06）＝向量化通道（生产＝gateway.build_embedder、测试＝FakeEmbedder）；
+    None＝召回未配置——例题库有货也如实入账不召回，空池则零挂接逐字节现状。
     """
     store = agents
     sessions = SessionStore(store)  # 票 05：会话住智能体目录内，删智能体连带清会话
@@ -401,6 +407,27 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
             sessions.save(req.agent_id, out)  # 裸 OSError 如实上抛（落盘挂＝真错误，不静默）；
         return out  # 防锁悬靠挂点在 _runner/try 内（双轴评审 Spec c1），非在此吞异常
 
+    def _recall_for(agent_id: str):
+        """M9 票 06 Select 格挂接（spec §二 Q6）：例题库＝智能体目录内人签档，逐请求
+        现读（文件即数据库、无缓存——签入即生效）。空池／未配 embedder＝None＝恒等
+        挂接零染指（逐字节现状）；坏档＝降级入账不拦答题（失败纪律在案）。
+        入账面照 digest 先例走审计账本单出口——不开帧、前端零染指。"""
+        try:
+            examples = load_examples(store.agent_dir(agent_id))
+        except ExampleError as e:
+            # 报错文本自带例题库前缀（load_examples 单源）——直记不套第二份（双轴评审）
+            if tracer is not None:
+                tracer.log("recall", outcome="failed", reason=str(e)[:160])
+            return None
+        if not examples:
+            return None
+        if embedder is None:
+            if tracer is not None:
+                tracer.log("recall", outcome="failed", pool=len(examples),
+                           reason="向量化未配置（QADATA_EMBED_MODEL 为空）")
+            return None
+        return build_recall(examples, embedder, tracer=tracer)
+
     def _finish_ask(req: AskRequest, session: Session | None, answer: Answer,
                     question: str | None = None,
                     trail: list[dict] | None = None) -> dict[str, Any]:
@@ -447,10 +474,13 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
         obs = obs_for(settings, req.question, attrs)
         if trail is not None:
             on_event = trail_sink(on_event, trail)
+        # M9 票 06：召回回调在此单点挂上（两端点＋HITL 续答同源；入账走审计账本，
+        # 不开帧——digest 先例，前端/契约零染指）
+        recall = _recall_for(req.agent_id)
         if pend is not None:
             answer = resume_question(pend.thread, req.question.strip(), llm=llm,
                                      settings=settings, tracer=tracer, on_event=on_event,
-                                     checkpointer=checkpoint, obs=obs)
+                                     checkpointer=checkpoint, obs=obs, recall=recall)
             if answer.clarification:  # 不该发生（标记复闸保证续轮必答）；万一即塞回，不装没发生过
                 _pending[pkey] = pend
             return answer, compose_supplement(pend.question, pend.ask, req.question)
@@ -459,7 +489,7 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
         answer = run_question(path, req.question, evidence=evidence, llm=llm,
                               settings=settings, tracer=tracer, on_event=on_event,
                               session_context=ctx, thread_id=thread, checkpointer=checkpoint,
-                              obs=obs)
+                              obs=obs, recall=recall)
         if thread is not None and answer.clarification:
             _pending[pkey] = _PendingAsk(thread=thread, question=req.question.strip(),
                                          ask=answer.clarification)
