@@ -10,9 +10,10 @@ LangGraph 自研状态机，BIRD 基准评测驱动开发（每个数字绑实�
 
 - **自纠错状态机**：执行失败与校验可疑双条件边驱动重试环，预算 3 次、`attempts` 即账本；SQL 错误规则化分类＋中文修复建议（零 token）注入重试历史。
 - **只读沙箱四层**：只读连接唯一入口 / sqlglot 单语句白名单＋表名校验 / 5s 超时中断＋双行数上限 / sqlite 物理只读。全路径无旁路——模板产出的 SQL 照过四层。
-- **永不编造**：失败路径不调 LLM，输出规则化的诚实失败说明；答案四节中唯一来自模型的只有【结论】一句话，【数据依据】【口径说明】【校验标注】全部代码组装。
+- **永不编造**：失败路径不调 LLM，输出规则化的诚实失败说明；答案四节中唯一来自模型的只有【结论】（M8 起为报告式 markdown 总结），【数据依据】【口径说明】【校验标注】全部代码组装。
 - **指标层（可选，默认关）**：人工审核的原子指标注册表（口径＝业务词到 SQL 计算的映射）＋两级匹配＋极值机制闸＋填槽渲染模板——Text-to-Metrics 与 Text-to-SQL 双路径并存，命中题直出「人审口径＋血缘」。
-- **多轮会话记忆**：三层记忆纯函数组装（工作草稿／近期消解窗／全史归档），文件即数据库落盘，零新增 LLM 调用。
+- **多轮会话记忆**：三层记忆纯函数组装（工作草稿／预算驱动原文窗／全史归档）＋滚存摘要链——滑出窗口的轮懒补冻存逐轮一行、满批折段，无后台任务、短会话与评测形态零触发零花费；每轮附 trail 精简留痕，回放控制台与直播同形。
+- **上下文工程与观测（M9）**：图内一切进模型的内容走 GSSC 装配器唯一出口（字节等价收编，双跑对拍验收）＋tiktoken 预算保险丝（评测永不触发）；OTel 标准出口把进度帧流镜像为 span 树上报 Langfuse（默认 noop，审计账本原地不动）；例题库 hybrid 召回（只进人签题、默认关）。
 - **进度流与图表**：SSE 逐帧直播自纠错过程；图型判定为后端规则纯函数，LLM 不参与排版。
 - **评测工程**：并发＋全局限速＋断点续跑、逐题 token/调用数/延迟入账、题型切片、两轮 diff 报告、变体矩阵。
 - **测试全封闭**：500+ 测试不碰网（脚本化假模型＋调用计数断言），CI 门禁 ruff＋pytest。
@@ -87,8 +88,30 @@ flowchart LR
 会话＝智能体目录内的一个 YAML 文件（文件即数据库，懒建档，重启历史仍在）。下一问「带什么旧上下文」由纯函数确定性切分：
 
 - **L1 工作记忆**：上一轮成功 SQL＋结果头部摘要，作 generate 的增量改写草稿——「这些新生」的定义写在上一轮 SQL 里。草稿仅参考，仍走完整沙箱＋校验；上轮失败则不给草稿（错误草稿不传染）。
-- **L2 情节记忆**：最近 K=5 轮（问题/SQL/行数/标量），并进 understand 的改写调用做指代消解——复用既有机制，零新增 LLM 调用。
+- **L2 情节记忆**：**预算驱动窗口**（M9）——从最近往回收原文轮直至该分区 token 预算（tiktoken 计量），轮数不再是规则、K=5 只是默认换算结果；并进 understand 的改写调用做指代消解，窗口组装本身零新增调用。滑出窗口的轮不丢失：**滚存摘要链**懒补——下一问组装前顺手把每滑出轮压成一行冻存摘要、积满一批折一条标轮次范围的段落行、段落溢出丢最老（每轮只压一次、成形永不复压，非「滚动重压」）；摘要失败入账不拦答题、下次再补。落盘＝会话档可选尾键 `digest_lines`/`digest_upto`，无尾键旧档逐字节现状；CLI/eval 单轮结构上零触发。
 - **L3 归档**：全史落盘，**永不进 prompt**。
+- **例题库（Select 格，默认关）**：人签题对（问题→已验证 SQL）经 `qadata examples-sign` 入智能体目录 `examples.yaml`，问数时 hybrid 召回（向量分数＋关键词精确命中硬保底）top-K 相似度**升序**注入 generate——最像的贴问题最近。成功轮**永不自动吸收**（错误自我强化），进料口唯一＝人签；空池/未配置＝逐字节现状。
+
+### 可观测性：账本 / trace / trail 三角色
+
+三角色各管一段、互不替代（ADR-0003）：**审计账本** `traces.jsonl`（判卷与预算红线的真值单源，不随任何观测开关而动）、**trace**（OTel span 树：一问一条，节点步骤 span＋工具子 span，OTLP 上报可过滤可 diff）、**trail**（会话轮的精简留痕，回放呈现「用户当时看见什么」；「机器内部怎么跑」归 trace，thinking 流不入档）。埋点单源＝既有 SSE 进度帧流，镜像器只是它的第二消费者——**埋点常驻、开关选出口**：
+
+```bash
+# 默认关＝noop（几纳秒空操作、行为逐字节照旧）；开出口＝指到 Langfuse（自托管或云）的 OTLP 端点：
+QADATA_OTEL_ENABLED=1
+QADATA_OTEL_ENDPOINT=http://localhost:3000/api/public/otel   # 空＝回落 OTEL_EXPORTER_OTLP_ENDPOINT
+OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic <base64(pk:sk)>,x-langfuse-ingestion-version=4"
+```
+
+**何时开**（运营知识）：① eval 批跑后归因——端点漂移/膨胀筛查按 `run_id`＋`question_id` 过滤；② 判负类探针的 prompt 原文 diff；③ 长会话怪事按 session 过滤 trace（`agent_id`＋`session_id`＋轮 ts，与反馈锚点同源）——保险丝触发史/摘要链现形/召回注入了什么都在 span 上；④ 演示与面试。**日常开发与测试＝关**（CI 断言用内存 exporter，零联网）。
+
+**升级判据**（重提对应旧案前先读，锚点与代码注释互指）：
+
+| 判据 | 触发条件 | 做法 | 代码锚点 |
+|---|---|---|---|
+| 例题库索引 | 条目破 ~5 万或多进程共享 | 本地 ANN（usearch，**仍是文件，不上服务**） | `src/qadata/web/examples.py` 模块头 |
+| 大库召回 | 几万表规模 | 真瓶颈在**分层召回＋选表预算**（RASL 形状），非索引 | 同上 |
+| LangSmith | 想调试 graph 内部 state 时 | 不给主干地位（数据出境/离线纪律冲突）——临时给 provider 挂一个指其 OTLP collector 的 span processor 即可，不立配置面 | `src/qadata/obs.py` 模块头 |
 
 ### Web 服务面
 
@@ -116,12 +139,14 @@ flowchart LR
 
 ```
 src/qadata/
-├── graph/        # 六节点状态机：build / nodes / state / prompts / verify / metrics / intent …
+├── graph/        # 六节点状态机：build / nodes / state / prompts / gssc（装配流水线＋保险丝）/ verify / metrics / intent …
 ├── tools/        # 沙箱：db 只读连接 / sqlguard 语句校验 / executor 资源层 / schema
-├── llm/          # OpenAI 兼容网关 + 限速 + tracing
+├── llm/          # OpenAI 兼容网关 + 限速 + tracing + embeddings 通道（召回向量化）
+├── obs.py        # OTel 观测出口：帧流→span 镜像（默认 noop）
+├── assets/       # cl100k_base 词表（计量硬资产，缺失如实炸）
 ├── eval/         # 跑分器 / 判分 / 题型 / 报告 / 变体矩阵
-├── web/          # FastAPI 服务面：app / agents / sessions / charts / serve
-└── cli/          # ask / eval / report / serve 薄壳
+├── web/          # FastAPI 服务面：app / agents / sessions / examples / charts / feedback / serve
+└── cli/          # ask / eval / report / serve / feedback-export / examples-sign 薄壳
 metrics/          # 人审指标注册表（按库名寻址）
 tests/            # 500+ pytest：ScriptedLLM 假模型、契约测试、AST 级纪律钉测
 web/              # Vite + React + TypeScript 前端（dist 构建产物不入库）
