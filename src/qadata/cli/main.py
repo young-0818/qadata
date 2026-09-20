@@ -91,6 +91,13 @@ def main(argv: list[str] | None = None) -> int:
                         help="人审题对 JSONL（feedback-export 产物人工筛选后改写为每行 "
                              "{q, sql, signed_by}——question 改名 q、逐行补签名）")
 
+    p_idx = sub.add_parser("index-build",
+                           help="离线建库域检索索引（M10 票 01 表卡；显式管理动作，"
+                                "问数路径永不建——ADR-0005）：qadata index-build <库文件>")
+    p_idx.add_argument("db_path")
+    # 档根不设开关：data/indexes 是仓库根 cwd 约定（TRACE_PATH/DEFAULT_AGENTS_DIR 同款），
+    # serve 与 eval 只认这一个根——指错目录的"灵活"＝三面对不上账的坑（评审撤除）
+
     p_report = sub.add_parser("report", help="两轮评测对比：qadata report --baseline A --current B")
     p_report.add_argument("--baseline", required=True)
     p_report.add_argument("--current", required=True)
@@ -197,6 +204,28 @@ def main(argv: list[str] | None = None) -> int:
         console.print(f"人签 {n} 对题 → {store.agent_dir(meta.id)}"
                       + (f"（拒收无签/坏行 {skipped} 条——人签纪律，不静默）" if skipped else ""))
         console.print("提示：进料口唯一——会话成功轮永不自动吸收（错误自我强化，spec §五 被否在案）")
+        return 0
+    if args.cmd == "index-build":
+        from qadata.config import load_settings
+        from qadata.llm.gateway import (
+            build_embedder,  # 向量化通道复用（同 examples-sign）
+        )
+        from qadata.retrieval.cards import build_index  # 逻辑全在包内，CLI 薄壳
+
+        settings = load_settings()
+        if not settings.embed_model:
+            console.print("[red]未配置 QADATA_EMBED_MODEL（.env）——表卡向量化无从谈起[/red]")
+            return 1
+        try:
+            res = build_index(args.db_path, build_embedder(settings))
+        except Exception as e:  # noqa: BLE001 CLI 薄壳：坏库/坏档一切拒绝转人话
+            console.print(f"[red]索引构建失败：{e}[/red]")
+            return 1
+        console.print(f"表卡 {res.tables} 张 → {res.dir}"
+                      f"（向量化 {res.embedded} 发、复用未变 {res.reused} 张——"
+                      f"模型 {settings.embed_model}）")
+        console.print("提示：构建＝离线管理动作，逐卡 embedding 是索引唯一花钱处；"
+                      "缺档/过期现读降级，问数路径永不建索引（ADR-0005）")
         return 0
     if args.cmd == "report":
         from qadata.eval.report import (

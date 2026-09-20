@@ -9,8 +9,39 @@ import uvicorn
 from qadata.config import load_settings
 from qadata.llm.gateway import build_embedder, build_llm
 from qadata.llm.tracing import TRACE_PATH, TraceLogger
+from qadata.retrieval.store import DEFAULT_INDEX_DIR, index_status
 from qadata.web.agents import DEFAULT_AGENTS_DIR, AgentStore
 from qadata.web.app import create_app
+
+_STATE_TEXT = {"missing": "缺档", "broken": "坏档", "stale": "过期"}
+
+
+def index_announcements(store: AgentStore, embed_model: str, *,
+                        root: str | None = None) -> list[str]:
+    """M10 票 01 serve 启动播报（ADR-0005）：逐智能体查库指纹档——有档且 model_id
+    对＝开；缺/坏/过期＝一行播报＋现读降级（绝不在请求路径建索引）。
+    缺档聚合成一行（真空启动零档＝现状是默认形态，不逐智能体嚷嚷）；坏/过期逐条
+    点名（管理动作可修复：index-build 重建）。"""
+    lines, ok, missing = [], [], []
+    for meta in store.all():
+        p = store.datasource_path(meta)
+        if p is None:
+            continue  # 无数据源的智能体无从谈档（问数前已被拒，播报不替它操心）
+        st = index_status(p, embed_model, root=root or DEFAULT_INDEX_DIR)
+        if st == "ok":
+            ok.append(meta.name)
+        elif st == "missing":
+            missing.append(meta.name)
+        else:
+            lines.append(f"表卡索引{_STATE_TEXT[st]}：智能体「{meta.name}」的库 → "
+                         + ("现读降级（重建＝qadata index-build <库文件>）" if st == "stale"
+                            else "现读降级（重新 qadata index-build 覆盖坏档）"))
+    if ok:
+        lines.insert(0, f"表卡索引开：{len(ok)} 个智能体库有档（{'、'.join(ok)}）")
+    if missing:
+        lines.append(f"表卡索引缺档：{len(missing)} 个智能体库未建索引"
+                     f"（现读降级＝现状路径；构建＝qadata index-build <库文件>，离线管理动作）")
+    return lines
 
 
 def run_server(host: str = "127.0.0.1", port: int = 8000,
@@ -27,4 +58,6 @@ def run_server(host: str = "127.0.0.1", port: int = 8000,
         print(f"OTel 上报开：{settings.otel_endpoint or '端点回落 OTEL_EXPORTER_OTLP_ENDPOINT'}")
     if embedder is not None:  # M9 票 06 同款开态播报（例题库按智能体逐个生效）
         print(f"例题库召回开：向量化模型 {settings.embed_model}")
+        for line in index_announcements(store, settings.embed_model):  # M10 票 01
+            print(line)
     uvicorn.run(app, host=host, port=port)

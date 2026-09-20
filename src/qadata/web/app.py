@@ -44,6 +44,7 @@ from qadata.config import Settings
 from qadata.graph.build import resume_question, run_question
 from qadata.graph.prompts import compose_supplement
 from qadata.obs import obs_for
+from qadata.retrieval.cards import build_table_recall
 from qadata.tools.db import open_readonly
 from qadata.tools.schema import list_tables
 from qadata.types import Answer
@@ -475,12 +476,16 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
         if trail is not None:
             on_event = trail_sink(on_event, trail)
         # M9 票 06：召回回调在此单点挂上（两端点＋HITL 续答同源；入账走审计账本，
-        # 不开帧——digest 先例，前端/契约零染指）
+        # 不开帧——digest 先例，前端/契约零染指）。
+        # M10 票 01：表卡粗召回调同点同纪律（按数据源路径的库指纹找档——索引跟库走
+        # 不跟智能体走，ADR-0004；embedder 缺位/缺档＝None＝现状，降级入账在闭包内）
         recall = _recall_for(req.agent_id)
+        table_recall = build_table_recall(path, embedder, tracer=tracer)
         if pend is not None:
             answer = resume_question(pend.thread, req.question.strip(), llm=llm,
                                      settings=settings, tracer=tracer, on_event=on_event,
-                                     checkpointer=checkpoint, obs=obs, recall=recall)
+                                     checkpointer=checkpoint, obs=obs, recall=recall,
+                                     table_recall=table_recall)
             if answer.clarification:  # 不该发生（标记复闸保证续轮必答）；万一即塞回，不装没发生过
                 _pending[pkey] = pend
             return answer, compose_supplement(pend.question, pend.ask, req.question)
@@ -489,7 +494,7 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
         answer = run_question(path, req.question, evidence=evidence, llm=llm,
                               settings=settings, tracer=tracer, on_event=on_event,
                               session_context=ctx, thread_id=thread, checkpointer=checkpoint,
-                              obs=obs, recall=recall)
+                              obs=obs, recall=recall, table_recall=table_recall)
         if thread is not None and answer.clarification:
             _pending[pkey] = _PendingAsk(thread=thread, question=req.question.strip(),
                                          ask=answer.clarification)

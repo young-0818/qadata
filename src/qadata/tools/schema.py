@@ -45,9 +45,10 @@ def sample_rows(conn: sqlite3.Connection, table: str, n: int = 3) -> str:
     return "\n".join(lines)
 
 
-def _load_description(db_path: str | None, table: str) -> str:
+def load_description(db_path: str | None, table: str) -> str:
     """读 database_description/{table}.csv（BIRD 官方列注释，表头自适应）；
-    无文件/读失败静默返回空串（锦上添花不连累本体）。"""
+    无文件/读失败静默返回空串（锦上添花不连累本体）。M10 票 01 起公开＝表卡
+    描述料的共读面（retrieval/cards 同门复用，私有跨包 import 不留）。"""
     if not db_path:
         return ""
     csv_path = Path(db_path).parent / "database_description" / f"{table}.csv"
@@ -164,10 +165,29 @@ def column_value_samples(
     return ("列取值样本（库实际存储形态，WHERE 字面量以此为准）：\n" + "\n".join(lines))
 
 
+def foreign_key_closure(conn: sqlite3.Connection, tables: list[str]) -> list[str]:
+    """宽进窄出的最后一段补漏（M10 票 01，DataAgent 外键补漏同款）：选中表的
+    一跳外键亲戚（出站父表＋入站子表）确定性补上——JOIN 需要的桥表不靠向量与
+    LLM 猜。单边一跳、不做传递闭包（补两跳＝把半个库拖进 prompt）。
+    表/列名源自 sqlite_master 非题面（sample_rows 同信任域）；PRAGMA 炸＝静默跳
+    该表边（锦上添花不连累本体），出序＝list_tables 字典序（确定性）。"""
+    all_tables = list_tables(conn)
+    edges: set[tuple[str, str]] = set()  # (子表, 父表)
+    for t in all_tables:
+        try:
+            rows = conn.execute(f'PRAGMA foreign_key_list("{t}")').fetchall()
+        except sqlite3.Error:
+            continue
+        edges.update((t, str(r[2])) for r in rows if r[2])
+    picked = set(tables)
+    rel = picked | {p for c, p in edges if c in picked} | {c for c, p in edges if p in picked}
+    return [t for t in all_tables if t in rel]
+
+
 def build_schema_context(
     conn: sqlite3.Connection, question: str, llm=None, max_chars: int = FULL_SCHEMA_LIMIT,
     tracer=None, db_path: str | None = None, limiter=None, sample_values: bool = False,
-    on_event=None, sink=None,
+    on_event=None, sink=None, table_recall=None,
 ) -> str:
     """构建给 LLM 的 schema 上下文：小库全量；大库让 LLM 先选相关表。
     db_path 提供时，附带选中表的 database_description 列注释（M3 #10）。
@@ -175,7 +195,11 @@ def build_schema_context(
     零文本与现状逐字节一致——专测钉，关态不探一条 DISTINCT）。
     on_event/sink（M8 票 06 帧喂厚）＝explore 子步骤发 kind:"tool" 帧
     （list_tables/get_schema/select_tables/value_samples），选表 LLM 调用的 token
-    经 sink 流进该步结果帧；缺省 None 零发、与现状逐行为一致。"""
+    经 sink 流进该步结果帧；缺省 None 零发、与现状逐行为一致。
+    table_recall（M10 票 01）＝表卡粗召回调（question→候选表名 list，None＝缺位/
+    降级，账本在闭包内自持）——**只在大库分支消费**：小库全量路连调用都不发生
+    （索引文件根本不读，逐字节现状姊妹钉）；大库＝宽进（粗召 top-K）→窄出
+    （既有 LLM 精选，prompt 骨架零改动）→外键补漏，任何检索缺位＝走现状一把梭。"""
     from qadata.llm.tracing import tool_frame  # 帧形单源（timed_invoke 同款惰性路）
 
     def _tool(name: str, t0: float, ok: bool = True) -> None:
@@ -185,7 +209,7 @@ def build_schema_context(
     def _ctx(names: list[str]) -> str:
         t0 = time.perf_counter()
         parts = [get_schema(conn, t) for t in names]
-        parts += [_load_description(db_path, t) for t in names]
+        parts += [load_description(db_path, t) for t in names]
         _tool("get_schema", t0)
         return "\n\n".join(p for p in parts if p)
 
@@ -203,6 +227,15 @@ def build_schema_context(
     full = _ctx(tables)
     if len(full) <= max_chars or llm is None:
         return _final(full, tables)
+    if table_recall is not None and (cands := table_recall(question)):
+        # 大库宽进窄出（M10 票 01）：粗召 top-K 防漏表 → 精选防错用 → 外键补漏。
+        # 窄出解析失败＝回全量现状（与旧路同形：宁可多给不可编造，检索不添新的失败形态）
+        picked = _pick_tables_with_llm(llm, cands, question, tracer, limiter,
+                                       on_tool=_tool, sink=sink)
+        if picked is None:
+            return _final(full, tables)
+        wide = foreign_key_closure(conn, picked)
+        return _final(_ctx(wide), wide)
     picked = _pick_tables_with_llm(llm, tables, question, tracer, limiter,
                                    on_tool=_tool, sink=sink)
     if picked is None:  # LLM 输出解析失败 → 回退全量（宁可多给不可编造）

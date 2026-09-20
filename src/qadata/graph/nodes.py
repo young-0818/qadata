@@ -121,7 +121,7 @@ def _evidence_caliber(state: dict) -> str:
 
 def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
                skip_respond: bool = False, on_event=None, hitl: bool = False,
-               recall=None):
+               recall=None, table_recall=None):
     """节点工厂：闭包注入 llm/tracer/settings/limiter，便于测试时替换假模型与配置。
     skip_respond：评测模式——成功路径不生成结论文本（判分只读 answer.sql 的执行结果），
     失败诚实汇报与回退重执行不受影响。产品路径（ask/Web）默认 False，全家桶保留。
@@ -134,6 +134,9 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
     澄清落 answer 直达 END（无会话/CLI/评测形态）。
     recall（M9 票 06）＝例题库召回回调（question→注入块），只被 generate 经装配器
     Select 格消费；缺省 None＝逐字节现状（CLI/eval 零挂接，on_event 纪律同族）。
+    table_recall（M10 票 01）＝表卡粗召回调（question→候选表名 list|None），只被
+    explore 的大库分支消费（小库根本不读索引文件）；缺省 None＝现状一把梭逐字节
+    一致——账本与降级在回调闭包内自持（retrieval/cards），本层零知情。
 
     M8 票 06 帧喂厚：结果帧追加 ok/duration_ms/tokens_in/tokens_out（start 帧与
     末帧 answer 契约零动）；tools 层子步骤发 kind:"tool" 帧（explore 内
@@ -294,7 +297,8 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
             ctx = build_schema_context(conn, state["question"], llm=llm, tracer=tracer,
                                        db_path=state["db_path"], limiter=limiter,
                                        sample_values=s.value_sampling,
-                                       on_event=on_event, sink=sink)
+                                       on_event=on_event, sink=sink,
+                                       table_recall=table_recall)
         finally:
             conn.close()
         _emit("explore", len(state.get("attempts", [])), "取到 Schema")

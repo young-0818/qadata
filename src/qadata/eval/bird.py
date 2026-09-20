@@ -16,6 +16,7 @@ from qadata.eval.match import results_match
 from qadata.graph.build import run_question
 from qadata.llm.tracing import TRACE_PATH, TraceLogger, now_beijing
 from qadata.obs import obs_for, shutdown
+from qadata.retrieval.cards import build_table_recall
 from qadata.tools.db import open_readonly
 
 console = Console()
@@ -92,8 +93,15 @@ def run_eval(questions_path: str, db_dir: str, sample: int | None = None,
     省 1 次调用/题）；settings/limiter 由调用方构造后透传（共享实例贯穿所有线程）；
     concurrency=1 且未提供时行为与历史版本完全一致。
     budget_path（票 10）：给定则轮末向该账本 markdown 自动追加一行
-    （题数×调用/tokens 实测；估算成本与累计两列留「待填」由人折算）。"""
+    （题数×调用/tokens 实测；估算成本与累计两列留「待填」由人折算）。
+    M10 票 01：settings.embed_model 非空＝建向量化通道，逐题现查库指纹表卡档
+    （有档大库走宽进窄出、缺档现读降级——与 serve 同库域档，ADR-0004）；
+    空＝embedder None＝全部题目走现状路径，逐字节与历史评测一致。"""
     questions = load_questions(questions_path, sample=sample, question_ids=question_ids)
+    embedder = None
+    if getattr(settings, "embed_model", ""):
+        from qadata.llm.gateway import build_embedder  # 惰性 import 同 serve 姿势
+        embedder = build_embedder(settings)
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     if budget_path and not Path(budget_path).is_file():
@@ -102,7 +110,7 @@ def run_eval(questions_path: str, db_dir: str, sample: int | None = None,
     if concurrency > 1:
         summary = _run_concurrent_path(questions, db_dir, llm, max_rows, out, resume,
                                        concurrency, settings, limiter, skip_respond,
-                                       budget_path)
+                                       budget_path, embedder)
         shutdown()  # M9 票 01：轮末冲刷观测批缓冲（关态 noop provider 无 shutdown＝如实跳过）
         return summary
 
@@ -119,7 +127,7 @@ def run_eval(questions_path: str, db_dir: str, sample: int | None = None,
         for q in todo:
             tracer.set_context(question_id=str(q["question_id"]))
             rec = _run_one(q, db_dir, llm, max_rows, tracer, settings, limiter,
-                           skip_respond)
+                           skip_respond, embedder)
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
             f.flush()  # 逐题落盘：运行中 tail 文件可见进度（M2 痛点）
 
@@ -134,7 +142,7 @@ def run_eval(questions_path: str, db_dir: str, sample: int | None = None,
 
 def _run_concurrent_path(questions, db_dir, llm, max_rows, out, resume,
                          concurrency, settings, limiter, skip_respond,
-                         budget_path=None) -> dict:
+                         budget_path=None, embedder=None) -> dict:
     """并发分片流程：每题独立分片（评测记录＋traces），主线程单写者收口合并。"""
     run_id = uuid.uuid4().hex[:12]
     todo = [q for q in questions
@@ -152,7 +160,7 @@ def _run_concurrent_path(questions, db_dir, llm, max_rows, out, resume,
                 tracer = TraceLogger(shard_trace, run_id=run_id)
                 tracer.set_context(question_id=str(q["question_id"]))
                 fut = ex.submit(_run_one, q, db_dir, llm, max_rows, tracer, settings,
-                                limiter, skip_respond)
+                                limiter, skip_respond, embedder)
                 futs[fut] = (q, shard_rec, shard_trace, tracer)
             for fut in as_completed(futs):
                 q, shard_rec, shard_trace, tracer = futs[fut]
@@ -225,8 +233,10 @@ def _run_stats(tracer, q: dict) -> dict:
 
 
 def _run_one(q: dict, db_dir: str, llm, max_rows: int, tracer, settings=None,
-             limiter=None, skip_respond: bool = False) -> dict:
-    """单题评测：异常隔离，单题失败不阻塞整批；错误分类进 error_class。"""
+             limiter=None, skip_respond: bool = False, embedder=None) -> dict:
+    """单题评测：异常隔离，单题失败不阻塞整批；错误分类进 error_class。
+    embedder（M10 票 01）＝表卡粗召回的向量化通道（eval 与 serve 共用同一库域档，
+    ADR-0004——库派生物的验收必须经 eval）；None＝现状一把梭逐字节一致。"""
     db_path = Path(db_dir) / q["db_id"] / f"{q['db_id']}.sqlite"
     base = {"question_id": q["question_id"], "db_id": q["db_id"],
             "difficulty": q.get("difficulty"), "question": q["question"],
@@ -237,7 +247,9 @@ def _run_one(q: dict, db_dir: str, llm, max_rows: int, tracer, settings=None,
             "run_id": getattr(tracer, "run_id", ""), "question_id": str(q["question_id"])})
         answer = run_question(str(db_path), q["question"], evidence=q.get("evidence", ""),
                               llm=llm, tracer=tracer, settings=settings, limiter=limiter,
-                              skip_respond=skip_respond, obs=obs)
+                              skip_respond=skip_respond, obs=obs,
+                              table_recall=build_table_recall(str(db_path), embedder,
+                                                             tracer=tracer))
     except Exception as e:  # noqa: BLE001 单题隔离：评测器最外层，单题任何失败不阻塞整批
         return {**base, **_run_stats(tracer, q), "pred_sql": None, "correct": False, "error": str(e),
                 "error_class": "answer_failed", **_FALLBACK_PATH}

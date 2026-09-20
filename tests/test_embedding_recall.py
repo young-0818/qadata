@@ -163,7 +163,11 @@ def test_sign_refuses_orphan_dir(tmp_path):
 
 def test_auto_absorption_mechanically_refused():
     """写入口零触扫描：ask 链路/会话/反馈/图侧源码出现 sign_examples 进料即红；
-    CLI 的 examples-sign（唯一进料口）之外，问数调用面零挂 recall、eval 零触。"""
+    CLI 的 examples-sign（唯一进料口）之外，问数调用面零挂 recall、eval 零触例题面。
+    （M10 票 01 两义分家：本钉守的是**人签知识不进自动评测**（防自动吸收病灶）——
+    eval 面禁词从泛指 recall/embed 收窄为例题专名 build_recall/examples；库派生物
+    （表卡/值索引）的验收必须经 eval（ADR-0004／spec §五「扩用被否」），CLI ask 面
+    依旧零挂（"recall" 整词钉不动——表卡粗召回属 serve/eval 面，ask 现状路径）。）"""
     import qadata.cli.main as cli_main
     import qadata.eval.bird as eval_bird
     import qadata.graph.build as build_mod
@@ -175,7 +179,9 @@ def test_auto_absorption_mechanically_refused():
     for mod in (app_mod, sessions_mod, feedback_mod, nodes_mod, build_mod, eval_bird):
         assert "sign_examples" not in inspect.getsource(mod), mod.__name__
     assert "recall" not in inspect.getsource(cli_main)
-    for name in ("recall", "examples", "embed"):
+    for name in ("build_recall", "examples"):
+        # 例题进料/召回通道零触 eval——表卡路的符号是 build_table_recall/embedder，
+        # 词形不同即分家本身（向量化通道 eval 照建＝库派生物验收的既定义务）
         assert name not in inspect.getsource(eval_bird), name
 
 
