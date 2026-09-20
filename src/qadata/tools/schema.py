@@ -6,22 +6,28 @@ from pathlib import Path
 
 FULL_SCHEMA_LIMIT = 8000  # schema 全量超过该字符数才请求 LLM 选表
 
-# ── M8 票 02 值采样：预算常数（放宽＝改票面） ──
+# ── M8 票 02 值采样：预算常数（放宽＝改票面）。M10 票 02 起部分公开＝值索引沿借
+# 采集工艺（评审家法「私有跨包 import 不留」，load_description 先例同门）──
 _VALUE_COLS_PER_TABLE = 8      # 每表最多采样的文本列数
 _VALUE_PER_COL = 10            # 逐列枚举值上限（取满 +1 判高基数）
 _VALUE_CELL_CHARS = 30         # 单值最多字符（超出截断）
 _VALUE_TOTAL_CHARS = 2000      # 全局样本块字符预算（确定性裁尾＝表序×PRAGMA 列序）
-_VALUE_SCAN_WINDOW = 2000      # DISTINCT 前有界子查询（实施工艺改判①）：裸 DISTINCT
+VALUE_SCAN_WINDOW = 2000       # DISTINCT 前有界子查询（实施工艺改判①）：裸 DISTINCT
                                # 在百万行表全扫（真库冒烟 14s/库不可接受，explore 被拖垮）。
                                # 2000＝看见存储形态绰绰有余（ISO 日期/大小写/常见枚举全现身，
                                # 大库实测 50k 窗仍 6.8s、2k 窗进毫秒带）；成本 O(window) 且
                                # **确定**——同库双跑同文评测可复现，截断点不由 wall-clock 决定。
                                # 窗口外罕见枚举值可能漏，但采样目的＝形态与非全量清单，如实漏。
-_VALUE_QUERY_TIMEOUT_S = 2.0   # 单查询兜底超时（视图背后巨型 join 时仍拦得住；中断＝静默跳列）
+VALUE_QUERY_TIMEOUT_S = 2.0    # 单查询兜底超时（视图背后巨型 join 时仍拦得住；中断＝静默跳列）
 # 样本块节头（M9 票 04：保险丝砍值采样按此定位整块边界——单源字面，gssc 惰性 import 共读）
 VALUE_SAMPLE_HEADER = "列取值样本（库实际存储形态，WHERE 字面量以此为准）："
 # 采样候选声明类型（sqlite 亲和性粗筛；BLOB/数值列枚举值对 WHERE 字面量病灶无益）
-_SAMPLE_TYPE_KEYS = ("CHAR", "CLOB", "TEXT", "DATE", "TIME")
+SAMPLE_TYPE_KEYS = ("CHAR", "CLOB", "TEXT", "DATE", "TIME")
+
+
+def is_text_affinity(declared_type: str) -> bool:
+    """声明类型是否文本亲和（M10 票 02 起公开＝值索引沿借同闸，闸门唯一＝SAMPLE_TYPE_KEYS）。"""
+    return any(k in declared_type.upper() for k in SAMPLE_TYPE_KEYS)
 
 
 def list_tables(conn: sqlite3.Connection) -> list[str]:
@@ -94,9 +100,24 @@ def _query_with_budget(conn: sqlite3.Connection, sql: str, budget_s: float) -> l
         conn.set_progress_handler(None, 0)
 
 
+def distinct_values(conn: sqlite3.Connection, table: str, col: str, *, max_rows: int,
+                    scan_window: int = VALUE_SCAN_WINDOW,
+                    budget_s: float = VALUE_QUERY_TIMEOUT_S) -> list:
+    """有界窗口 DISTINCT 取值（M8 票 02 实施工艺改判①的公开复用面，M10 票 02 值索引沿借）：
+    先 LIMIT scan_window 再 DISTINCT——百万行表裸 DISTINCT 全扫（真库冒烟 14s/库）不可接受；
+    窗口把每列成本压到 O(window) 且确定（同库双跑同序，截断点不由 wall-clock 决定）。
+    失败/超时抛 sqlite3.Error——**吞不吞由调用方纪律定**（采样面静默跳列、值面整列出局）。
+    表/列名源自 PRAGMA 非题面（sample_rows 同信任域）。"""
+    rows = _query_with_budget(
+        conn, f'SELECT DISTINCT "{col}" FROM '
+              f'(SELECT "{col}" FROM "{table}" WHERE "{col}" IS NOT NULL '
+              f'LIMIT {int(scan_window)}) ORDER BY 1 LIMIT {int(max_rows)}', budget_s)
+    return [r[0] for r in rows]
+
+
 def _column_sample_line(conn: sqlite3.Connection, table: str, col: str, *,
                         per_col: int, budget_s: float,
-                        scan_window: int = _VALUE_SCAN_WINDOW) -> str:
+                        scan_window: int = VALUE_SCAN_WINDOW) -> str:
     """一列一行样本。**有界窗口 DISTINCT**（先 LIMIT scan_window 再 DISTINCT——
     百万行大表裸 DISTINCT 全扫实测 14s/库拖垮 explore，不可接受；窗口把每列成本压到
     O(window) 且确定，同库双跑同文＝评测可复现）。取满 per_col+1 行判高基数。
@@ -106,10 +127,8 @@ def _column_sample_line(conn: sqlite3.Connection, table: str, col: str, *,
     看见实际书写形态（ISO 日期、大小写、带不带空格）即可，不冒充全量。低基数直接全枚举。
     表/列名源自 PRAGMA 非题面，直查只读 conn 有 sample_rows 先例同信任域。"""
     try:
-        vals = [r[0] for r in _query_with_budget(
-            conn, f'SELECT DISTINCT "{col}" FROM '
-                  f'(SELECT "{col}" FROM "{table}" WHERE "{col}" IS NOT NULL '
-                  f'LIMIT {int(scan_window)}) ORDER BY 1 LIMIT {per_col + 1}', budget_s)]
+        vals = distinct_values(conn, table, col, max_rows=per_col + 1,
+                               scan_window=scan_window, budget_s=budget_s)
     except sqlite3.Error:
         return ""
     if not vals:
@@ -125,7 +144,7 @@ def column_value_samples(
     conn: sqlite3.Connection, tables: list[str], *,
     cols_per_table: int = _VALUE_COLS_PER_TABLE, per_col: int = _VALUE_PER_COL,
     cell_chars: int = _VALUE_CELL_CHARS, total_chars: int = _VALUE_TOTAL_CHARS,
-    budget_s: float = _VALUE_QUERY_TIMEOUT_S,
+    budget_s: float = VALUE_QUERY_TIMEOUT_S,
 ) -> str:
     """M8 票 02 值采样注入——治「值域不可见」病灶（大小写/拼写变体/空格格式/日期
     字面量形态：模型看不见库实际存储，WHERE 就靠猜；M4 终局＋m7 考卷在案靶 ≈9）。
@@ -149,7 +168,7 @@ def column_value_samples(
         for col, decl in ((r[1], str(r[2] or "").upper()) for r in info):
             if emitted >= cols_per_table:
                 break
-            if not any(k in decl for k in _SAMPLE_TYPE_KEYS):
+            if not is_text_affinity(decl):
                 continue
             line = _column_sample_line(conn, table, col, per_col=per_col, budget_s=budget_s)
             if not line:

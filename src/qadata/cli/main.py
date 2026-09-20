@@ -92,7 +92,7 @@ def main(argv: list[str] | None = None) -> int:
                              "{q, sql, signed_by}——question 改名 q、逐行补签名）")
 
     p_idx = sub.add_parser("index-build",
-                           help="离线建库域检索索引（M10 票 01 表卡；显式管理动作，"
+                           help="离线建库域检索索引（M10 票 01 表卡＋票 02 值索引；显式管理动作，"
                                 "问数路径永不建——ADR-0005）：qadata index-build <库文件>")
     p_idx.add_argument("db_path")
     # 档根不设开关：data/indexes 是仓库根 cwd 约定（TRACE_PATH/DEFAULT_AGENTS_DIR 同款），
@@ -211,20 +211,32 @@ def main(argv: list[str] | None = None) -> int:
             build_embedder,  # 向量化通道复用（同 examples-sign）
         )
         from qadata.retrieval.cards import build_index  # 逻辑全在包内，CLI 薄壳
+        from qadata.retrieval.values import build_value_index  # 票 02 值面同口入档
 
         settings = load_settings()
         if not settings.embed_model:
             console.print("[red]未配置 QADATA_EMBED_MODEL（.env）——表卡向量化无从谈起[/red]")
             return 1
+        embedder = build_embedder(settings)
         try:
-            res = build_index(args.db_path, build_embedder(settings))
+            res = build_index(args.db_path, embedder)
         except Exception as e:  # noqa: BLE001 CLI 薄壳：坏库/坏档一切拒绝转人话
             console.print(f"[red]索引构建失败：{e}[/red]")
             return 1
+        # 表卡回执先打再建值档——值面若端点中途挂，卡侧花费已如实见账（花费不静默）
         console.print(f"表卡 {res.tables} 张 → {res.dir}"
                       f"（向量化 {res.embedded} 发、复用未变 {res.reused} 张——"
                       f"模型 {settings.embed_model}）")
-        console.print("提示：构建＝离线管理动作，逐卡 embedding 是索引唯一花钱处；"
+        try:
+            cres = build_value_index(args.db_path, embedder)
+        except Exception as e:  # noqa: BLE001 值面失败不吞卡面回执（卡档已建成，如实分报）
+            console.print(f"[red]值索引构建失败（表卡档已建成）：{e}[/red]")
+            return 1
+        console.print(f"值索引 {cres.values} 条 / {cres.columns} 列 → {cres.dir}"
+                      f"（向量化 {cres.embedded} 发、复用 {cres.reused} 条——同值跨列只算一发）"
+                      + (f"；放弃 {cres.dropped} 列（超字符预算整列如实出局——放宽＝改判据文件）"
+                         if cres.dropped else ""))
+        console.print("提示：构建＝离线管理动作，逐条 embedding 是索引唯一花钱处；"
                       "缺档/过期现读降级，问数路径永不建索引（ADR-0005）")
         return 0
     if args.cmd == "report":

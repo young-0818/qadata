@@ -75,7 +75,7 @@ def test_date_col_shape_visible_via_examples(vconn):
 def test_scan_window_bounds_big_table(vconn):
     """窗口语义可钉：>scan_window 行的表，枚举值只来自前 window 行——
     窗口末尾之后的稀有值不进样本（如实漏，换 O(window) 成本与双跑确定性）。"""
-    from qadata.tools.schema import _VALUE_SCAN_WINDOW
+    from qadata.tools.schema import VALUE_SCAN_WINDOW as _VALUE_SCAN_WINDOW
     vconn.execute("CREATE TABLE big(v TEXT)")
     n = _VALUE_SCAN_WINDOW
     vconn.executemany("INSERT INTO big(v) VALUES (?)",
