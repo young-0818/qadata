@@ -30,7 +30,15 @@ from typing import Any
 import yaml
 
 from qadata.graph.gssc import count_tokens
-from qadata.graph.prompts import digest_fold, digest_line_is_para, digest_prompt
+from qadata.graph.prompts import (
+    FAILED_TURN_SUFFIX,
+    MEMORY_TURN_PREFIX,
+    digest_fold,
+    digest_line_is_para,
+    digest_para_prefix,
+    digest_prompt,
+    digest_turn_prefix,
+)
 from qadata.llm.tracing import BEIJING, timed_invoke
 from qadata.types import QueryResult
 from qadata.web._fs import atomic_write
@@ -40,6 +48,8 @@ from qadata.web.agents import AgentNotFound, AgentStore, is_hex12
 # （tiktoken cl100k 计量，词表同票 04 硬资产）。560＝票 04 现实最坏记忆行实测
 # 104 tok×5＝520 容得下、×6 出——**K=5 是默认换算结果而非规则**（BIRD 评测形态
 # 逐题单轮、短会话全收，两态均零触发；定阈判据落档 .scratch/qadata-m9/）。
+# "预算内从近往远"的聚合闸＝窗口吃本预算、摘要面吃结构封顶（10 段＋<10 行 ≈700 tok）、
+# 真超有票 04 保险丝按 Zone 硬砍兜底——三层各有界，不设第二本账（双轴评审 a2 采此读法）。
 MEMORY_TOKEN_BUDGET = 560
 # 滚存摘要链批参（spec §二 Q7 单层归并）：满一批＝折一条段落行，同时是单次懒补
 # 的轮数上限（欠账无界防护——多次连问逐批推进）；段落行存量上限＝溢出丢最老
@@ -90,12 +100,13 @@ def result_head(res: QueryResult | None, *, limit: int = HEAD_ROWS) -> str:
 
 
 def _turn_cost(t: dict[str, Any]) -> int:
-    """一条记忆行的近似 token 料（按渲染同形料计量：成功行＝问＋SQL＋结果三段，
-    失败行＝单行）——近似只在保守方向（格式化差异 ≪ 预算余量），精确闸是票 04 保险丝。"""
+    """一条记忆行的近似 token 料（按渲染同形料计量——MEMORY_TURN_PREFIX/
+    FAILED_TURN_SUFFIX 共读防错价：措辞漂移会静默改窗口，双轴评审追补）：
+    成功行＝问＋SQL＋结果三段、失败行＝单行；近似只许保守方向，精确闸是票 04 保险丝。"""
     q = str(t["question"])
     if t["failed"]:
-        return count_tokens(f"- 问：{q}（该轮查询失败，无可靠结果与 SQL 可参考）")
-    return count_tokens(f"- 问：{q}\n  SQL：{(t.get('answer') or {}).get('sql') or ''}"
+        return count_tokens(f"{MEMORY_TURN_PREFIX}{q}{FAILED_TURN_SUFFIX}")
+    return count_tokens(f"{MEMORY_TURN_PREFIX}{q}\n  SQL：{(t.get('answer') or {}).get('sql') or ''}"
                         f"\n  结果：{t.get('row_count')} 行；{t.get('head') or ''}")
 
 
@@ -112,6 +123,12 @@ def _window_count(turns: tuple[dict[str, Any], ...]) -> int:
     return n
 
 
+def _window_slice(turns: tuple[dict[str, Any], ...]) -> tuple[dict[str, Any], ...]:
+    """窗口原文切片（唯一切法单源——build_session_context/测试共读，防各处各切一刀）。"""
+    n = _window_count(turns)
+    return turns[len(turns) - n:] if n else ()
+
+
 def build_session_context(session: Session) -> dict | None:
     """会话 → `session_context` 图侧载荷（{"turns": 窗口原文切片, "draft": L1|None,
     摘要在场时加 "digest_lines"}）。
@@ -124,9 +141,8 @@ def build_session_context(session: Session) -> dict | None:
     显式授权措辞＋沙箱/verify 兜底——连续性模型隐式判，零新增调用）。"""
     if not session.turns:
         return None
-    n = _window_count(session.turns)
     window = []
-    for t in session.turns[len(session.turns) - n:] if n else ():
+    for t in _window_slice(session.turns):
         if t["failed"]:
             window.append({"question": t["question"], "sql": None, "row_count": None,
                            "head": None, "failed": True})
@@ -151,10 +167,11 @@ def _digest_batch_src(turns: tuple[dict[str, Any], ...], start: int, stop: int) 
     parts = []
     for i in range(start, stop):
         t = turns[i]
+        label = digest_turn_prefix(i + 1)
         if t["failed"]:
-            parts.append(f"第{i + 1}轮：问题「{t['question']}」（该轮查询失败，无可靠结果）")
+            parts.append(f"{label}问题「{t['question']}」（该轮查询失败，无可靠结果）")
         else:
-            parts.append(f"第{i + 1}轮：问题「{t['question']}」"
+            parts.append(f"{label}问题「{t['question']}」"
                          f"SQL「{(t.get('answer') or {}).get('sql') or '（未提取到合法 SQL）'}」"
                          f"结果「{t.get('row_count')} 行；{t.get('head') or '（无摘要）'}」")
     return "\n".join(parts)
@@ -164,8 +181,8 @@ def _parse_digest(text: str, batch: list[int], fold_pool: list[dict[str, Any]]):
     """严格回读：要求的每个前缀恰好命中一次、正文非空、无多余行——不合即 None
     （宁可不补不可补错；失败游标不动，下次再补）。前缀＝系统拼装的单轮/范围编号，
     模型只填「轮：」之后的正文。"""
-    expected: dict[str, str | None] = {f"第{t + 1}轮：": None for t in batch}
-    para_prefix = (f"第{fold_pool[0]['turn']}-{fold_pool[-1]['turn']}轮："
+    expected: dict[str, str | None] = {digest_turn_prefix(t + 1): None for t in batch}
+    para_prefix = (digest_para_prefix(fold_pool[0]["turn"], fold_pool[-1]["turn"])
                    if fold_pool else None)
     if para_prefix:
         expected[para_prefix] = None
@@ -179,17 +196,18 @@ def _parse_digest(text: str, batch: list[int], fold_pool: list[dict[str, Any]]):
         expected[key] = ln  # 存全行（系统前缀原样保留——渲染/折段/淘汰都直读此串）
     if any(v is None for v in expected.values()):
         return None
-    lines = {t: str(expected[f"第{t + 1}轮："]) for t in batch}
+    lines = {t: str(expected[digest_turn_prefix(t + 1)]) for t in batch}
     return {"lines": lines, "para": expected[para_prefix] if para_prefix else None}
 
 
 def catch_up_digest(session: Session, *, llm, tracer=None) -> Session:
     """滚存摘要链懒补（M9 票 05，spec §二 Q7）：组装下一问前**同步**把欠账补齐——
     不开后台任务、不逐轮咀嚼。每滑出轮一行冻存摘要（压手＝正文 LLM 本体、一次调用
-    补多轮 ≤DIGEST_BATCH 轮）；既有行链满一批（≥DIGEST_BATCH 行）在同一调用里折
-    一条标轮次范围的段落行（冻存、永不复压——被否的滚动重压就此止步）；段落行再
-    溢出＝丢最老（有界形态，注入侧最坏 ≈10 段＋<10 行）。游标 digest_upto 随补齐
-    推进；滑出≠丢失（L3 全史在档）。
+    补多轮 ≤DIGEST_BATCH 轮）；开工时既有行链已满一批（≥DIGEST_BATCH 行）＝同一调用
+    顺手折一条标轮次范围的段落行（冻存、永不复压——被否的滚动重压就此止步）；段落行
+    再溢出＝丢最老（有界形态，注入侧最坏 ≈10 段＋<10 行）。游标 digest_upto 随补齐
+    推进；滑出≠丢失（L3 全史在档）。无新滑出＝不空转开调用（满而未折的行链由批上限
+    封顶 ≤19 行、无注入压力，折段顺延至下次带欠账的补齐——双轴评审 a1 采此读法在册）。
 
     失败纪律：调用挂/回读不合＝入账（digest outcome 行）不拦本轮答题（老链＋窗口＋
     票 04 硬砍保险丝兜底），游标不动、下次再补。调用本体经 timed_invoke 真名入账
@@ -325,6 +343,7 @@ class SessionStore:
             return {}
         if not isinstance(raw, list) or any(
                 not isinstance(e, dict) or not isinstance(e.get("turn"), int)
+                or not isinstance(e.get("ts"), str)
                 or not isinstance(e.get("line"), str) or not e["line"].strip() for e in raw):
             raise SessionStoreError(f"摘要链形状不正：{f.name}")
         upto = data.get("digest_upto")

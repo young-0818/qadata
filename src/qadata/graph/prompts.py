@@ -156,8 +156,9 @@ def digest_line_is_para(line: str) -> bool:
 
 
 def digest_fold(a: int, b: int, lines: list[str]) -> str:
-    """折段附加段（懒补同调用内的第二段任务）：满一批的既有行→一条标范围段落行。"""
-    return _DIGEST_FOLD_TMPL.format(a=a, b=b,
+    """折段附加段（懒补同调用内的第二段任务）：满一批的既有行→一条标范围段落行。
+    批大小措辞随行数如实（不硬编码数字——web/sessions.DIGEST_BATCH 才是判据单源）。"""
+    return _DIGEST_FOLD_TMPL.format(n=len(lines), p=digest_para_prefix(a, b),
                                     lines="\n".join(f"- {t}" for t in lines))
 
 
@@ -174,10 +175,25 @@ _DIGEST_TMPL = """你在为一段对话式数据分析会话整理滚存记忆�
 {fold}输出："""
 
 _DIGEST_FOLD_TMPL = """
-另外，下列最早的 10 条既有轮次摘要已满一批，请合并折成一条段落纪要：行首严格为「第{a}-{b}轮：」，不超过 80 字，只保留跨轮仍成立的主线与结论、丢弃轮间细节。段落行与新行一并输出（先各新行、最后段落行）。
+另外，下列最早的既有轮次摘要已满一批（共 {n} 条），请合并折成一条段落纪要：行首严格为「{p}」，不超过 80 字，只保留跨轮仍成立的主线与结论、丢弃轮间细节。段落行与新行一并输出（先各新行、最后段落行）。
 ## 待折摘要（按序）
 {lines}
 """
+
+# 记忆行/摘要行前缀＝单源字面（compose_supplement/tool_frame 先例）：渲染、预算计量、
+# 保险丝淘汰、懒补素材与严格回读各处共读——一处改措辞全链随之，不会静默错价/漏配。
+MEMORY_TURN_PREFIX = "- 问："
+FAILED_TURN_SUFFIX = "（该轮查询失败，无可靠结果与 SQL 可参考）"
+
+
+def digest_turn_prefix(turn: int) -> str:
+    """行链前缀「第N轮：」（turn 1-based）。"""
+    return f"第{turn}轮："
+
+
+def digest_para_prefix(a: int, b: int) -> str:
+    """段落行前缀「第a-b轮：」（标轮次范围，a/b 1-based）。"""
+    return f"第{a}-{b}轮："
 
 
 def format_session_history(ctx: dict | None) -> str:
@@ -199,9 +215,9 @@ def format_session_history(ctx: dict | None) -> str:
     for t in ctx.get("turns") or []:
         q = str(t.get("question") or "")
         if t.get("failed"):
-            lines.append(f"- 问：{q}（该轮查询失败，无可靠结果与 SQL 可参考）")
+            lines.append(f"{MEMORY_TURN_PREFIX}{q}{FAILED_TURN_SUFFIX}")
             continue
-        entry = [f"- 问：{q}"]
+        entry = [f"{MEMORY_TURN_PREFIX}{q}"]
         if t.get("sql"):
             entry.append(f"  SQL：{t['sql']}")
         if t.get("row_count") is not None:

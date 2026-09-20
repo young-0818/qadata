@@ -37,7 +37,7 @@ from qadata.web.sessions import (
     build_session_context,
     catch_up_digest,
 )
-from tests.fakes import ScriptedLLM
+from tests.fakes import BoomOnceLLM, ScriptedLLM
 from tests.test_web_api import _HAPPY_SCRIPT, _S, _agent_with_datasource
 
 _SID = "aabbccddeeff"
@@ -100,7 +100,9 @@ def test_line_to_fold_to_para_overflow(tiny_chain):
     assert s.digest_upto == 6
     assert digest_line_is_para(s.digest_lines[0]["line"])  # 段落行＝冻存、永不复压
     assert _lines_of(s) == ["第1-3轮：段落一", "第4轮：摘要四", "第5轮：摘要五", "第6轮：摘要六"]
-    assert "第1-3轮：" in llm.prompts[1] and "- 第1轮：摘要一" in llm.prompts[1]  # 折段料同调用给出
+    # 折段料同调用给出；批数措辞随行数如实（不硬编码 10——单源钉）
+    assert "第1-3轮：" in llm.prompts[1] and "- 第1轮：摘要一" in llm.prompts[1]
+    assert "已满一批（共 3 条）" in llm.prompts[1]
 
     s2 = catch_up_digest(_sess(*[_turn(i) for i in range(12)], upto=6, digest=s.digest_lines),
                          llm=llm, tracer=tracer)
@@ -273,6 +275,38 @@ def test_lazy_catchup_before_assembly_and_ledger(store, fixture_db, monkeypatch,
     assert tracer.usage_for("-")["llm_calls"] == 10  # 补压＝真调用如实计；outcome 行无标记不烧数
 
 
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+def test_stream_lock_survives_digest_save_crash(store, fixture_db, monkeypatch):
+    """双轴评审追补（Spec (c)1）：流式端点的懒补落盘炸（裸 OSError）＝诚实末帧＋
+    会话锁照常释放——旧挂点（锁在 acquire 与 runner 之间抛）会永久悬锁＝该会话
+    直到重启前逢问 409。worker 线程如实带异常收口（挂点在 _runner 的 try/finally 内），
+    线程异常告警即本测题中之义，滤之。"""
+    monkeypatch.setattr(S, "MEMORY_TOKEN_BUDGET", 60)
+    a = _agent_with_datasource(store, fixture_db)
+    llm = ScriptedLLM(_HAPPY_SCRIPT * 2 + ["第1轮：甲"] + ["第1轮：甲"] + _HAPPY_SCRIPT)
+    client = _client5(llm, store)
+    base = {"agent_id": a.id, "question": _Q0, "session_id": _SID}
+    client.post("/api/ask", json=base)
+    client.post("/api/ask", json={**base, "question": "这些新生哪个班"})  # 此后第三问必有滑出
+    real_save = SessionStore.save
+    calls = {"n": 0}
+
+    def flaky_save(self, agent_id, session):
+        if session.digest_lines:  # 只炸懒补那一次落盘（带摘要、轮未追加）
+            calls["n"] += 1
+            raise OSError("磁盘罢工")
+        return real_save(self, agent_id, session)
+
+    monkeypatch.setattr(SessionStore, "save", flaky_save)
+    r = client.post("/api/ask/stream", json={**base, "question": "再按年级拆一下"})
+    assert r.status_code == 200 and '"failed": true' in r.text  # 诚实末帧，流不裸断
+    monkeypatch.setattr(SessionStore, "save", real_save)
+    assert calls["n"] == 1
+    r = client.post("/api/ask/stream", json={**base, "question": "换个视角"})  # 锁未被悬住＝不 409
+    assert r.status_code == 200 and '"failed": false' in r.text
+    assert SessionStore(store).load(a.id, _SID).digest_upto == 1  # 下次再补照旧兑现
+
+
 def test_short_sessions_never_invoke_digest(store, fixture_db):
     """默认预算下现实小会话＝零触发：三问全程 9 次调用、零 digest 面、档案无尾键。"""
     a = _agent_with_datasource(store, fixture_db)
@@ -287,20 +321,6 @@ def test_short_sessions_never_invoke_digest(store, fixture_db):
 
 
 # ── ③ 失败注入：不拦答题、下次再补、入账有痕 ──────────────────────────
-
-
-class _BoomOnceLLM(ScriptedLLM):
-    """摘要压手炸一次（不可重试异常＝立即上抛不睡退避、不消费脚本），常规链路照常。"""
-
-    def __init__(self, responses):
-        super().__init__(responses)
-        self._boom = True
-
-    def invoke(self, prompt):
-        if self._boom and "滚存记忆" in str(prompt):
-            self._boom = False
-            raise ValueError("摘要端点炸了")
-        return super().invoke(prompt)
 
 
 def test_digest_garbage_keeps_answer_and_retries_next(store, fixture_db, monkeypatch, tmp_path):
@@ -330,7 +350,7 @@ def test_digest_call_crash_logged_and_deferred(store, fixture_db, monkeypatch, t
     不冒充真账、不烧调用数）。"""
     monkeypatch.setattr(S, "MEMORY_TOKEN_BUDGET", 60)
     a = _agent_with_datasource(store, fixture_db)
-    llm = _BoomOnceLLM(_HAPPY_SCRIPT * 3)
+    llm = BoomOnceLLM(_HAPPY_SCRIPT * 3, boom_marker="滚存记忆")
     tracer = TraceLogger(tmp_path / "traces.jsonl", run_id="r5")
     client = _client5(llm, store, tracer)
     base = {"agent_id": a.id, "question": _Q0, "session_id": _SID}

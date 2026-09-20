@@ -1,4 +1,7 @@
-"""GSSC 上下文装配流水线（M9 票 03／ADR-0002）——一切进模型内容的唯一出口。
+"""GSSC 上下文装配流水线（M9 票 03／ADR-0002）——图内一切进模型内容的唯一出口。
+
+（图外唯一例外＝M9 票 05 web 侧懒补摘要 prompt：不在图装配路径、单次有界，
+ 理由与封顶注记见 web/sessions.catch_up_digest——票 07 文档收口时一并转正。）
 
 Gather 收齐候选（gather_*＝读状态、格式化素材，节点侧不再伸手拿料）
 → Select 挑选（本票恒等通过；票 06 embedding top-K＋关键词保底在此入住）
@@ -26,6 +29,7 @@ from qadata.graph.prompts import (
     DIGEST_LINE_HEADER,
     DIGEST_PARA_HEADER,
     FAILURE_HISTORY_HEADER,
+    MEMORY_TURN_PREFIX,
     SUPPLEMENT_MARK,
     SYSTEM_RULES,
     TRUNCATION_HINT,
@@ -216,7 +220,7 @@ def _evict_memory(sections: list[Section]) -> str | None:
     for i, s in enumerate(sections):
         if s.zone is not Zone.MEMORY or not s.text.strip():
             continue
-        new = _drop_oldest_entry(s.text, "- 问：")
+        new = _drop_oldest_entry(s.text, MEMORY_TURN_PREFIX)
         if new != s.text:
             sections[i] = s._replace(text=new)
             return "丢最老记忆行"

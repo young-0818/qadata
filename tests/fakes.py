@@ -75,6 +75,23 @@ class ScriptedLLM:
             yield FakeChunk(content=piece, usage=self.usage)
 
 
+class BoomOnceLLM(ScriptedLLM):
+    """票 05 懒补摘要压手故障注入——prompt 含 boom_marker 的第一发抛不可重试异常
+    （不消费脚本、不计数），其余照 ScriptedLLM 回放。与 FlakyStreamLLM 同理＝纪律 #5
+    的有意例外（表达"这一发真炸"，非回放成功内容），职责正交。"""
+
+    def __init__(self, responses, *, boom_marker: str):
+        super().__init__(responses)
+        self.boom_marker = boom_marker
+        self._boom = True
+
+    def invoke(self, prompt):
+        if self._boom and self.boom_marker in str(prompt):
+            self._boom = False
+            raise ValueError("摘要端点炸了")
+        return super().invoke(prompt)
+
+
 class FlakyStreamLLM:
     """流式退避窄化专测的故障注入假模型（M8 票 08）——`attempts` 计建流次数。
 

@@ -398,8 +398,8 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
             return session
         out = catch_up_digest(session, llm=llm, tracer=tracer)
         if out is not session:
-            sessions.save(req.agent_id, out)
-        return out
+            sessions.save(req.agent_id, out)  # 裸 OSError 如实上抛（落盘挂＝真错误，不静默）；
+        return out  # 防锁悬靠挂点在 _runner/try 内（双轴评审 Spec c1），非在此吞异常
 
     def _finish_ask(req: AskRequest, session: Session | None, answer: Answer,
                     question: str | None = None,
@@ -499,15 +499,18 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
         events: queue.Queue = queue.Queue()
         box: dict[str, Any] = {}
         sentinel = object()
-        session = _catch_up(req, session)  # 票 05：与阻塞端点同源挂点（组装前同步补齐、锁内）
-        ctx = build_session_context(session) if session else None
         trail: list[dict] | None = [] if session is not None else None
 
         def _runner() -> None:
             try:
-                answer, turn_q = _route_clarification(req, path, evidence, ctx,
-                                                      on_event=events.put, trail=trail)
-                box["payload"] = _finish_ask(req, session, answer, question=turn_q,
+                # 票 05：与阻塞端点同源挂点（组装前同步补齐、锁内）——收口进 _runner 的
+                # try/finally：懒补落盘若炸（裸 OSError 等）也走 release＋诚实末帧，
+                # 不得把会话锁永久悬在 acquire 与 runner 之间（双轴评审追补）
+                s = _catch_up(req, session)
+                answer, turn_q = _route_clarification(
+                    req, path, evidence, build_session_context(s) if s else None,
+                    on_event=events.put, trail=trail)
+                box["payload"] = _finish_ask(req, s, answer, question=turn_q,
                                              trail=trail)
             finally:
                 events.put(sentinel)
