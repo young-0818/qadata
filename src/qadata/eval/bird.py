@@ -17,6 +17,7 @@ from qadata.graph.build import run_question
 from qadata.llm.tracing import TRACE_PATH, TraceLogger, now_beijing
 from qadata.obs import obs_for, shutdown
 from qadata.retrieval.cards import build_table_recall
+from qadata.retrieval.values import build_value_link
 from qadata.tools.db import open_readonly
 
 console = Console()
@@ -249,7 +250,11 @@ def _run_one(q: dict, db_dir: str, llm, max_rows: int, tracer, settings=None,
                               llm=llm, tracer=tracer, settings=settings, limiter=limiter,
                               skip_respond=skip_respond, obs=obs,
                               table_recall=build_table_recall(str(db_path), embedder,
-                                                             tracer=tracer))
+                                                             tracer=tracer),
+                              # M10 票 03：值链同点装配（票 07 值链轮 eval＝库派生物
+                              # 验收经 eval 的既定义务；缺料四路＝入账降级照常作答）
+                              value_link=build_value_link(str(db_path), embedder,
+                                                          tracer=tracer))
     except Exception as e:  # noqa: BLE001 单题隔离：评测器最外层，单题任何失败不阻塞整批
         return {**base, **_run_stats(tracer, q), "pred_sql": None, "correct": False, "error": str(e),
                 "error_class": "answer_failed", **_FALLBACK_PATH}

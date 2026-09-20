@@ -202,6 +202,36 @@ def test_memory_drops_oldest_first_one_line_at_a_time(monkeypatch):
     assert "## 会话历史" in out and "原始问题：这些呢" in out  # 节头与任务面在位
 
 
+def test_full_eviction_chain_includes_value_sticker(monkeypatch):
+    """M10 票 03 扩钉（全灌爆走满淘汰序）：记忆→值纸条→参考例题→值采样→失败历史，
+    撤值纸条位挨着撤参考例题（库派生物比人签例题更可再生＝更先出局）；
+    纸条恒贴 schema 最末，split 切尾不连累值采样块（两刀各安其位由序保证）。"""
+    from qadata.graph.prompts import EXAMPLES_HEADER, format_examples_block
+    from qadata.retrieval.values import VALUE_STICKER_HEADER
+    schema = ("CREATE TABLE a(b TEXT);\n" * 20 + "\n"
+              + VALUE_SAMPLE_HEADER + "\n" + "- b：'x'｜'y'\n" * 8 + "\n"
+              + VALUE_STICKER_HEADER + "\n" + "- a.b —— 库里实际这么存：'x'\n" * 8)
+    attempts = [SqlAttempt(sql=f"SELECT {i} FROM nope_{i}", error="no such table")
+                for i in range(3)]
+    monkeypatch.setitem(gssc.FUSE_TOKENS, "generate", 1)  # 逼到全链走一遍
+    slots = dict(gssc.gather_generate({
+        "question": "有几名学生", "evidence": "", "db_schema": schema,
+        "attempts": attempts, "verify_note": None, "metric_note": None,
+        "session_context": {"turns": [],
+                            "draft": {"sql": "SELECT " + "draft_body " * 40,
+                                      "head": "标量值 3"}}}),
+        examples=format_examples_block([("历", "SELECT 1")]))
+    events = []
+    out = gssc.assemble("generate", slots, on_compress=events.append)
+    assert events[0]["actions"] == ["整段撤记忆", "撤值纸条", "撤参考例题", "砍值采样",
+                                    "缩失败历史", "缩失败历史", "缩失败历史"], \
+        "逐级生效序含撤纸条位（摘要面后、撤参考例题前——淘汰位挨着参考例题格）"
+    for gone in ("draft_body", VALUE_STICKER_HEADER, EXAMPLES_HEADER,
+                 VALUE_SAMPLE_HEADER, "no such table"):
+        assert gone not in out
+    assert "CREATE TABLE a" in out and out.endswith("输出一条 SQL：")  # 地板与任务/输出面在位
+
+
 def test_no_evictable_content_records_honestly(monkeypatch):
     """respond/explore 无料可砍（结果表/SQL/表清单不在淘汰序）：如实入账、不硬砍一字。"""
     monkeypatch.setitem(gssc.FUSE_TOKENS, "explore", 10)

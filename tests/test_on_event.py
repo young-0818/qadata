@@ -68,11 +68,12 @@ def test_run_question_signature_tail_default_none():
     既有位置参/关键字调用面零改动，CLI/eval 不受影响。
     （本断言原钉 on_event 为末位；票 05 合法追加后钉"末两位皆缺省 None"；
     HITL 改判追加后钉"末四位皆缺省 None"；M9 票 01 观测出口追加后钉"末五位"；
-    M9 票 06 召回回调追加后钉"末六位"；M10 票 01 表卡粗召回沿同一族追加后钉"末七位"。）"""
+    M9 票 06 召回回调追加后钉"末六位"；M10 票 01 表卡粗召回沿同一族追加后钉"末七位"；
+    M10 票 03 值链查询调沿同一族追加后钉"末八位"。）"""
     params = list(inspect.signature(run_question).parameters.values())
-    for tail, want in ((-1, "table_recall"), (-2, "recall"), (-3, "obs"),
-                       (-4, "checkpointer"), (-5, "thread_id"),
-                       (-6, "session_context"), (-7, "on_event")):
+    for tail, want in ((-1, "value_link"), (-2, "table_recall"), (-3, "recall"),
+                       (-4, "obs"), (-5, "checkpointer"), (-6, "thread_id"),
+                       (-7, "session_context"), (-8, "on_event")):
         assert params[tail].name == want and params[tail].default is None
 
 

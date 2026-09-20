@@ -121,7 +121,7 @@ def _evidence_caliber(state: dict) -> str:
 
 def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
                skip_respond: bool = False, on_event=None, hitl: bool = False,
-               recall=None, table_recall=None):
+               recall=None, table_recall=None, value_link=None):
     """节点工厂：闭包注入 llm/tracer/settings/limiter，便于测试时替换假模型与配置。
     skip_respond：评测模式——成功路径不生成结论文本（判分只读 answer.sql 的执行结果），
     失败诚实汇报与回退重执行不受影响。产品路径（ask/Web）默认 False，全家桶保留。
@@ -137,6 +137,11 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
     table_recall（M10 票 01）＝表卡粗召回调（question→候选表名 list|None），只被
     explore 的大库分支消费（小库根本不读索引文件）；缺省 None＝现状一把梭逐字节
     一致——账本与降级在回调闭包内自持（retrieval/cards），本层零知情。
+    value_link（M10 票 03）＝值链查询调（(question, intent, 入选表)→纸条块，""＝
+    不贴），被 explore 消费进 schema 上下文（**小库大库都触发**——值链与表卡相反）；
+    搭车料＝state["intent"]（understand 现成输出，零新增生成调用；None＝本轮无纸条
+    ——spec §二 Q5 成文）。账本/降级/memo 在闭包内自持（retrieval/values），本层
+    零知情；缺省 None＝逐字节现状（on_event/table_recall 末位纪律同族、不进状态键）。
 
     M8 票 06 帧喂厚：结果帧追加 ok/duration_ms/tokens_in/tokens_out（start 帧与
     末帧 answer 契约零动）；tools 层子步骤发 kind:"tool" 帧（explore 内
@@ -293,12 +298,17 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
 
     def explore(state: dict) -> dict:
         conn = open_readonly(state["db_path"])
+        # 票 03：纸条调在本节点绑定搭车料（question＋intent），build_schema_context
+        # 只见「入选表→块」的窄形——扫描在 retrieval 闭包内按题面 memo，重试环/
+        # 精准模式不翻倍向量调用。
+        vl = ((lambda names: value_link(state["question"], state.get("intent"), names))
+              if value_link is not None else None)
         try:
             ctx = build_schema_context(conn, state["question"], llm=llm, tracer=tracer,
                                        db_path=state["db_path"], limiter=limiter,
                                        sample_values=s.value_sampling,
                                        on_event=on_event, sink=sink,
-                                       table_recall=table_recall)
+                                       table_recall=table_recall, value_link=vl)
         finally:
             conn.close()
         _emit("explore", len(state.get("attempts", [])), "取到 Schema")

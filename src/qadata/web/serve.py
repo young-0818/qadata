@@ -9,7 +9,7 @@ import uvicorn
 from qadata.config import load_settings
 from qadata.llm.gateway import build_embedder, build_llm
 from qadata.llm.tracing import TRACE_PATH, TraceLogger
-from qadata.retrieval.store import DEFAULT_INDEX_DIR, index_status
+from qadata.retrieval.store import DEFAULT_INDEX_DIR, index_status, value_index_status
 from qadata.web.agents import DEFAULT_AGENTS_DIR, AgentStore
 from qadata.web.app import create_app
 
@@ -21,7 +21,9 @@ def index_announcements(store: AgentStore, embed_model: str, *,
     """M10 票 01 serve 启动播报（ADR-0005）：逐智能体查库指纹档——有档且 model_id
     对＝开；缺/坏/过期＝一行播报＋现读降级（绝不在请求路径建索引）。
     缺档聚合成一行（真空启动零档＝现状是默认形态，不逐智能体嚷嚷）；坏/过期逐条
-    点名（管理动作可修复：index-build 重建）。"""
+    点名（管理动作可修复：index-build 重建）。
+    票 03 接读值档（票 02 遗留兑现）：坏/过期逐条点名（同「可修复才嚷」纪律）；
+    缺/空档静——值链缺料在问数面逐问入账 value_link 行，启动播报不重复嚷现状。"""
     lines, ok, missing = [], [], []
     for meta in store.all():
         p = store.datasource_path(meta)
@@ -36,6 +38,11 @@ def index_announcements(store: AgentStore, embed_model: str, *,
             lines.append(f"表卡索引{_STATE_TEXT[st]}：智能体「{meta.name}」的库 → "
                          + ("现读降级（重建＝qadata index-build <库文件>）" if st == "stale"
                             else "现读降级（重新 qadata index-build 覆盖坏档）"))
+        vs = value_index_status(p, embed_model, root=root or DEFAULT_INDEX_DIR)
+        if vs in ("broken", "stale"):
+            lines.append(f"值索引{_STATE_TEXT[vs]}：智能体「{meta.name}」的库 → 值纸条降级（"
+                         + ("重建＝qadata index-build <库文件>）" if vs == "stale"
+                            else "重新 qadata index-build 覆盖坏档）"))
     if ok:
         lines.insert(0, f"表卡索引开：{len(ok)} 个智能体库有档（{'、'.join(ok)}）")
     if missing:

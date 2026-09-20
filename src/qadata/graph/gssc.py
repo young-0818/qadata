@@ -154,7 +154,8 @@ def select(scenario: str, slots: dict[str, str], *, recall=None) -> dict[str, st
 # cl100k 对中文计量粒度比订阅端词表更细（同文计数只高不低），真载荷距闸更远。
 # 评测形态永不触发＝行为零变化；触发只可能出现在生产长会话/巨 schema 形态。
 # 淘汰序（资料类只有程序硬砍，spec §五 勿回锅）：先丢最老窗口原文行、次摘要行、
-# 再纪要段（M9 票 05 接线＝先丢行、后丢段——密度越高越守得住），次撤参考例题
+# 再纪要段（M9 票 05 接线＝先丢行、后丢段——密度越高越守得住），次撤值纸条
+# （M10 票 03＝最可再生资料类，index-build 一键重得，挨着参考例题格），次撤参考例题
 # （票 06 注入料在此吃兜底），次砍值采样、再缩失败历史——按 Zone 优先级逐级、
 # 确定性、零 LLM；任务与输出分区永不砍，无料可砍的分区（respond 结果表、
 # explore 表清单等）如实入账不硬砍。
@@ -259,6 +260,20 @@ def _evict_digest(sections: list[Section], header: str, action: str) -> str | No
     return None
 
 
+def _cut_value_stickers(sections: list[Section]) -> str | None:
+    """撤值纸条（M10 票 03 注入料吃保险丝）：整块确定性一刀（值采样同款姿势，
+    split 切尾——纸条恒贴 schema 上下文最末）。淘汰位在撤参考例题**之前**、摘要面
+    之后（spec §二 Q5「值纸条归最可再生资料类，淘汰位挨着参考例题格」——库派生物
+    index-build 一键可再生，比人签例题更先出局；schema DDL 本体仍是答案地板）。
+    节头惰性 import 防环（_cut_value_samples 先例）。"""
+    from qadata.retrieval.values import VALUE_STICKER_HEADER
+    for i, s in enumerate(sections):
+        if s.zone is Zone.EVIDENCE and VALUE_STICKER_HEADER in s.text:
+            sections[i] = s._replace(text=s.text.split(VALUE_STICKER_HEADER, 1)[0])
+            return "撤值纸条"
+    return None
+
+
 def _cut_examples(sections: list[Section]) -> str | None:
     """撤参考例题（M9 票 06 注入料吃保险丝兜底）：召回块整段撤（确定性一刀，
     值采样同款姿势）。排序在摘要面之后、值采样之前——few-shot 是最可再生的资料类，
@@ -297,7 +312,7 @@ def _shrink_failure_history(sections: list[Section]) -> str | None:
 
 def compress(scenario: str, sections: list[Section], *, on_compress=None) -> str:
     """预算压缩阶段：限内＝恒等拼接（逐字节零变化）；超限＝按 Zone 优先级确定性淘汰
-    （窗口原文行→摘要行→纪要段→参考例题→值采样→失败历史，任务/输出永不砍），
+    （窗口原文行→摘要行→纪要段→值纸条→参考例题→值采样→失败历史，任务/输出永不砍），
     每步一单位直至限内或无料可砍。
     on_compress（降级入账回调）仅在真压缩时触发一次——账本＋直播帧流两出口由挂点自持。"""
     budget = FUSE_TOKENS[scenario]
@@ -313,6 +328,7 @@ def compress(scenario: str, sections: list[Section], *, on_compress=None) -> str
         action = (_evict_memory(sections)
                   or _evict_digest(sections, DIGEST_LINE_HEADER, "丢最老摘要行")
                   or _evict_digest(sections, DIGEST_PARA_HEADER, "丢最老纪要段")
+                  or _cut_value_stickers(sections)
                   or _cut_examples(sections)
                   or _cut_value_samples(sections) or _shrink_failure_history(sections))
         if action is None:

@@ -206,7 +206,7 @@ def foreign_key_closure(conn: sqlite3.Connection, tables: list[str]) -> list[str
 def build_schema_context(
     conn: sqlite3.Connection, question: str, llm=None, max_chars: int = FULL_SCHEMA_LIMIT,
     tracer=None, db_path: str | None = None, limiter=None, sample_values: bool = False,
-    on_event=None, sink=None, table_recall=None,
+    on_event=None, sink=None, table_recall=None, value_link=None,
 ) -> str:
     """构建给 LLM 的 schema 上下文：小库全量；大库让 LLM 先选相关表。
     db_path 提供时，附带选中表的 database_description 列注释（M3 #10）。
@@ -218,7 +218,11 @@ def build_schema_context(
     table_recall（M10 票 01）＝表卡粗召回调（question→候选表名 list，None＝缺位/
     降级，账本在闭包内自持）——**只在大库分支消费**：小库全量路连调用都不发生
     （索引文件根本不读，逐字节现状姊妹钉）；大库＝宽进（粗召 top-K）→窄出
-    （既有 LLM 精选，prompt 骨架零改动）→外键补漏，任何检索缺位＝走现状一把梭。"""
+    （既有 LLM 精选，prompt 骨架零改动）→外键补漏，任何检索缺位＝走现状一把梭。
+    value_link（M10 票 03）＝值纸条调（入选表→纸条块字符串，""＝不贴）——与表卡
+    相反，**小库大库都触发**（值域病灶全在小库考面，spec §一）；块贴 schema 上下文
+    最末（值采样块之后＝保险丝 split 切尾不连累前料），账本与降级在闭包内自持
+    （retrieval/values.build_value_link），本层零知情；缺位 None＝逐字节现状。"""
     from qadata.llm.tracing import tool_frame  # 帧形单源（timed_invoke 同款惰性路）
 
     def _tool(name: str, t0: float, ok: bool = True) -> None:
@@ -233,12 +237,17 @@ def build_schema_context(
         return "\n\n".join(p for p in parts if p)
 
     def _final(ctx: str, names: list[str]) -> str:
-        if not sample_values:
-            return ctx
-        t0 = time.perf_counter()
-        block = column_value_samples(conn, names)
-        _tool("value_samples", t0)
-        return f"{ctx}\n\n{block}" if block else ctx
+        if sample_values:
+            t0 = time.perf_counter()
+            block = column_value_samples(conn, names)
+            _tool("value_samples", t0)
+            if block:
+                ctx = f"{ctx}\n\n{block}"
+        if value_link is not None:
+            block = value_link(names)  # 纸条块贴最末（淘汰序「撤值纸条」在「砍值采样」前，切尾各不连累）
+            if block:
+                ctx = f"{ctx}\n\n{block}"
+        return ctx
 
     t0 = time.perf_counter()
     tables = list_tables(conn)

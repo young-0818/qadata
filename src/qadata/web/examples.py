@@ -24,7 +24,6 @@ ponytail: 条目破 ~5 万或多进程共享 → 本地 ANN（usearch，仍是�
 回调够不到 obs.mirror 包装后的帧流，为补一条帧开第二出口不值；审计真值在账本。
 空池（无档/零条）或未挂接（embedder 缺位、CLI/eval）＝Select 恒等＝逐字节现状。
 """
-import re
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -34,14 +33,13 @@ from typing import Any
 import yaml
 
 from qadata.graph.prompts import format_examples_block
+from qadata.retrieval.values import extract_keywords
 from qadata.web._fs import atomic_write
 
 EXAMPLES_FILENAME = "examples.yaml"  # 智能体目录内唯一档名（写入口单源＝sign_examples）
 RECALL_TOP_K = 3  # 注入题对上限（ponytail: 拍脑袋小常数——判卷要调只动这里）
-
-# 关键词料＝引号字面量＋拉丁标识符（表名/列名形态）＋≥2 位数字（取值字面量形态）。
-# CJK 词无边界、由向量面管；精确保底治的正是向量漏掉的精确标识符。单字母＝噪声不进。
-_KEYWORD_RE = re.compile(r"'([^']+)'|\"([^\"]+)\"|([A-Za-z_][A-Za-z0-9_]*)|(\d{2,})")
+# 关键词料（引号字面量/拉丁标识符/≥2 位数字；CJK 词无边界、例题面由向量管不开
+# cjk 旗）＝retrieval.values.extract_keywords 共读单源（M10 票 03 值链扩 CJK 同闸）
 
 
 class ExampleError(ValueError):
@@ -116,12 +114,6 @@ def sign_examples(agent_dir: str | Path, pairs: Sequence[dict],
     return len(rows), skipped
 
 
-def _keywords(text: str) -> set[str]:
-    return {t.lower() for m in _KEYWORD_RE.finditer(text)
-            if (t := next((g for g in m.groups() if g), ""))
-            and (m.lastindex <= 2 or len(t) >= 2)}
-
-
 def _dot(a: Sequence[float], b: Sequence[float]) -> float:
     return sum(x * y for x, y in zip(a, b, strict=False)) if len(a) == len(b) else 0.0
 
@@ -153,7 +145,7 @@ def build_recall(examples: Sequence[Example], embedder, *, top_k: int = RECALL_T
             memo[question] = ""
             _ledger("failed", reason=f"向量化调用失败：{e}", t0=t0)
             return ""
-        kws = _keywords(question)
+        kws = extract_keywords(question)
         # 保底闸语义（双轴评审 Spec c3 追补）：命中标志＝字典序第一键——加法权重在
         # dot∈[-1,1] 全幅下不是严格下界（命中者自身 dot 为负仍可落榜），硬保证在此；
         # 命中层内/未命中层内各按向量点积降序，同分按库序（人签先签者靠前）——确定性。

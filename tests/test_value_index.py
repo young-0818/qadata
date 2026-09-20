@@ -9,8 +9,9 @@
 ③ 档面纪律——缺档 None／坏档如实炸／值无向量＝自相矛盾炸（load_cards 同门）；
 ④ 超长值不是料（采时即弃不进 dropped 账——那是预算放弃的专账）；窗口外语义如实漏
   （M8 有界窗沿借的可钉面）；
-⑤ 查询路径零改动扫描钉——graph/tools/web/eval 源码出现值档符号即红
-  （「建了没人读是预期状态」的机制版；examples 零触先例同门）；常量钉。
+⑤ 运行面永不建/永不直读扫描钉——graph/tools/web/eval 源码出现值档写侧/采集侧
+  符号即红（票 03 接读后语义改写：查询只经 retrieval 闭包，问数路径永不建索引
+  ＝ADR-0005 机制版；examples 零触先例同门）；常量钉。
 隔离纪律：全程 root=tmp_path（票 01 评审改①家法，仓库 data/indexes 零染指）。
 """
 import inspect
@@ -189,9 +190,11 @@ def test_self_contradictory_archive_raises(value_db, ix):
 # ── ⑤ 查询路径零改动扫描钉＋常量钉 ────────────────────────────────
 
 
-def test_query_path_zero_touch():
-    """本票只建档面——消费面（图/工具/web/eval）源码出现值档符号即红：
-    「建了没人读」是预期状态，接读者＝票 03（examples 零触先例同门）。"""
+def test_runtime_never_builds_or_reads_store_directly():
+    """票 02 的「建了没人读」零触钉随票 03 接读改写为**建侧/直读禁**：运行面
+    （图/工具/web/eval/serve）源码出现值档**写侧/采集侧/直读**符号即红——问数路径
+    永不建索引（ADR-0005），读也只经 retrieval 闭包（build_value_link，本层零知情）。
+    value_index_status 读侧例外只在 serve 播报（词形 value_index_status 不在禁列）。"""
     import qadata.eval.bird as eval_bird
     import qadata.graph.build as build_mod
     import qadata.graph.gssc as gssc_mod
@@ -205,7 +208,8 @@ def test_query_path_zero_touch():
     for mod in (build_mod, nodes_mod, gssc_mod, schema_mod, app_mod, serve_mod,
                 eval_bird, sessions_mod, feedback_mod):  # 覆盖面沿 M9 零触先例全表
         src = inspect.getsource(mod)
-        for name in ("load_values", "build_value_index", "value_index", "ValueBuild"):
+        for name in ("load_values", "write_values", "build_value_index",
+                     "ValueBuild", "collect_value_candidates"):
             assert name not in src, (mod.__name__, name)
 
 

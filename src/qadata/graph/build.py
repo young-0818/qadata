@@ -59,11 +59,11 @@ def _route_after_verify(state: dict, budget: int) -> str:
 
 def build_graph(llm, tracer=None, settings: Settings | None = None, limiter=None,
                 skip_respond: bool = False, on_event=None, checkpointer=None,
-                hitl: bool = False, recall=None, table_recall=None):
+                hitl: bool = False, recall=None, table_recall=None, value_link=None):
     s = settings or FALLBACK_SETTINGS
     nodes = make_nodes(llm, tracer, settings=s, limiter=limiter, skip_respond=skip_respond,
                        on_event=on_event, hitl=hitl, recall=recall,
-                       table_recall=table_recall)
+                       table_recall=table_recall, value_link=value_link)
     g = StateGraph(AgentState)
     for name in ("understand", "metric_match", "explore", "generate", "execute",
                  "verify", "respond"):
@@ -131,7 +131,7 @@ def run_question(db_path: str, question: str, evidence: str = "", llm=None,
                  tracer=None, settings: Settings | None = None, limiter=None,
                  skip_respond: bool = False, on_event=None, session_context=None,
                  thread_id: str | None = None, checkpointer=None, obs=None,
-                 recall=None, table_recall=None) -> Answer:
+                 recall=None, table_recall=None, value_link=None) -> Answer:
     """跑一题到底。on_event（票 03）＝节点级进度回调 `Callable[[dict], None]`，
     帧形如 {node, attempt, status}；缺省 None 时与现状逐行为一致（CLI/eval 调用面
     零改动，专测钉死于 tests/test_on_event.py）。
@@ -151,7 +151,10 @@ def run_question(db_path: str, question: str, evidence: str = "", llm=None,
     table_recall（M10 票 01）：表卡粗召回调（retrieval/cards.build_table_recall 装配，
     question→候选表名 list|None），沿参进 explore 的大库分支（宽进窄出，spec §二 Q6）
     ——同 recall 的末位参与不进状态键纪律；serve 与 eval 共用库域档（ADR-0004），
-    缺省 None＝大库现状一把梭逐字节一致。"""
+    缺省 None＝大库现状一把梭逐字节一致。
+    value_link（M10 票 03）：值链查询调（retrieval/values.build_value_link 装配，
+    (question, intent, 入选表)→纸条块），沿参进 explore——值纸条贴 schema 上下文
+    （小库大库都触发，spec §一）；同族末位参与不进状态键纪律，缺省 None＝逐字节现状。"""
     try:
         if llm is None:
             settings = settings or load_settings()
@@ -166,7 +169,7 @@ def run_question(db_path: str, question: str, evidence: str = "", llm=None,
         graph = build_graph(llm, tracer, settings=settings, limiter=limiter,
                             skip_respond=skip_respond, on_event=on_event,
                             checkpointer=checkpointer if hitl else None, hitl=hitl,
-                            recall=recall, table_recall=table_recall)
+                            recall=recall, table_recall=table_recall, value_link=value_link)
         initial = {"db_path": db_path, "question": question, "evidence": evidence}
         if session_context is not None:
             initial["session_context"] = session_context
@@ -184,14 +187,16 @@ def run_question(db_path: str, question: str, evidence: str = "", llm=None,
 def resume_question(thread_id: str, supplement: str, llm=None,
                     tracer=None, settings: Settings | None = None, limiter=None,
                     skip_respond: bool = False, on_event=None, checkpointer=None,
-                    obs=None, recall=None, table_recall=None) -> Answer:
+                    obs=None, recall=None, table_recall=None, value_link=None) -> Answer:
     """经典 HITL 续跑（M8 票 03 改判）：人类补充经 Command(resume) 送回暂停 thread，
     understand 节点重放（＝understand 共 2 次调用的既定代价）后走常规路线。
     session_context 不用重传——暂停态连记忆一起在 checkpoint 里。守护同 run_question：
     任何裸异常（含 thread 不存在/无 checkpointer）收敛为诚实失败。
     recall（M9 票 06）＝同 run_question 的召回回调（续跑轮的 generate 重新装配时消费），
     缺省 None＝逐字节现状。table_recall（M10 票 01）＝同 run_question（续跑轮 explore
-    重新进图时消费），缺省 None＝现状逐字节一致。
+    重新进图时消费），缺省 None＝现状逐字节一致。value_link（M10 票 03）＝同
+    run_question（续跑轮 explore 消费合成全句为新题面重新抽词——memo 按题面天然分开，
+    每问仍 ≤1 次向量调用），缺省 None＝逐字节现状。
     obs（M9 票 01）＝续跑问自己的 trace（暂停与续答是两条 web 请求、各一条，靠
     session_id 串联；缺省 None＝不镜像——无内部自造分支，续跑唯一入口是 web，串联键
     只有那里有，CLI/eval 不触此门）。"""
@@ -204,7 +209,7 @@ def resume_question(thread_id: str, supplement: str, llm=None,
         graph = build_graph(llm, tracer, settings=settings, limiter=limiter,
                             skip_respond=skip_respond, on_event=on_event,
                             checkpointer=checkpointer, hitl=True, recall=recall,
-                            table_recall=table_recall)
+                            table_recall=table_recall, value_link=value_link)
         final = graph.invoke(Command(resume=supplement),
                              {"configurable": {"thread_id": thread_id}})
         return _final_answer(final)

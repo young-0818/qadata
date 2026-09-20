@@ -205,3 +205,18 @@ def index_status(db_path: str | os.PathLike, embed_model: str, *,
     if stored is None or not stored.cards:
         return "missing"
     return "ok" if stored.model_id == embed_model else "stale"
+
+
+def value_index_status(db_path: str | os.PathLike, embed_model: str, *,
+                       root: str | os.PathLike = DEFAULT_INDEX_DIR) -> str:
+    """值档一眼态（票 02 遗留「播报接读」在票 03 兑现）：missing｜broken｜stale｜ok。
+    空档（建过但全库无可采列＝columns 空）＝ok——非管理可修态，播报不嚷；
+    缺档也静（值链缺料在问数面逐问入账 value_link 行，启动播报只点名**坏了能修**的）。
+    永不抛（index_status 同纪律）。"""
+    try:
+        stored = load_values(db_path, root=root)
+    except RetrievalError:
+        return "broken"
+    if stored is None:
+        return "missing"
+    return "ok" if stored.model_id == embed_model else "stale"
