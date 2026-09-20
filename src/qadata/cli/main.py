@@ -91,6 +91,15 @@ def main(argv: list[str] | None = None) -> int:
                         help="人审题对 JSONL（feedback-export 产物人工筛选后改写为每行 "
                              "{q, sql, signed_by}——question 改名 q、逐行补签名）")
 
+    p_kb = sub.add_parser("knowledge-feed",
+                          help="口径字典进料（M10 票 04 唯一进料口：md/txt/csv 条目级切块——"
+                               "一条口径一块、否字数滑窗；进料当场整档向量化入账）")
+    p_kb.add_argument("--agents-dir", default=DEFAULT_AGENTS_DIR,
+                      help=f"智能体数据目录（默认 {DEFAULT_AGENTS_DIR}）")
+    p_kb.add_argument("--agent", required=True, help="目标智能体 id（hex12）")
+    p_kb.add_argument("--file", required=True,
+                      help="字典源文件（.md/.txt 空行分块 / .csv 一行一条；Word/PDF 被否在册）")
+
     p_idx = sub.add_parser("index-build",
                            help="离线建库域检索索引（M10 票 01 表卡＋票 02 值索引；显式管理动作，"
                                 "问数路径永不建——ADR-0005）：qadata index-build <库文件>")
@@ -204,6 +213,40 @@ def main(argv: list[str] | None = None) -> int:
         console.print(f"人签 {n} 对题 → {store.agent_dir(meta.id)}"
                       + (f"（拒收无签/坏行 {skipped} 条——人签纪律，不静默）" if skipped else ""))
         console.print("提示：进料口唯一——会话成功轮永不自动吸收（错误自我强化，spec §五 被否在案）")
+        return 0
+    if args.cmd == "knowledge-feed":
+        from qadata.config import load_settings
+        from qadata.llm.gateway import (
+            build_embedder,  # 向量化通道复用（同 examples-sign）
+        )
+        from qadata.retrieval.knowledge import (
+            KNOWLEDGE_FILENAME,  # 档名单源（回执路径不抄第二份字面量）
+            feed_knowledge,  # 逻辑全在包内，CLI 薄壳；唯一进料口
+        )
+        from qadata.web.agents import AgentStore
+
+        settings = load_settings()
+        # 与 examples-sign 分道：缺 embedder 不拒进料——内容照落盘、向量化挂账明示
+        # （票 04 裁决；查询路票 05 对挂账档降级入账，重喂即补齐）
+        embedder = build_embedder(settings) if settings.embed_model else None
+        store = AgentStore(args.agents_dir)
+        try:
+            meta = store.get(args.agent)  # 不存在/非法 id → 诚实报错，不建孤儿档
+        except Exception as e:  # noqa: BLE001 CLI 薄壳：存储面一切拒绝转人话
+            console.print(f"[red]{e}[/red]")
+            return 1
+        try:
+            res = feed_knowledge(store.agent_dir(meta.id), Path(args.file), embedder)
+        except Exception as e:  # noqa: BLE001 CLI 薄壳：坏档/坏编码/空进料/端点挂一切拒绝转人话
+            console.print(f"[red]口径字典进料失败：{e}[/red]")
+            return 1
+        console.print(f"口径字典 整档 {res.total} 条（新增 {res.added}，向量化 {res.embedded} 发）"
+                      f" → {store.agent_dir(meta.id) / KNOWLEDGE_FILENAME}")
+        if embedder is None:
+            console.print("[yellow]向量化挂账：未配置 QADATA_EMBED_MODEL——内容已落盘不丢，"
+                          "配好模型重喂同一文件即补齐（装载闸拒读挂账档，不静默带病召回）[/yellow]")
+        console.print("提示：进料口唯一——问数路径永不写档（零触钉族）；查询路在票 05 接，"
+                      "本票建了没人读是预期（ADR-0004 人进料域，删智能体连带清）")
         return 0
     if args.cmd == "index-build":
         from qadata.config import load_settings
