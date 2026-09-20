@@ -1,8 +1,9 @@
 """M7 票 05 web 侧专测：会话落盘（SessionStore）＋三层记忆组装＋API 会话面。
 
 单元层钉存储纪律（懒建档、hex12 焊死穿越、坏文件如实报错不静默吞、删智能体连带
-清会话）与 build_session_context 纯函数（K=5 滑窗、failed 轮不给草稿、L1 只认最近
-一轮成功——fresh_topic 人肉闸已撤 owner 裁 2026-09-15 票 09，连续性模型隐式判）
+清会话）与 build_session_context 纯函数（M9 票 05 预算驱动窗口——K=5 降为默认
+换算结果、failed 轮不给草稿、L1 只认最近一轮成功——fresh_topic 人肉闸已撤 owner
+裁 2026-09-15 票 09，连续性模型隐式判）
 ＋result_head 摘要（全量行不进上下文在此源头钉）。
 API 层钉：session_id 真值回显、轮次落盘两端点同源（_finish_ask 一个收口）、口径
 优先级不随会话变（请求显式 > 智能体业务知识 > 空，叠加框已裁 owner 2026-09-15）、
@@ -24,7 +25,6 @@ from qadata.types import Answer, QueryResult
 from qadata.web.agents import AgentNotFound, AgentStore
 from qadata.web.app import create_app
 from qadata.web.sessions import (
-    SESSION_MEMORY_K,
     Session,
     SessionNotFound,
     SessionStore,
@@ -93,6 +93,7 @@ def test_save_load_roundtrip(sessions, store, agent):
     assert "第二问" in text and _Q1 in text  # 人可读可审（AgentStore 同款）
     assert "overlay" not in text  # 叠加框已裁（owner 裁 2026-09-15），不再写该键
     assert "fresh_topic" not in text  # 新话题闸已撤（票 09），新写档案不产该键
+    assert "digest_" not in text  # M9 票 05：无摘要链＝尾键不写，文件形状与入档前逐字节一致
 
 
 def test_legacy_revoked_keys_ignored_on_load(sessions, store, agent):
@@ -174,11 +175,27 @@ def _sess(*qs, failed_last=False):
     return Session(id=_SID, turns=tuple(turns))
 
 
-def test_l2_window_is_last_five_chronological():
+def test_budget_window_keeps_all_small_turns():
+    """M9 票 05 换代：K=5 废除为规则——7 条小轮全在 token 预算窗内（滑出＝0＝
+    懒补零触发），不再切窗丢史；出窗只由预算决定。"""
     ctx = build_session_context(_sess(*[f"问{i}" for i in range(7)]))
-    assert len(ctx["turns"]) == SESSION_MEMORY_K
-    assert [t["question"] for t in ctx["turns"]] == ["问2", "问3", "问4", "问5", "问6"]  # 时间升序，q0/q1 出窗
-    assert ctx["draft"]["sql"] == _SQL1  # L3 全史在案，出窗≠丢失（归档归文件）
+    assert [t["question"] for t in ctx["turns"]] == [f"问{i}" for i in range(7)]
+    assert "digest_lines" not in ctx  # 无滑出＝无摘要，载荷形状与票 04 一致
+
+
+def test_budget_window_five_fat_turns_default_k_five():
+    """K=5 成默认换算结果的数值钉：票 04 现实最坏记忆行（实测 104 tok/行）×5 容得下、
+    ×6 出（时间升序、最老先出窗）。"""
+    fat = tuple({"question": f"20{20 + i} 年各月贷款违约户数是多少，按月份分组列出",
+                 "ts": f"2026-09-14T10:00:{i:02d}+08:00", "failed": False, "row_count": 12,
+                 "head": "头部 3 行：1998-01 | 3；1998-02 | 5；1998-03 | 2",
+                 "answer": {"sql": "SELECT strftime('%Y-%m', loan.date) m, COUNT(*) FROM loan "
+                                   "WHERE loan.status IN ('B','N') GROUP BY m ORDER BY m"}}
+                for i in range(6))
+    ctx = build_session_context(Session(id=_SID, turns=fat))
+    assert len(ctx["turns"]) == 5  # 第 6 条肥行越预算出窗（滑出待懒补）
+    assert ctx["turns"][0]["question"].startswith("2021")  # 最老先出、时间升序
+    assert ctx["draft"]["sql"] == fat[-1]["answer"]["sql"]
 
 
 def test_failed_last_turn_no_draft_but_line_kept():

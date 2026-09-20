@@ -139,10 +139,62 @@ TRUNCATION_HINT = "\n（注意：结果已截断，实际行数可能更多）"
 # 人肉 fresh_topic 闸已撤，判错的代价方向性＝宁多带勿错切（多带的旧史由沙箱/verify
 # 兜住，错切真指代直接答错）。
 
+# ── M9 票 05 滚存摘要链（spec §二 Q7）：注入 [记忆] 的形态＝窗口原文＋段落行＋行链 ──
+# 两个节头＝渲染（本模块）与保险丝淘汰序（graph/gssc 的摘要行/纪要段两级）共读的
+# 单源字面（FAILURE_HISTORY_HEADER 先例）——"先丢行、后丢段"按节头定位分面执行，
+# 不靠行首样式运气。行链/段落行前缀（「第N轮：」「第a-b轮：」）由系统严格拼装、
+# 模型只填冒号后的正文，判别器 digest_line_is_para 单源（web/sessions 折叠与渲染共读）。
+DIGEST_PARA_HEADER = "## 早期会话纪要（多轮折一条，最老的在前；本轮问题与此无关时忽略这段）"
+DIGEST_LINE_HEADER = "## 稍早轮次摘要（每轮一行，比下方会话历史更早；无关则忽略）"
+
+
+def digest_line_is_para(line: str) -> bool:
+    """段落行判别：编号前缀含轮次范围连字符（「第1-10轮：」）；行链是单轮编号。
+    只认首个「轮：」——前缀是严格模板产物，正文里再出现该字样不干扰。"""
+    head, sep, _ = line.partition("轮：")
+    return sep == "轮：" and "-" in head
+
+
+def digest_fold(a: int, b: int, lines: list[str]) -> str:
+    """折段附加段（懒补同调用内的第二段任务）：满一批的既有行→一条标范围段落行。"""
+    return _DIGEST_FOLD_TMPL.format(a=a, b=b,
+                                    lines="\n".join(f"- {t}" for t in lines))
+
+
+def digest_prompt(turns_block: str, fold_block: str = "") -> str:
+    """滚存摘要 prompt（压手＝正文 LLM 本体、一次调用补多轮；web/sessions 懒补专用）。
+    不进 GSSC 五场景登记：本料天然有界（单次 ≤DIGEST_BATCH 轮＋≤批 行），
+    且不在图内装配路径上——挂接点与预算核算见 web/sessions.catch_up_digest 注记。"""
+    return _DIGEST_TMPL.format(turns=turns_block, fold=fold_block)
+
+
+_DIGEST_TMPL = """你在为一段对话式数据分析会话整理滚存记忆。下面按时间升序给出若干已结束的轮次（问题／SQL／结果），请把每一轮各压成一行中文摘要：只保留对后续提问仍有用的主线——问的是什么、用了什么口径、关键数字，每轮不超过 40 字；行首严格照抄给定的编号前缀「第N轮：」，每轮恰好一行，按给定顺序输出，除此之外不输出任何文字、解释或代码块标记。
+## 待摘要轮次
+{turns}
+{fold}输出："""
+
+_DIGEST_FOLD_TMPL = """
+另外，下列最早的 10 条既有轮次摘要已满一批，请合并折成一条段落纪要：行首严格为「第{a}-{b}轮：」，不超过 80 字，只保留跨轮仍成立的主线与结论、丢弃轮间细节。段落行与新行一并输出（先各新行、最后段落行）。
+## 待折摘要（按序）
+{lines}
+"""
+
+
 def format_session_history(ctx: dict | None) -> str:
-    """L2 情节记忆段（最近 K 轮，web 层已切窗）：问题/SQL/行数/标量头部。"""
+    """L2 情节记忆段：滚存摘要（段落行＋行链，M9 票 05，web 层懒补后随载荷注入）
+    ＋预算窗口原文（问题/SQL/行数/标量头部）。无摘要＝与票 04 现状逐字节一致
+    （姊妹钉）；块序＝段落行→行链→窗口，时间升序（从近往远收集、按远→近呈现）。"""
     if not isinstance(ctx, dict):
         return ""
+    digest = [str(e.get("line") or "") for e in (ctx.get("digest_lines") or [])
+              if isinstance(e, dict) and str(e.get("line") or "").strip()]
+    paras = [t for t in digest if digest_line_is_para(t)]
+    dlines = [t for t in digest if not digest_line_is_para(t)]
+    blocks = []
+    if paras:
+        blocks.append(DIGEST_PARA_HEADER + "\n" + "\n".join(f"- {t}" for t in paras))
+    if dlines:
+        blocks.append(DIGEST_LINE_HEADER + "\n" + "\n".join(f"- {t}" for t in dlines))
     lines: list[str] = []
     for t in ctx.get("turns") or []:
         q = str(t.get("question") or "")
@@ -156,11 +208,11 @@ def format_session_history(ctx: dict | None) -> str:
             head = t.get("head")
             entry.append(f"  结果：{t['row_count']} 行" + (f"；{head}" if head else ""))
         lines.append("\n".join(entry))
-    if not lines:
-        return ""
-    return ("## 会话历史（按时间升序，最后一条是上一轮；用于消解「这些/那些/它」等指代与延续主体，"
-            "不要回答历史里的问题；本轮问题与历史无关时忽略这段历史，独立改写为自包含一句）\n"
-            + "\n".join(lines))
+    if lines:
+        blocks.append("## 会话历史（按时间升序，最后一条是上一轮；用于消解「这些/那些/它」等指代与延续主体，"
+                      "不要回答历史里的问题；本轮问题与历史无关时忽略这段历史，独立改写为自包含一句）\n"
+                      + "\n".join(lines))
+    return "\n\n".join(blocks)
 
 
 def format_session_draft(ctx: dict | None) -> str:

@@ -23,6 +23,8 @@ from qadata.graph.prompts import (
     _PICK_PROMPT,
     _RESPOND_TMPL,
     _UNDERSTAND_TMPL,
+    DIGEST_LINE_HEADER,
+    DIGEST_PARA_HEADER,
     FAILURE_HISTORY_HEADER,
     SUPPLEMENT_MARK,
     SYSTEM_RULES,
@@ -142,7 +144,8 @@ def select(scenario: str, slots: dict[str, str]) -> dict[str, str]:
 # 定阈证据与单位保守性判据落档 .scratch/qadata-m9/ticket04-threshold.md——方向保守：
 # cl100k 对中文计量粒度比订阅端词表更细（同文计数只高不低），真载荷距闸更远。
 # 评测形态永不触发＝行为零变化；触发只可能出现在生产长会话/巨 schema 形态。
-# 淘汰序（资料类只有程序硬砍，spec §五 勿回锅）：先丢最老记忆行、次砍值采样、
+# 淘汰序（资料类只有程序硬砍，spec §五 勿回锅）：先丢最老窗口原文行、次摘要行、
+# 再纪要段（M9 票 05 接线＝先丢行、后丢段——密度越高越守得住），次砍值采样、
 # 再缩失败历史——按 Zone 优先级逐级、确定性、零 LLM；任务与输出分区永不砍，
 # 无料可砍的分区（respond 结果表、explore 表清单等）如实入账不硬砍。
 FUSE_TOKENS: dict[str, int] = {
@@ -206,20 +209,43 @@ def _drop_oldest_entry(text: str, prefix: str) -> str:
 
 
 def _evict_memory(sections: list[Section]) -> str | None:
-    """第一级：丢最老记忆行（"- 问："块＋其缩进的 SQL/结果续行）；无块可删
-    （generate 的 L1 草稿＝单一参考段）＝整段撤下，行全部丢光后节头随之。"""
+    """第一级：丢最老窗口原文行（"- 问："块＋其缩进的 SQL/结果续行）。行链/纪要段
+    各有自己的两级（票 05 接线＝先丢行、后丢段，按节头定位、不碰彼此）；
+    无块可删且无摘要节头（generate 的 L1 草稿＝单一参考段）＝整段撤下，
+    行全部丢光后节头随之。"""
     for i, s in enumerate(sections):
         if s.zone is not Zone.MEMORY or not s.text.strip():
             continue
-        new = _drop_oldest_entry(s.text, "- ")
-        if new == s.text:
-            new = ""
-            action = "整段撤记忆"
-        else:
-            action = "丢最老记忆行"
+        new = _drop_oldest_entry(s.text, "- 问：")
         if new != s.text:
             sections[i] = s._replace(text=new)
-            return action
+            return "丢最老记忆行"
+        if DIGEST_LINE_HEADER in s.text or DIGEST_PARA_HEADER in s.text:
+            continue  # 窗口行已丢光、摘要料还在——交摘要行/纪要段两级按序接手
+        sections[i] = s._replace(text="")
+        return "整段撤记忆"
+    return None
+
+
+def _evict_digest(sections: list[Section], header: str, action: str) -> str | None:
+    """摘要行/纪要段两级（M9 票 05）：按节头定位所属段、段内丢最老一行。
+    条目皆单行（「第N轮：」「第a-b轮：」前缀＝prompts 严格拼装产物、无缩进续行）；
+    段内清空＝节头随之。"""
+    for i, s in enumerate(sections):
+        if s.zone is not Zone.MEMORY or header not in s.text:
+            continue
+        lines = s.text.split("\n")
+        hi = next(j for j, ln in enumerate(lines) if ln.startswith(header))
+        j = hi + 1
+        while j < len(lines) and not lines[j].startswith("## "):
+            j += 1
+        k = next((x for x in range(hi + 1, j) if lines[x].startswith("- ")), None)
+        if k is None:  # 满段无行＝不该发生；节头清走不留空面
+            del lines[hi:j]
+        else:
+            del lines[k]
+        sections[i] = s._replace(text="\n".join(lines))
+        return action
     return None
 
 
@@ -250,7 +276,8 @@ def _shrink_failure_history(sections: list[Section]) -> str | None:
 
 def compress(scenario: str, sections: list[Section], *, on_compress=None) -> str:
     """预算压缩阶段：限内＝恒等拼接（逐字节零变化）；超限＝按 Zone 优先级确定性淘汰
-    （记忆行→值采样→失败历史，任务/输出永不砍），每步一单位直至限内或无料可砍。
+    （窗口原文行→摘要行→纪要段→值采样→失败历史，任务/输出永不砍），每步一单位
+    直至限内或无料可砍。
     on_compress（降级入账回调）仅在真压缩时触发一次——账本＋直播帧流两出口由挂点自持。"""
     budget = FUSE_TOKENS[scenario]
     cur = "".join(s.text for s in sections)
@@ -262,8 +289,10 @@ def compress(scenario: str, sections: list[Section], *, on_compress=None) -> str
     sections = list(sections)  # 淘汰在副本上做，不回馈调用方的原 list
     actions: list[str] = []
     while tokens > budget:
-        action = (_evict_memory(sections) or _cut_value_samples(sections)
-                  or _shrink_failure_history(sections))
+        action = (_evict_memory(sections)
+                  or _evict_digest(sections, DIGEST_LINE_HEADER, "丢最老摘要行")
+                  or _evict_digest(sections, DIGEST_PARA_HEADER, "丢最老纪要段")
+                  or _cut_value_samples(sections) or _shrink_failure_history(sections))
         if action is None:
             break
         actions.append(action)

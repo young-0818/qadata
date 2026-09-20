@@ -20,6 +20,8 @@ session_id（单轮请求维持 agent 级）；历史会话端点供侧栏列表
 问答本体＋M9 票 02 起轮条目可选尾键 trail＝步骤/tool 帧精简留痕、thinking 不入档，
 回放控制台与直播同组件同形状）。口径优先级照旧＝请求显式 > 智能体
 业务知识 > 空（会话级叠加框经 owner 裁 2026-09-15 撤销，票 05 修订见 spec）。
+M9 票 05：记忆格换代——两问数端点锁内同源挂 `_catch_up`（滚存摘要链懒补：滑出
+预算窗口的轮在组装前顺手补齐，无后台任务；无滑出＝零触发零花费，旧档无尾键逐字节现状）。
 """
 import json
 import queue
@@ -57,6 +59,7 @@ from qadata.web.sessions import (
     SessionStoreError,
     append_turn,
     build_session_context,
+    catch_up_digest,
     trail_sink,
     turn_ts,
 )
@@ -385,6 +388,19 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
             raise _bad(e) from None
         return str(path), evidence, meta.name, session
 
+    def _catch_up(req: AskRequest, session: Session | None) -> Session | None:
+        """M9 票 05 懒补挂点（spec §二 Q7）：组装下一问前**同步**补齐滑出轮的摘要欠账
+        ——不开后台任务；两端点同源、锁内执行（与会话档写入同域，无并发第二写者）。
+        失败纪律在 catch_up_digest 内收口（调用挂＝入账、本轮照常作答、下次再补）；
+        补出摘要即落盘（可选尾键，无滑出＝返回原对象、零写零调用）。llm 缺位（契约
+        测试/未配密钥）＝无从压手，原样返回——懒补本性允许欠账顺延。"""
+        if session is None or llm is None:
+            return session
+        out = catch_up_digest(session, llm=llm, tracer=tracer)
+        if out is not session:
+            sessions.save(req.agent_id, out)
+        return out
+
     def _finish_ask(req: AskRequest, session: Session | None, answer: Answer,
                     question: str | None = None,
                     trail: list[dict] | None = None) -> dict[str, Any]:
@@ -455,6 +471,7 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
         key = _acquire_ask_lock(req, agent_name)
         trail: list[dict] | None = [] if session is not None else None
         try:
+            session = _catch_up(req, session)  # 票 05：组装前补齐摘要欠账（锁内、无后台任务）
             answer, turn_q = _route_clarification(
                 req, path, evidence, build_session_context(session) if session else None,
                 trail=trail)
@@ -482,6 +499,7 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
         events: queue.Queue = queue.Queue()
         box: dict[str, Any] = {}
         sentinel = object()
+        session = _catch_up(req, session)  # 票 05：与阻塞端点同源挂点（组装前同步补齐、锁内）
         ctx = build_session_context(session) if session else None
         trail: list[dict] | None = [] if session is not None else None
 

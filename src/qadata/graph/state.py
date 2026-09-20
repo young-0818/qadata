@@ -26,9 +26,13 @@ class AgentState(TypedDict, total=False):
     metric_note: str | None  # M5 票 05：指标模板降级原因（执行失败/校验可疑）；None=未发生降级。
     # 进失败历史（generate 可见）与 respond 标注
     session_context: dict | None  # M7 票 05 唯一新状态键（precise_candidates 同款载荷纪律：显式键、
-    # 整值覆盖）：{"turns": [L2 行 {question/sql/row_count/head/failed，≤K=5 条·时间升序}]，
-    # "draft": L1 {sql/head} 或 None}。仅 understand/generate 消费（姊妹钉测＝
-    # test_generate_never_reads_intent 同款条款，tests/test_session_context.py AST 源扫描
-    # 钉死其他节点不得读取）；None/缺键＝无会话关态，understand/generate prompt 与现状逐字节一致。
-    # L3 全史归档永不进 prompt（K=5 窗口与草稿资格在 web 层 build_session_context 切好再装填）。
+    # 整值覆盖）：{"turns": [L2 窗口原文行 {question/sql/row_count/head/failed，时间升序·条数由
+    # 票 05 预算窗口决定，K=5 降为默认换算结果]，"draft": L1 {sql/head} 或 None，
+    # 摘要在场时加 "digest_lines": [{turn, ts, line}…（行链＋段落行，M9 票 05 滚存摘要链，
+    # web 层懒补后装填——渲染归 prompts.format_session_history、淘汰归 gssc 保险丝）]}。
+    # 仅 understand/generate 消费（姊妹钉测＝test_generate_never_reads_intent 同款条款，
+    # tests/test_session_context.py AST 源扫描钉死其他节点不得读取）；None/缺键＝无会话关态，
+    # understand/generate prompt 与现状逐字节一致；无 digest_lines 键＝票 04 现状逐字节一致。
+    # L3 全史归档永不进 prompt（预算窗口、摘要欠账与草稿资格在 web 层 build_session_context/
+    # catch_up_digest 切好再装填）。
     answer: Answer | None

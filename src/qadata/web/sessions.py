@@ -6,12 +6,16 @@ owner 裁决（2026-09-14）：落盘替代 spec 原「内存 dict/重启丢历�
 坏文件如实报错不静默吞（`all()` 整列报错＝AgentStore 同款纪律）；懒建档：
 未知合法 sid＝空会话（"＋ 新建会话"＝换 id、下一问开新档），首问落盘才建文件。
 
-三层记忆（图侧载荷契约见 graph/state.py，本模块是唯一组装者，零 LLM 判定）：
+三层记忆（图侧载荷契约见 graph/state.py，本模块是唯一组装者）：
 - L1 工作记忆＝最近一轮**成功**的完整 SQL＋结果头部摘要 → draft；failed 轮不给草稿
   （"错误草稿不传染"最保守读法）。话题连续性由模型隐式判（owner 裁 2026-09-15
   票 09：fresh_topic 人肉闸撤销——用户永远直接打字换题、业界无此闸先例；
   "无关则忽略"授权进 prompt 措辞，见 graph/prompts.py）。
-- L2 情节记忆＝最近 K=5 轮滑窗 → turns（failed 行只留问题、如实标失败）。
+- L2 情节记忆＝**预算驱动窗口**（M9 票 05，spec §二 Q3：K=5 废除为规则、降为默认
+  换算结果）→ turns（failed 行只留问题、如实标失败）＋**滚存摘要链**（spec §二 Q7：
+  滑出窗口的轮不消失——懒补 catch_up_digest 在下一问组装前顺手补齐：每滑出轮一行
+  冻存摘要、每满一批折一条标轮次范围的段落行、段落行再溢出丢最老；落盘＝会话档
+  可选尾键 digest_lines＋digest_upto 游标，无尾键旧档逐字节现状）。
 - L3 归档＝turns 全史，**永不进 prompt**——切窗只发生在 build_session_context。
 结果集只注摘要（result_head：标量→值；否则头部行）——全量展示行只活在轮次
 answer 载荷里供回放，不进任何上下文。口径注入照旧走请求显式 evidence > 智能体
@@ -25,13 +29,22 @@ from typing import Any
 
 import yaml
 
-from qadata.llm.tracing import BEIJING
+from qadata.graph.gssc import count_tokens
+from qadata.graph.prompts import digest_fold, digest_line_is_para, digest_prompt
+from qadata.llm.tracing import BEIJING, timed_invoke
 from qadata.types import QueryResult
 from qadata.web._fs import atomic_write
 from qadata.web.agents import AgentNotFound, AgentStore, is_hex12
 
-# L2 情节记忆窗口：最近 K 轮进 understand（spec 票 05；换窗＝记忆升级阶梯的触发器，勿随手调）
-SESSION_MEMORY_K = 5
+# L2 预算驱动窗口（M9 票 05／spec §二 Q3）：从最近往回收原文轮直至 token 预算
+# （tiktoken cl100k 计量，词表同票 04 硬资产）。560＝票 04 现实最坏记忆行实测
+# 104 tok×5＝520 容得下、×6 出——**K=5 是默认换算结果而非规则**（BIRD 评测形态
+# 逐题单轮、短会话全收，两态均零触发；定阈判据落档 .scratch/qadata-m9/）。
+MEMORY_TOKEN_BUDGET = 560
+# 滚存摘要链批参（spec §二 Q7 单层归并）：满一批＝折一条段落行，同时是单次懒补
+# 的轮数上限（欠账无界防护——多次连问逐批推进）；段落行存量上限＝溢出丢最老
+DIGEST_BATCH = 10
+DIGEST_PARA_CAP = 10
 # 结果头部摘要的行数上限（喂 L1/L2 的记忆行，远小于显示行数——全量行不进上下文）
 HEAD_ROWS = 3
 
@@ -51,6 +64,10 @@ class Session:
     id: str
     turns: tuple[dict[str, Any], ...] = ()  # L3 全史；轮形见 _validated_turn
     # fresh_topic 闸已撤（owner 裁 2026-09-15 票 09）——旧档案残留键读取忽略（_read）
+    # M9 票 05 滚存摘要链（spec §二 Q7）：entries 时间升序、统一形 {turn, ts, line}
+    # （line＝系统严格拼装前缀「第N轮：」行链 或「第a-b轮：」段落行，判别 digest_line_is_para）
+    digest_lines: tuple[dict[str, Any], ...] = ()
+    digest_upto: int = 0  # 游标＝已冻存摘要覆盖 turns[:upto]（懒补只从此往后收欠账）
 
 
 def new_session_id() -> str:
@@ -72,17 +89,44 @@ def result_head(res: QueryResult | None, *, limit: int = HEAD_ROWS) -> str:
     return f"头部 {len(shown)} 行：{body}{more}"
 
 
+def _turn_cost(t: dict[str, Any]) -> int:
+    """一条记忆行的近似 token 料（按渲染同形料计量：成功行＝问＋SQL＋结果三段，
+    失败行＝单行）——近似只在保守方向（格式化差异 ≪ 预算余量），精确闸是票 04 保险丝。"""
+    q = str(t["question"])
+    if t["failed"]:
+        return count_tokens(f"- 问：{q}（该轮查询失败，无可靠结果与 SQL 可参考）")
+    return count_tokens(f"- 问：{q}\n  SQL：{(t.get('answer') or {}).get('sql') or ''}"
+                        f"\n  结果：{t.get('row_count')} 行；{t.get('head') or ''}")
+
+
+def _window_count(turns: tuple[dict[str, Any], ...]) -> int:
+    """预算驱动窗口（M9 票 05）：从最近往回收原文轮，token 预算内全收、越界即止。
+    懒补的欠账边界与此同源（滑出窗口＝待摘要），两处绝不允许各切一刀。"""
+    spent, n = 0, 0
+    for t in reversed(turns):
+        cost = _turn_cost(t)
+        if spent + cost > MEMORY_TOKEN_BUDGET:
+            break
+        spent += cost
+        n += 1
+    return n
+
+
 def build_session_context(session: Session) -> dict | None:
-    """会话 → `session_context` 图侧载荷（{"turns": L2 切片, "draft": L1|None}）。
+    """会话 → `session_context` 图侧载荷（{"turns": 窗口原文切片, "draft": L1|None,
+    摘要在场时加 "digest_lines"}）。
 
     None＝无史可注（新会话/清场后首问），等价关态、prompt 逐字节一致。
-    L2 行取自最近 K 轮：failed 轮剥净 SQL 与结果（只留问题供消解，如实标失败）；
+    L2 窗口＝预算驱动（_window_count，K=5 是其默认换算结果）：failed 轮剥净 SQL 与
+    结果（只留问题供消解，如实标失败）；滚存摘要（行链＋段落行）只随存档携带，
+    渲染归 prompts.format_session_history（无摘要＝逐字节现状，姊妹钉）。
     L1 草稿只认最近一轮成功（票 09 撤人肉闸后，"用不用"交 generate prompt 的
     显式授权措辞＋沙箱/verify 兜底——连续性模型隐式判，零新增调用）。"""
     if not session.turns:
         return None
+    n = _window_count(session.turns)
     window = []
-    for t in session.turns[-SESSION_MEMORY_K:]:
+    for t in session.turns[len(session.turns) - n:] if n else ():
         if t["failed"]:
             window.append({"question": t["question"], "sql": None, "row_count": None,
                            "head": None, "failed": True})
@@ -96,7 +140,96 @@ def build_session_context(session: Session) -> dict | None:
         sql = last["answer"].get("sql")
         if sql:
             draft = {"sql": sql, "head": last["head"] or ""}
-    return {"turns": window, "draft": draft}
+    ctx: dict[str, Any] = {"turns": window, "draft": draft}
+    if session.digest_lines:
+        ctx["digest_lines"] = [dict(e) for e in session.digest_lines]
+    return ctx
+
+
+def _digest_batch_src(turns: tuple[dict[str, Any], ...], start: int, stop: int) -> str:
+    """懒补 prompt 的轮次素材块（turn 编号 1-based，与会话档下标一致可回查）。"""
+    parts = []
+    for i in range(start, stop):
+        t = turns[i]
+        if t["failed"]:
+            parts.append(f"第{i + 1}轮：问题「{t['question']}」（该轮查询失败，无可靠结果）")
+        else:
+            parts.append(f"第{i + 1}轮：问题「{t['question']}」"
+                         f"SQL「{(t.get('answer') or {}).get('sql') or '（未提取到合法 SQL）'}」"
+                         f"结果「{t.get('row_count')} 行；{t.get('head') or '（无摘要）'}」")
+    return "\n".join(parts)
+
+
+def _parse_digest(text: str, batch: list[int], fold_pool: list[dict[str, Any]]):
+    """严格回读：要求的每个前缀恰好命中一次、正文非空、无多余行——不合即 None
+    （宁可不补不可补错；失败游标不动，下次再补）。前缀＝系统拼装的单轮/范围编号，
+    模型只填「轮：」之后的正文。"""
+    expected: dict[str, str | None] = {f"第{t + 1}轮：": None for t in batch}
+    para_prefix = (f"第{fold_pool[0]['turn']}-{fold_pool[-1]['turn']}轮："
+                   if fold_pool else None)
+    if para_prefix:
+        expected[para_prefix] = None
+    for raw in text.splitlines():
+        ln = raw.strip()
+        if not ln:
+            continue
+        key = next((p for p, v in expected.items() if v is None and ln.startswith(p)), None)
+        if key is None or not ln[len(key):].strip():  # 多余行/未命中前缀/空正文＝整次不收
+            return None
+        expected[key] = ln  # 存全行（系统前缀原样保留——渲染/折段/淘汰都直读此串）
+    if any(v is None for v in expected.values()):
+        return None
+    lines = {t: str(expected[f"第{t + 1}轮："]) for t in batch}
+    return {"lines": lines, "para": expected[para_prefix] if para_prefix else None}
+
+
+def catch_up_digest(session: Session, *, llm, tracer=None) -> Session:
+    """滚存摘要链懒补（M9 票 05，spec §二 Q7）：组装下一问前**同步**把欠账补齐——
+    不开后台任务、不逐轮咀嚼。每滑出轮一行冻存摘要（压手＝正文 LLM 本体、一次调用
+    补多轮 ≤DIGEST_BATCH 轮）；既有行链满一批（≥DIGEST_BATCH 行）在同一调用里折
+    一条标轮次范围的段落行（冻存、永不复压——被否的滚动重压就此止步）；段落行再
+    溢出＝丢最老（有界形态，注入侧最坏 ≈10 段＋<10 行）。游标 digest_upto 随补齐
+    推进；滑出≠丢失（L3 全史在档）。
+
+    失败纪律：调用挂/回读不合＝入账（digest outcome 行）不拦本轮答题（老链＋窗口＋
+    票 04 硬砍保险丝兜底），游标不动、下次再补。调用本体经 timed_invoke 真名入账
+    （有 token 标记＝如实计一次 LLM 调用；outcome 行无 token 标记＝不烧调用数，
+    budget_fuse 先例）。短会话无滑出＝原对象返回、零调用零花费（默认形态零触发）。
+
+    ponytail: 第二层归并不做（spec §五 被否在案）——触发判据＝会话奔 500 轮量级
+    （段落行数持续逼近 DIGEST_PARA_CAP、"丢最老段"开始伤答案质量的可查证据出现时），
+    做法＝段落行再折超段（冻存纪律同延、永不再压已冻段）。"""
+    end = len(session.turns) - _window_count(session.turns)
+    if end <= session.digest_upto:
+        return session
+    batch = list(range(session.digest_upto, min(end, session.digest_upto + DIGEST_BATCH)))
+    paras = [e for e in session.digest_lines if digest_line_is_para(str(e.get("line") or ""))]
+    plain = [e for e in session.digest_lines if not digest_line_is_para(str(e.get("line") or ""))]
+    fold_pool = plain[:DIGEST_BATCH] if len(plain) >= DIGEST_BATCH else []
+    prompt = digest_prompt(
+        _digest_batch_src(session.turns, batch[0], batch[-1] + 1),
+        digest_fold(fold_pool[0]["turn"], fold_pool[-1]["turn"],
+                    [str(e["line"]) for e in fold_pool]) if fold_pool else "")
+    reason = ""
+    try:
+        text: str | None = str(timed_invoke(llm, prompt, "digest", tracer))
+    except Exception as e:  # noqa: BLE001 摘要挂＝不拦答题（票 05 失败纪律）：入账、照常、下次再补
+        text, reason = None, f"digest 调用失败：{str(e)[:160]}"
+    parsed = _parse_digest(text, batch, fold_pool) if text is not None else None
+    if parsed is None:
+        if tracer is not None:
+            tracer.log("digest", outcome="failed", pending=end - session.digest_upto,
+                       reason=reason or "digest 输出不合模板")
+        return session
+    if fold_pool:
+        paras = (paras + [{"turn": fold_pool[0]["turn"], "ts": turn_ts(),
+                           "line": parsed["para"]}])[-DIGEST_PARA_CAP:]
+        plain = plain[DIGEST_BATCH:]
+    lines = plain + [{"turn": t + 1, "ts": turn_ts(), "line": parsed["lines"][t]}
+                     for t in batch]
+    if tracer is not None:
+        tracer.log("digest", outcome="ok", digested=len(batch), folded=1 if fold_pool else 0)
+    return replace(session, digest_lines=tuple(paras + lines), digest_upto=batch[-1] + 1)
 
 
 class SessionStore:
@@ -180,7 +313,24 @@ class SessionStore:
         return Session(
             id=f.stem,
             turns=tuple(self._validated_turn(t, f) for t in turns),
+            **self._validated_digest(data, f, len(turns)),
         )
+
+    @staticmethod
+    def _validated_digest(data: dict, f: Path, n_turns: int) -> dict[str, Any]:
+        """M9 票 05 尾键（chart/feedback 缺省先例）：旧档无键＝() /0，装载形状与入档前
+        逐字节一致；有键则形状如实校验（坏摘要链不装没看见，同坏轮纪律）。"""
+        raw = data.get("digest_lines")
+        if raw is None:
+            return {}
+        if not isinstance(raw, list) or any(
+                not isinstance(e, dict) or not isinstance(e.get("turn"), int)
+                or not isinstance(e.get("line"), str) or not e["line"].strip() for e in raw):
+            raise SessionStoreError(f"摘要链形状不正：{f.name}")
+        upto = data.get("digest_upto")
+        if not isinstance(upto, int) or isinstance(upto, bool) or not 0 <= upto <= n_turns:
+            raise SessionStoreError(f"摘要链游标不正：{f.name}")
+        return {"digest_lines": tuple(raw), "digest_upto": upto}
 
     @staticmethod
     def _validated_turn(t: Any, f: Path) -> dict[str, Any]:
@@ -193,6 +343,9 @@ class SessionStore:
 
     def _dump(self, f: Path, session: Session) -> None:
         body = {"id": session.id, "turns": [dict(t) for t in session.turns]}
+        if session.digest_lines:  # 票 05 可选尾键（与游标同进同出）：无摘要＝文件形状与入档前逐字节一致
+            body["digest_lines"] = [dict(e) for e in session.digest_lines]
+            body["digest_upto"] = session.digest_upto
         # 票 01：写经唯一入口收口（tmp+fsync+os.replace），crash 不出半档
         atomic_write(f, yaml.safe_dump(body, allow_unicode=True, sort_keys=False))
 
@@ -243,7 +396,8 @@ def append_turn(session: Session, question: str, *, res: QueryResult | None,
 
     trail（M9 票 02 可选尾键，chart/feedback 先例）＝该轮步骤帧＋tool 帧精简留痕
     （会话档管「用户当时看见什么」，trace 管「机器内部怎么跑」——分工入册）；
-    缺省/空＝不写键，轮条目与入档前逐字节一致（eval/CLI 与无会话通道零染指）。"""
+    缺省/空＝不写键，轮条目与入档前逐字节一致（eval/CLI 与无会话通道零染指）。
+    票 05 摘要链字段随 replace 原样携带（L3 永不截尾＝游标对 turns 下标恒有效）。"""
     turn = {"question": question,
             "ts": turn_ts(),
             "failed": failed,
