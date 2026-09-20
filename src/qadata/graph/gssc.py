@@ -4,9 +4,7 @@ Gather 收齐候选（gather_*＝读状态、格式化素材，节点侧不再�
 → Select 挑选（本票恒等通过；票 06 embedding top-K＋关键词保底在此入住）
 → Structure 分区落位（六分区＝装配器内部分类法、非统一字节顺序——各场景按现状
   字节序落位，ADR-0002 在案；分区骨架重排已被否，勿回锅）
-→ Compress 预算压缩（本票恒等通过；票 04 tiktoken 保险丝在此入住——届时的淘汰序
-  按 Section.zone 走：先丢最老记忆行、再缩证据值采样、再缩状态失败历史，
-  任务与输出分区永不砍）。
+→ Compress 预算压缩（M9 票 04 tiktoken 保险丝在此入住，见下方 FUSE 段）。
 
 本票＝纯结构收编：模板措辞零改动、路由/调用数/账本/prompt 文本逐字节原样。
 字节等价验收＝tests/test_gssc.py 五场景「装配器出口 vs 旧路」双跑 diff 零差异；
@@ -16,6 +14,7 @@ prompts.py 的旧装配函数（understand_prompt 等）原样保留充当参照
 双跑金标准测兜红。
 """
 from enum import Enum
+from pathlib import Path
 from typing import NamedTuple
 
 from qadata.graph.prompts import (
@@ -24,6 +23,7 @@ from qadata.graph.prompts import (
     _PICK_PROMPT,
     _RESPOND_TMPL,
     _UNDERSTAND_TMPL,
+    FAILURE_HISTORY_HEADER,
     SUPPLEMENT_MARK,
     SYSTEM_RULES,
     TRUNCATION_HINT,
@@ -134,10 +134,144 @@ def select(scenario: str, slots: dict[str, str]) -> dict[str, str]:
     return slots
 
 
-def compress(scenario: str, sections: list[Section]) -> str:
-    """预算压缩阶段：拼接即成品（恒等）。票 04（tiktoken 保险丝）在此入住——
-    触发时按分区淘汰序删减 sections（永不砍任务与输出分区），缺词表如实炸。"""
-    return "".join(s.text for s in sections)
+# ── Compress 总闸：tiktoken 预算保险丝（M9 票 04，spec §二 Q3／ADR-0002）──────
+# 计量＝tiktoken cl100k_base（词表文件＝仓库硬资产 src/qadata/assets/，无网络兜底、
+# 缺失如实炸，config.load_settings 启动即查）；事后真值审计照旧走 API usage 账本
+# （traces.jsonl，与本闸无关——此闸纯前置计量）。
+# 阈值＝账本（runs/traces.jsonl 全量历史）各场景实测最大 input_tokens × 安全系数 3，
+# 定阈证据与单位保守性判据落档 .scratch/qadata-m9/ticket04-threshold.md——方向保守：
+# cl100k 对中文计量粒度比订阅端词表更细（同文计数只高不低），真载荷距闸更远。
+# 评测形态永不触发＝行为零变化；触发只可能出现在生产长会话/巨 schema 形态。
+# 淘汰序（资料类只有程序硬砍，spec §五 勿回锅）：先丢最老记忆行、次砍值采样、
+# 再缩失败历史——按 Zone 优先级逐级、确定性、零 LLM；任务与输出分区永不砍，
+# 无料可砍的分区（respond 结果表、explore 表清单等）如实入账不硬砍。
+FUSE_TOKENS: dict[str, int] = {
+    "understand": 4293,    # 账本最大 1431 × 3
+    "generate": 15645,     # 5215 × 3
+    "metric_match": 3954,  # 1318 × 3
+    "respond": 17628,      # 5876 × 3
+    "explore": 522,        # 174 × 3
+}
+
+VOCAB_PATH = Path(__file__).resolve().parent.parent / "assets" / "cl100k_base.tiktoken"
+# 抄自 tiktoken tiktoken_ext/openai_public.py 的 cl100k_base 定义（历史编码、冻结不改）；
+# special_tokens 不装载——prompt 是纯文本，`<|...|>` 样字样按普通字节计量。
+_CL100K_PAT_STR = (r"(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}++|\p{N}{1,3}+"
+                   r"| ?[^\s\p{L}\p{N}]++[\r\n]*+|\s++$|\s*[\r\n]|\s+(?!\S)|\s")
+
+_ENCODING = None
+
+
+def check_vocab() -> None:
+    """词表硬资产在位闸（load_settings 启动时调用）：缺了如实炸，无 len 兜底。"""
+    if not VOCAB_PATH.is_file():
+        raise RuntimeError(
+            f"tiktoken 词表文件缺失（仓库硬资产、无网络兜底）：{VOCAB_PATH}")
+
+
+def _encoding():
+    global _ENCODING
+    if _ENCODING is None:
+        check_vocab()
+        import tiktoken
+        from tiktoken.load import load_tiktoken_bpe
+        _ENCODING = tiktoken.Encoding(
+            name="cl100k_base", pat_str=_CL100K_PAT_STR,
+            mergeable_ranks=load_tiktoken_bpe(str(VOCAB_PATH)), special_tokens={})
+    return _ENCODING
+
+
+def count_tokens(text: str) -> int:
+    """前置计量（纯函数）：disallowed_special=() ＝特殊记号样字样不拒炸、按普通文本。"""
+    return len(_encoding().encode(text, disallowed_special=()))
+
+
+def fuse_ledger_fields(info: dict) -> dict:
+    """保险丝事件 → 审计账本载荷（键名单源：graph 节点与 explore 两个挂点共用）。"""
+    return {"actions": "、".join(info["actions"]),
+            "tokens_before": info["before"], "tokens_after": info["after"]}
+
+
+def _drop_oldest_entry(text: str, prefix: str) -> str:
+    """删最老一个正文块（prefix 起手的行＋其两空格缩进续行），节头原位保留。
+    无可删＝原样返回（调用方以文本不变判断淘汰到头）。"""
+    lines = text.split("\n")
+    start = next((i for i, ln in enumerate(lines) if ln.startswith(prefix)), None)
+    if start is None:
+        return text
+    end = start + 1
+    while end < len(lines) and lines[end].startswith("  "):
+        end += 1
+    return "\n".join(lines[:start] + lines[end:])
+
+
+def _evict_memory(sections: list[Section]) -> str | None:
+    """第一级：丢最老记忆行（"- 问："块＋其缩进的 SQL/结果续行）；无块可删
+    （generate 的 L1 草稿＝单一参考段）＝整段撤下，行全部丢光后节头随之。"""
+    for i, s in enumerate(sections):
+        if s.zone is not Zone.MEMORY or not s.text.strip():
+            continue
+        new = _drop_oldest_entry(s.text, "- ")
+        if new == s.text:
+            new = ""
+            action = "整段撤记忆"
+        else:
+            action = "丢最老记忆行"
+        if new != s.text:
+            sections[i] = s._replace(text=new)
+            return action
+    return None
+
+
+def _cut_value_samples(sections: list[Section]) -> str | None:
+    """第二级：砍值采样＝整块切除（确定性一刀；标记头＝schema.py 单源字面，
+    惰性 import 防环，同 timed_invoke 姿势）。"""
+    from qadata.tools.schema import VALUE_SAMPLE_HEADER
+    for i, s in enumerate(sections):
+        if s.zone is Zone.EVIDENCE and VALUE_SAMPLE_HEADER in s.text:
+            sections[i] = s._replace(text=s.text.split(VALUE_SAMPLE_HEADER, 1)[0])
+            return "砍值采样"
+    return None
+
+
+def _shrink_failure_history(sections: list[Section]) -> str | None:
+    """第三级：缩失败历史＝删最老"尝试 "块。**结构闸**：只进含 FAILURE_HISTORY_HEADER
+    的 STATE 段——respond 的「所用 SQL」同住 STATE 分区但无此后缀料，"SQL 永不砍"
+    不靠行首样式运气（双轴评审追补）。"""
+    for i, s in enumerate(sections):
+        if s.zone is not Zone.STATE or FAILURE_HISTORY_HEADER not in s.text:
+            continue
+        new = _drop_oldest_entry(s.text, "尝试 ")
+        if new != s.text:
+            sections[i] = s._replace(text=new)
+            return "缩失败历史"
+    return None
+
+
+def compress(scenario: str, sections: list[Section], *, on_compress=None) -> str:
+    """预算压缩阶段：限内＝恒等拼接（逐字节零变化）；超限＝按 Zone 优先级确定性淘汰
+    （记忆行→值采样→失败历史，任务/输出永不砍），每步一单位直至限内或无料可砍。
+    on_compress（降级入账回调）仅在真压缩时触发一次——账本＋直播帧流两出口由挂点自持。"""
+    budget = FUSE_TOKENS[scenario]
+    cur = "".join(s.text for s in sections)
+    before = tokens = count_tokens(cur)
+    if tokens <= budget:
+        return cur
+    # ponytail: 每步全量重计＝O(步数×全文)——淘汰步数个位数、编码亚毫秒级，
+    # 升级判据＝压缩路径耗时在 trace 上可见再改增量计量
+    sections = list(sections)  # 淘汰在副本上做，不回馈调用方的原 list
+    actions: list[str] = []
+    while tokens > budget:
+        action = (_evict_memory(sections) or _cut_value_samples(sections)
+                  or _shrink_failure_history(sections))
+        if action is None:
+            break
+        actions.append(action)
+        cur = "".join(s.text for s in sections)
+        tokens = count_tokens(cur)
+    if on_compress is not None:
+        on_compress({"before": before, "after": tokens, "actions": actions})
+    return cur
 
 
 # ── Structure：分区落位（各场景按现状字节序，模板措辞零改动）───────────
@@ -218,6 +352,8 @@ def structure(scenario: str, slots: dict[str, str]) -> list[Section]:
 # ── 唯一出口 ──────────────────────────────────────────────────────────
 
 
-def assemble(scenario: str, slots: dict[str, str]) -> str:
-    """跑完 Select→Structure→Compress，产出进模型的最终 prompt。"""
-    return compress(scenario, structure(scenario, select(scenario, slots)))
+def assemble(scenario: str, slots: dict[str, str], *, on_compress=None) -> str:
+    """跑完 Select→Structure→Compress，产出进模型的最终 prompt。
+    on_compress（票 04）＝保险丝降级入账回调（仅在真压缩时触发），缺省 None＝只压缩不入账。"""
+    return compress(scenario, structure(scenario, select(scenario, slots)),
+                    on_compress=on_compress)

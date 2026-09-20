@@ -28,6 +28,7 @@ export const TOOL_LABELS: Record<string, string> = {
   value_samples: "值采样",
   execute_sql: "执行查询",
   execute_sql_batch: "票决批量",
+  budget_fuse: "预算保险丝",
 };
 
 interface ToolChip {

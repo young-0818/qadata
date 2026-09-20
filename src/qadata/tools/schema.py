@@ -18,6 +18,8 @@ _VALUE_SCAN_WINDOW = 2000      # DISTINCT 前有界子查询（实施工艺改�
                                # **确定**——同库双跑同文评测可复现，截断点不由 wall-clock 决定。
                                # 窗口外罕见枚举值可能漏，但采样目的＝形态与非全量清单，如实漏。
 _VALUE_QUERY_TIMEOUT_S = 2.0   # 单查询兜底超时（视图背后巨型 join 时仍拦得住；中断＝静默跳列）
+# 样本块节头（M9 票 04：保险丝砍值采样按此定位整块边界——单源字面，gssc 惰性 import 共读）
+VALUE_SAMPLE_HEADER = "列取值样本（库实际存储形态，WHERE 字面量以此为准）："
 # 采样候选声明类型（sqlite 亲和性粗筛；BLOB/数值列枚举值对 WHERE 字面量病灶无益）
 _SAMPLE_TYPE_KEYS = ("CHAR", "CLOB", "TEXT", "DATE", "TIME")
 
@@ -213,11 +215,21 @@ def _pick_tables_with_llm(llm, tables: list[str], question: str, tracer=None,
     # 走 timed_invoke：选表调用也进 tracing（M1 观测盲区修复）
     # M9 票 03：选表 prompt 经 GSSC 唯一出口装配（explore 场景收编，逐字节同旧路；
     # gssc→prompts→precise→executor→本模块成环，惰性 import 同 timed_invoke 先例）
-    from qadata.graph.gssc import assemble, gather_schema_pick
+    from qadata.graph.gssc import assemble, fuse_ledger_fields, gather_schema_pick
     from qadata.llm.tracing import timed_invoke
+
+    def _on_compress(info: dict) -> None:
+        # 票 04 保险丝入账（explore 无料可砍＝如实入账不硬砍）：账本一行＋直播胶囊
+        if tracer is not None:
+            tracer.log("budget_fuse", scenario="explore", **fuse_ledger_fields(info))
+        if on_tool is not None:
+            on_tool("budget_fuse", time.perf_counter())
+
     t0 = time.perf_counter()
-    content = timed_invoke(llm, assemble("explore", gather_schema_pick(tables, question)),
-                           "explore", tracer, limiter, sink=sink)
+    content = timed_invoke(
+        llm, assemble("explore", gather_schema_pick(tables, question),
+                      on_compress=_on_compress),
+        "explore", tracer, limiter, sink=sink)
     names = [w.strip() for w in str(content).split(",")]
     valid = [n for n in names if n in tables]
     picked = valid if valid else None

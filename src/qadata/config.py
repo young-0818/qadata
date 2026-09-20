@@ -63,6 +63,10 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 def load_settings() -> Settings:
+    # M9 票 04：tiktoken 词表＝仓库硬资产——启动即查、缺失如实炸（无网络兜底；
+    # 惰性 import 防 config→gssc→prompts→precise→executor→config 顶层成环）
+    from qadata.graph.gssc import check_vocab
+    check_vocab()
     load_dotenv()
     api_key = os.getenv("DEEPSEEK_API_KEY")
     if not api_key:

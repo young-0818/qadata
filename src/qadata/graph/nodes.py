@@ -13,6 +13,7 @@ from qadata.config import FALLBACK_SETTINGS, Settings
 from qadata.graph.error_hints import error_hint
 from qadata.graph.gssc import (
     assemble,
+    fuse_ledger_fields,
     gather_generate,
     gather_metric_review,
     gather_respond,
@@ -152,6 +153,17 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
                       "duration_ms": _ms(_step_box["t0"]),
                       "tokens_in": _step_box["tin"], "tokens_out": _step_box["tout"]})
 
+    def _fuse(node: str):
+        """保险丝降级入账回调（M9 票 04）：账本一行（budget_fuse，无 token 标记＝
+        不计为 LLM 调用，metric_match outcome 行先例）＋直播 tool 胶囊（控制台/回放/
+        trace 三出口同帧形，票 01 镜像零改动承接）。仅在真压缩时被装配器调用。"""
+        def cb(info: dict) -> None:
+            if tracer is not None:
+                tracer.log("budget_fuse", scenario=node, **fuse_ledger_fields(info))
+            if on_event is not None:
+                on_event(tool_frame(node, "budget_fuse", time.perf_counter()))
+        return cb
+
     def _tool(node: str, name: str, t0: float, ok: bool = True) -> None:
         """tool 子事件帧（票 06）：图不是 tool loop（架构不动裁决），但 tools 层的
         真实子步骤值得有自己的胶囊——绿点成功/红点失败，duration 各自计时。
@@ -192,7 +204,8 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         # 票 03（M8，默认关）：同一改写调用兼产澄清问（三元组，宁空勿造）——保险丝出口，
         # 关态与今日逐字节一致（prompt 不追加指令段、本节点不写 answer、路由 map 不含 END）。
         text = _llm(assemble("understand",
-                             gather_understand(state, clarify=s.clarification)),
+                             gather_understand(state, clarify=s.clarification),
+                             on_compress=_fuse("understand")),
                     "understand")
         question, intent, clarification = parse_understand_response(text)
         attempt = len(state.get("attempts", []))
@@ -252,7 +265,8 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         if m is None:  # 第一级确定性未中 → 第二级 LLM 复核整表（禁写 SQL，只判身份）
             level = "L2"
             text = timed_invoke(llm, assemble("metric_match",
-                                              gather_metric_review(state, metrics)),
+                                              gather_metric_review(state, metrics),
+                                              on_compress=_fuse("metric_match")),
                                 "metric_match", tracer, limiter, sink=sink)
             m = parse_metric_review(text, metrics)
         if m is None:
@@ -289,7 +303,7 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         # 票 05：L1 上轮 SQL 草稿进尾部（增量改写参考）——仅素材不进路由，
         # 沙箱/校验/账本三层零改动，草稿写法照走完整 execute＋verify
         # M9 票 03：失败历史（状态）＋草稿（记忆）等素材收编进 GSSC 出口，逐字节同旧路
-        prompt = assemble("generate", gather_generate(state))
+        prompt = assemble("generate", gather_generate(state), on_compress=_fuse("generate"))
         if s.precise_candidates > 1:
             # 精准模式：同一 prompt 连打 K 发（temperature 由 build_llm 按候选数切换，
             # 多样性已探针验证）；提取失败的候选丢弃，全灭走提取失败入账路径
@@ -471,7 +485,7 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
                 assemble("respond", gather_respond(
                     state, result=res, sql=sql,
                     rows_table=_format_preview(res.columns, preview),
-                    n=len(preview))),
+                    n=len(preview)), on_compress=_fuse("respond")),
                 "respond",
                 tracer,
                 limiter,

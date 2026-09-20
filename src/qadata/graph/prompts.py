@@ -196,6 +196,11 @@ def sql_prompt(schema: str, evidence: str, question: str, history: str = "",
     return _SQL_TMPL.format(schema=schema, evidence=evidence or "（无）", question=question, history=h)
 
 
+# 失败历史节头（M9 票 04：保险丝第三级按此定位可缩段——respond 的「所用 SQL」同住
+# STATE 分区但无此后缀料，单源闸让"SQL 永不砍"成为结构保证而非行首样式运气）
+FAILURE_HISTORY_HEADER = "## 之前的失败尝试"
+
+
 def format_failure_history(attempts: list, verify_note: str | None,
                            metric_note: str | None = None) -> str:
     """失败历史摘要（自纠错上下文工程核心素材）：SQL＋错误首行；空列表返回空串。
@@ -204,7 +209,7 @@ def format_failure_history(attempts: list, verify_note: str | None,
     且已失败」，避免重蹈同一口径写法（降级后仍进本环，走的是常规 SQL 生成）。"""
     if not attempts:
         return ""
-    lines = ["## 之前的失败尝试"]
+    lines = [FAILURE_HISTORY_HEADER]
     if metric_note:
         lines.insert(0, f"## 指标模板降级\n{metric_note}")
     last = len(attempts) - 1
