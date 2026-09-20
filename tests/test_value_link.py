@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 from qadata.config import Settings
-from qadata.graph.build import build_graph, resume_question, run_question
+from qadata.graph.build import run_question
 from qadata.graph.state import AgentState
 from qadata.llm.tracing import TraceLogger
 from qadata.retrieval.store import VALUE_FILENAME, index_dir_for, write_values
@@ -176,7 +176,8 @@ def test_no_keyword_material_skips(fresh):
 
 
 def test_missing_archive_skips(tmp_path, ix):
-    """缺值档＝默认关，但票 03 起入账可见（skipped 行给出可操作指令）。"""
+    """缺值档＝默认关，但票 03 起入账可见（skipped 行给出可操作指令）；
+    空档（建过无可采列）两账分文——serve 判 ok/静默，查询面说「值档空」不谎称缺。"""
     tp = tmp_path / "t.jsonl"
     emb = FakeEmbedder({})
     link = build_value_link(str(tmp_path / "none.sqlite"), emb,
@@ -185,6 +186,12 @@ def test_missing_archive_skips(tmp_path, ix):
     row = _vl_rows(tp)[0]
     assert row["outcome"] == "skipped" and "缺值索引档" in row["reason"]
     assert emb.calls == 0 and "index-build" in row["reason"]
+    empty_db = _db(tmp_path, "empty.sqlite")
+    write_values(empty_db, "fake-embed", [], {}, root=ix)
+    link2 = build_value_link(empty_db, emb, tracer=TraceLogger(tp, run_id="r"), root=ix)
+    assert link2("有学生", {"filters": ["有学生"]}, ["t"]) == ""
+    assert "值档空" in _vl_rows(tp)[-1]["reason"]
+    assert "缺" not in _vl_rows(tp)[-1]["reason"]  # 评审追补：文案与 serve 态不互相打脸
 
 
 def test_missing_embedder_logged_when_index_exists(fresh):
@@ -335,10 +342,11 @@ def test_calibration_note_registered_in_source():
     assert src.count("待票 07 定标") >= 2
 
 
-def test_wiring_tail_params_and_no_state_key():
-    for fn in (build_graph, resume_question):
-        params = list(inspect.signature(fn).parameters)
-        assert params[-3:] == ["recall", "table_recall", "value_link"], fn.__name__
+def test_run_question_tail_param_value_link():
+    # build_graph/resume_question 尾三位钉在 test_table_cards（更新原钉）——此处只补
+    # run_question 门面形（评审追补：勿三处逐字复制同一断言）
+    params = list(inspect.signature(run_question).parameters)
+    assert params[-3:] == ["recall", "table_recall", "value_link"]
     assert "value_link" not in AgentState.__annotations__  # 不进状态键（可调用沿参纪律）
 
 

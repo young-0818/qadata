@@ -271,11 +271,17 @@ def build_value_link(db_path: str | Path, embedder, *, tracer=None,
         except RetrievalError as e:
             _ledger("failed", kws=len(kws), reason=str(e))  # 前缀单源不套双份（examples 纪律）
             return []
-        if stored is None or not stored.columns:
-            # 缺档闸在缺 embedder 之前：缺料根因＝未建，一行给出可操作指令；
-            # 缺 embedder 只在有档可建链时才点名（账目归因不套双份）
+        except OSError as e:  # 权限/坏软链等裸 IO 错＝同路降级——「永不因检索挂而拒答」
+            # （ADR-0005）要求捕获面盖住读档的一切失败形态（load 只兜 yaml 系）
+            _ledger("failed", kws=len(kws), reason=f"值索引档读不动：{e}")
+            return []
+        if stored is None:
+            # 缺档闸在缺 embedder 之前：缺料根因排序＝一行给出可操作指令，不套双份
             _ledger("skipped", kws=len(kws),
                     reason="缺值索引档（现读降级＝现状；构建＝qadata index-build <库文件>）")
+            return []
+        if not stored.columns:
+            _ledger("skipped", kws=len(kws), reason="值档空（建过但全库无可采列）")
             return []
         if embedder is None:
             _ledger("failed", kws=len(kws), pool=len(stored.vecs),
