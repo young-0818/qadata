@@ -97,13 +97,8 @@ def test_failure_is_honest_no_fabrication(fixture_db):
     assert ans.failed is True and "未能完成查询" in ans.conclusion
 
 
-def test_evidence_reaches_sql_prompt(fixture_db):
-    """证据链路（M1 钉死）：非空 evidence（业务口径）必须出现在 SQL 生成 prompt 里（prompts[1]）。"""
-    recorder = ScriptedLLM(["改写", "SELECT name FROM students WHERE id = 1", "结论"])
-    ans = run_question(fixture_db, "q", evidence="口径：人均", llm=recorder, settings=_S)
-    assert ans.failed is False
-    assert "口径：人均" in recorder.prompts[1]
-
+# （M1 钉「evidence 进 SQL prompt」已随 ADR-0008 退役删除——口径通道＝字典检索块，其
+#   落位与零注入面钉在 tests/test_knowledge_recall.py / test_gssc.py 防回吹钉。）
 
 def test_run_question_absorbs_unhandled_errors():
     """失败面收敛（M1 钉死）：坏库路径的异常必须兜成诚实失败答案（永不编造）。"""

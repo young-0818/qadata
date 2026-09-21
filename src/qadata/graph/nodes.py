@@ -90,14 +90,6 @@ def _basis_line(res: QueryResult, sql: str | None) -> str:
     return line
 
 
-def _evidence_caliber(state: dict) -> str:
-    """兜底/失败态的口径说明：引用 evidence 命中项（载体 A evidence_terms，
-    题面明示才有的原样摘录）。零 prompt——intent 只作展示消费，喂 prompt 纪律不破
-    （test_generate_never_reads_intent 仍钉死 generate）。无命中项＝空串（节省略）。"""
-    intent = state.get("intent")
-    terms = intent.get("evidence_terms") if isinstance(intent, dict) else None
-    terms = [str(t) for t in (terms or []) if str(t).strip()]
-    return f"口径依据（题面摘录）：{'；'.join(terms)}" if terms else ""
 
 
 def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
@@ -191,6 +183,16 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
             return timed_stream(llm, prompt, node, tracer, limiter, sink=sink,
                                 on_event=on_event)
         return timed_invoke(llm, prompt, node, tracer, limiter, sink=sink)
+
+    def _knowledge_caliber(question: str) -> str:
+        """口径说明节（ADR-0008 字典单通道）＝本题字典召回块各条首行摘要——
+        memo 命中零新调用零新状态键；未挂字典/无召回＝空串（节省略，逐字节现状）。"""
+        if knowledge_recall is None:
+            return ""
+        heads = [ln[2:] for ln in knowledge_recall(question).splitlines()
+                 if ln.startswith("- ")]
+        return (f"口径字典片段（按题面检索所得，非钦定全文）：{'；'.join(heads)}"
+                if heads else "")
 
     def understand(state: dict) -> dict:
         # 载体 A（M5 票 02 立、M9 票 03 值链接手）：改写＋六字段意图同调产出，零新增调用；
@@ -398,7 +400,7 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
                     conclusion=compose_conclusion(
                         conclusion,
                         basis="无成功执行的查询，无可用结果集（尝试明细见结论）",
-                        caliber=_evidence_caliber(state), notes=[]),
+                        caliber=_knowledge_caliber(state["question"]), notes=[]),
                     sql=sql,
                     result=None,
                     failed=True,
@@ -423,8 +425,8 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
                 sink=sink,
             )
             conclusion = strip_conclusion_prefix(str(text))
-        # 口径说明节（M5 票 07）：evidence 命中项兜底（注册表血缘分支已随指标层退役，ADR-0007）
-        caliber = _evidence_caliber(state)
+        # 口径说明节（M5 票 07 立；ADR-0008 改字典单通道）：本题字典召回块首行摘要
+        caliber = _knowledge_caliber(state["question"])
         notes = []
         note = state.get("verify_note")
         if note:  # 可疑但预算耗尽：数据真实，如实呈现＋标注（不是假失败）

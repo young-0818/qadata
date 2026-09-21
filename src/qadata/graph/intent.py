@@ -1,18 +1,18 @@
 """意图结构化（载体 A，M5 票 02）：understand 同调输出的解析。
 
 纯函数模块（先例 graph/precise.py），不开图即可单测钉死。契约（CONTEXT.md「意图」）：
-- 五字段：dimensions / filters / output_form / format_constraint / evidence_terms
-  （metric_mention 已随 M5 指标层退役删除，ADR-0007）；
-- 宁空勿造：字段仅当题面或 evidence 明示时填写，否则 null——M4-D 让步纪律在抽取层的推广；
+- 四字段：dimensions / filters / output_form / format_constraint
+  （metric_mention 随 M5 退役 ADR-0007；evidence_terms 随 evidence 层退役 ADR-0008）；
+- 宁空勿造：字段仅当题面明示时填写，否则 null——M4-D 让步纪律在抽取层的推广；
 - 解析失败回退（主设计 §3.7 既定降级语义）：纯原文当改写问题、intent 判 null，
   不写 attempts、不烧重试预算（调用方 nodes.understand 保证）。
 
 2026-09-09 票 02 条款④判负裁决（owner 签字）：三约束字段「注入 generate 尾段」的
 软用途验效不过（翻转不可复现、注入信号 ≤ 载体 A 改写漂移噪声带，见 02 票判卷结论），
 该注入线已拆除不再恢复。意图消费者现状＝值链搭车抽词 filters（M10 票 03）；
-metric_match 填槽消费者已随指标层退役（ADR-0007）。票 07 起另有一个**展示消费者**：respond 兜底
-口径说明引用 evidence_terms——只进答案文本组装、零 prompt 注入，「勿再喂 prompt」纪律
-不破（test_generate_never_reads_intent 仍钉死）。
+metric_match 填槽消费者已随指标层退役（ADR-0007）；evidence_terms 展示消费者
+已随 evidence 层退役（ADR-0008，respond 口径说明改读字典召回块）。「勿再喂 prompt」
+纪律不破（test_generate_never_reads_intent 仍钉死）。
 
 M8 票 03：返回值扩为三元组（＋clarification），默认关的保险丝——仅当口径缺失到
 「任何 SQL 都是猜」时模型才产澄清问，宁空勿造；消费闸在节点侧（flag＋防循环标记），
@@ -26,9 +26,8 @@ INTENT_FIELDS = (
     "filters",
     "output_form",
     "format_constraint",
-    "evidence_terms",
 )
-_LIST_FIELDS = frozenset({"dimensions", "filters", "evidence_terms"})
+_LIST_FIELDS = frozenset({"dimensions", "filters"})
 
 # 贪婪匹配最外层大括号：容忍 Markdown 围栏与前后寒暄（提取纪律同 extract_sql 的宽容风格，
 # 但解析失败不抛错——意图是增强件，失败只回退，不进重试环）

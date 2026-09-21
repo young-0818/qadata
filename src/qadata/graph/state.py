@@ -8,7 +8,8 @@ class AgentState(TypedDict, total=False):
     db_path: str
     question: str
     original_question: str  # understand 改写前的原问题（多轮/审计用）
-    evidence: str  # BIRD 官方业务口径说明（企业场景等价物：指标字典/口径文档）
+    # evidence 键已删（ADR-0008，2026-09-21）：口径唯一通道＝字典检索块经 Select 格
+    # 进 generate，不再直塞状态。
     intent: dict | None  # M5 载体 A：understand 同调产出的六字段题面摘要（宁空勿造，未明示即 null）；
     # None＝解析失败回退态（原文当改写问题，不烧重试预算）。消费者＝值链搭车抽词（M10 票 03）
     # ＋ respond 兜底口径说明展示消费 evidence_terms（零 prompt 注入，只进答案文本组装）；

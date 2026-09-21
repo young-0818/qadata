@@ -206,22 +206,25 @@ def test_respond_success_minimal_three_sections_without_idle():
     assert "【口径说明】" not in c and "【校验标注】" not in c
 
 
-def test_respond_fallback_caliber_cites_evidence_terms():
-    """兜底路径口径说明＝evidence 命中项（载体 A evidence_terms 原样摘录，零 prompt）。"""
+def test_respond_caliber_reads_knowledge_block_zero_extra_call():
+    """口径说明节＝本题字典召回块首行（ADR-0008 字典单通道；memo 共担零新调用零 token）。"""
+    from qadata.retrieval.knowledge import format_knowledge_block
+    kb = format_knowledge_block(["正常贷款：状态 'A' 计为正常。",
+                                 "多行条目首行\n  缩进续行"])
     llm = ScriptedLLM(["Alice 最好"])
-    state = _respond_state(intent={"evidence_terms": ["全名 = first_name, last_name"]})
-    out = make_nodes(llm)["respond"](state)
-    assert llm.calls == 1  # 口径展示零 token：respond 仍只有一次调用
+    out = make_nodes(llm, knowledge_recall=lambda q: kb)["respond"](_respond_state())
+    assert llm.calls == 1  # 展示零 token：respond 仍只有一次调用
     c = out["answer"].conclusion
-    assert "【口径说明】" in c and "全名 = first_name, last_name" in c
+    assert "【口径说明】" in c and "正常贷款：状态 'A' 计为正常。" in c
+    assert "缩进续行" not in c  # 展示只取各条首行（全文已随 generate 上下文，不重灌）
     assert "【校验标注】" not in c
 
 
-def test_respond_fallback_caliber_omitted_when_terms_empty():
-    """宁空勿造的另一面：intent 在但 evidence_terms 空/null → 口径节省略。"""
-    for intent in ({"evidence_terms": []}, {"evidence_terms": None}, {"metric_mention": "x"}, None):
+def test_respond_caliber_omitted_when_kb_absent():
+    """未挂字典/召回空/降级空串 → 口径节省略（现状逐字节，空节省略旧钉语义搬家）。"""
+    for recall in (None, lambda q: ""):
         llm = ScriptedLLM(["r"])
-        out = make_nodes(llm)["respond"](_respond_state(intent=intent))
+        out = make_nodes(llm, knowledge_recall=recall)["respond"](_respond_state())
         assert llm.calls == 1
         assert "【口径说明】" not in out["answer"].conclusion
 

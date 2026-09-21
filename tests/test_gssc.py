@@ -47,10 +47,11 @@ def test_understand_byte_equal_oracle():
             ("这些学生呢", "口径", _CTX, False),
             (f"问{SUPPLEMENT_MARK}澄清？ 答", "口径", None, True),  # 防循环闸：带标记不加尾段
             ("带 {花括号}{{转义}} 与 ## 用户问题\n 的题面", "{x} 与 {{y}}\n", _CTX, True)]:
+        # （ev＝退役键：state 残键也不得入 prompt——防回吹钉；口径唯一通道＝字典块进 generate）
         state = {"question": q, "evidence": ev, "session_context": ctx}
-        assert gssc.assemble("understand", gssc.gather_understand(
-            state, clarify=clarify)) == understand_prompt(
-            q, ev, format_session_history(ctx), clarify=clarify)
+        out = gssc.assemble("understand", gssc.gather_understand(state, clarify=clarify))
+        assert out == understand_prompt(q, format_session_history(ctx), clarify=clarify)
+        assert not ev.strip() or ("evidence" not in out and ev not in out)
 
 
 def test_generate_byte_equal_oracle():
@@ -66,10 +67,12 @@ def test_generate_byte_equal_oracle():
             state = {"question": q, "evidence": ev, "db_schema": schema,
                      "attempts": attempts, "verify_note": vn,
                      "session_context": ctx}
-            assert gssc.assemble("generate", gssc.gather_generate(state)) == sql_prompt(
-                schema=schema, evidence=ev, question=q,
+            out = gssc.assemble("generate", gssc.gather_generate(state))
+            assert out == sql_prompt(
+                schema=schema, question=q,
                 history=format_failure_history(attempts, vn),
                 draft=format_session_draft(ctx))
+            assert not ev.strip() or ("evidence" not in out and ev not in out)  # 防回吹同钉
 
 
 def test_respond_byte_equal_oracle():
@@ -111,8 +114,8 @@ _LIVE_SLOTS = {
 }
 
 _EXPECTED_ZONES = {
-    "understand": (Zone.TASK, Zone.MEMORY, Zone.TASK, Zone.EVIDENCE, Zone.OUTPUT),
-    "generate": (Zone.ROLE, Zone.EVIDENCE, Zone.EVIDENCE, Zone.TASK,
+    "understand": (Zone.TASK, Zone.MEMORY, Zone.TASK, Zone.OUTPUT),
+    "generate": (Zone.ROLE, Zone.EVIDENCE, Zone.TASK,
                  Zone.STATE, Zone.MEMORY, Zone.OUTPUT),
     "respond": (Zone.ROLE, Zone.TASK, Zone.STATE, Zone.EVIDENCE, Zone.OUTPUT),
     "explore": (Zone.EVIDENCE, Zone.TASK, Zone.OUTPUT),
@@ -170,9 +173,9 @@ def test_node_prompts_match_oracle_end_to_end(fixture_db):
     """布线端到端对拍（假模型零联网）：真链路产出的 understand/respond prompt 与旧路
     oracle 逐字节一致；generate 的输入件收口在 state、由上组单测钉输入等价，此处钉调用数。"""
     llm = ScriptedLLM(["改写句", _GOOD, "结论"])
-    ans = run_question(fixture_db, "有几名学生", llm=llm, settings=_S, evidence="口径A")
+    ans = run_question(fixture_db, "有几名学生", llm=llm, settings=_S)
     assert ans.failed is False and llm.calls == 3  # 零新增调用（收编不收租）
-    assert llm.prompts[0] == understand_prompt("有几名学生", "口径A", "")
+    assert llm.prompts[0] == understand_prompt("有几名学生", "")
     r = ans.result
     assert llm.prompts[2] == respond_prompt("改写句", ans.sql or "", format_rows(r),
                                             r.row_count, len(r.rows))

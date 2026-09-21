@@ -2,7 +2,7 @@
 // 票 01 冻结 /api/ask 12 字段（rev2 请求体 db→agent_id，响应形状不动）；
 // 票 04 经 owner 裁决新增可选字段 chart（其余形状仍＝跨票改卷）；
 // 票 05 会话轮 session_id 出真值（单轮请求照旧 null）；
-// 智能体面（CRUD/数据源/业务知识/模型只读卡）由票 02.5 钉死。
+// 智能体面（CRUD/数据源/口径字典/模型只读卡）由票 02.5 钉死（业务知识 evidence 已随 ADR-0008 撤）。
 export interface AskResponse {
   conclusion: string;
   sql: string | null;
@@ -51,8 +51,6 @@ export interface AgentDetail {
   id: string;
   name: string;
   description: string;
-  evidence: string; // 手动业务知识（后端字段名沿用 evidence，UI 叫业务知识）
-  business_knowledge: string; // ＝evidence 直读别名（引用态派生已随 ADR-0007 退役）
   preset_questions: string[];
   datasource: DatasourceInfo;
 }
@@ -103,7 +101,7 @@ export function createAgent(name: string, description: string): Promise<AgentDet
 // 部分更新：只发显式字段（PATCH 语义由后端 model_fields_set 钉）
 export function patchAgent(
   id: string,
-  fields: Partial<Pick<AgentDetail, "name" | "description" | "evidence" | "preset_questions">>,
+  fields: Partial<Pick<AgentDetail, "name" | "description" | "preset_questions">>,
 ): Promise<AgentDetail> {
   return sendJson<AgentDetail>(`/api/agents/${id}`, {
     method: "PATCH",
@@ -248,7 +246,6 @@ export async function postFeedback(
 export async function askStream(
   agentId: string,
   question: string,
-  evidence: string,
   onProgress: (ev: ProgressEvent) => void,
   sessionId?: string,
   discardPending: boolean = false,
@@ -259,7 +256,6 @@ export async function askStream(
     body: JSON.stringify({
       agent_id: agentId,
       question,
-      evidence,
       session_id: sessionId ?? null,
       discard_pending: discardPending,
     }),

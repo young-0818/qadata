@@ -101,7 +101,7 @@ npm run build</code></pre>
 class AskRequest(BaseModel):
     agent_id: str
     question: str = Field(min_length=1)
-    evidence: str = ""
+    # evidence 请求字段已退役（ADR-0008）：老客户端多传＝pydantic 未知键忽略，不再生效
     # 票 05：会话 id（客户端生成 hex12，懒建档——"＋ 新建会话"＝换 id、下一问开新档）；
     # 缺省 None＝单轮关态（三层记忆零注入，与票 04 逐行为一致）
     session_id: str | None = None
@@ -127,8 +127,7 @@ class AgentPatchRequest(BaseModel):
     # 全部可选：PATCH 只动显式传入的字段（model_fields_set 即"传了哪些"）
     name: str | None = None
     description: str | None = None
-    evidence: str | None = None
-    preset_questions: list[str] | None = None
+    preset_questions: list[str] | None = None  # evidence＝退役键：pydantic 未知键忽略不消费
 
 
 def answer_to_payload(answer: Answer, session_id: str | None = None) -> dict[str, Any]:
@@ -214,11 +213,8 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
             return {"has_file": True, "table_count": None, "error": str(e)}
 
     def _detail(meta: AgentMeta) -> dict[str, Any]:
-        # 引用态派生（effective_evidence/metrics_ref/business_knowledge_error）已随
-        # M5 指标层退役删除（ADR-0007）；business_knowledge＝evidence 直读（票 08 定去留）
+        # evidence/business_knowledge 展示键已随 ADR-0008 撤（口径管理面＝口径字典面板）
         return {"id": meta.id, "name": meta.name, "description": meta.description,
-                "evidence": meta.evidence,
-                "business_knowledge": meta.evidence,
                 "preset_questions": list(meta.preset_questions),
                 "datasource": _datasource_info(meta)}
 
@@ -419,10 +415,9 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
                 raise HTTPException(status_code=400,
                                     detail=f"智能体「{meta.name}」未配置数据源（详情页上传 .sqlite 后再问）")
             session = sessions.load(req.agent_id, req.session_id) if req.session_id else None
-            evidence = req.evidence.strip() or meta.evidence
         except (AgentStoreError, SessionStoreError) as e:
             raise _bad(e) from None
-        return str(path), evidence, meta.name, session
+        return str(path), meta.name, session
 
     def _catch_up(req: AskRequest, session: Session | None) -> Session | None:
         """M9 票 05 懒补挂点（spec §二 Q7）：组装下一问前**同步**补齐滑出轮的摘要欠账
@@ -481,7 +476,7 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
             sessions.save(req.agent_id, merged)
         return payload
 
-    def _route_clarification(req: AskRequest, path: str, evidence: str, ctx,
+    def _route_clarification(req: AskRequest, path: str, ctx,
                              on_event=None,
                              trail: list[dict] | None = None) -> tuple[Answer, str]:
         """经典 HITL 分流（M8 票 03 改判；两端点唯一闸口，在途锁内调用）：
@@ -529,7 +524,7 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
             return answer, compose_supplement(pend.question, pend.ask, req.question)
         # thread 只在有会话＋有 checkpoint 时给；成对纪律由 run_question 闸口守死
         thread = f"{pkey}:{uuid.uuid4().hex[:8]}" if (pkey and checkpoint) else None
-        answer = run_question(path, req.question, evidence=evidence, llm=llm,
+        answer = run_question(path, req.question, llm=llm,
                               settings=settings, tracer=tracer, on_event=on_event,
                               session_context=ctx, thread_id=thread, checkpointer=checkpoint,
                               obs=obs, recall=recall, table_recall=table_recall,
@@ -541,13 +536,13 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
 
     @app.post("/api/ask")
     def ask(req: AskRequest) -> dict[str, Any]:
-        path, evidence, agent_name, session = _resolve_ask_target(req)
+        path, agent_name, session = _resolve_ask_target(req)
         key = _acquire_ask_lock(req, agent_name)
         trail: list[dict] | None = [] if session is not None else None
         try:
             session = _catch_up(req, session)  # 票 05：组装前补齐摘要欠账（锁内、无后台任务）
             answer, turn_q = _route_clarification(
-                req, path, evidence, build_session_context(session) if session else None,
+                req, path, build_session_context(session) if session else None,
                 trail=trail)
             return _finish_ask(req, session, answer, question=turn_q, trail=trail)
         finally:
@@ -568,7 +563,7 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
         （starlette 自动 threadpool 迭代）。在途＝run_question 计算在途：放锁挂在
         runner 的 finally（评审收紧·双轴同指），断流/生成器未启动等一切投递路径
         都不构成泄漏窗口；计算跑完前队列缓冲、跑完即弃（单进程单用户尾差）。"""
-        path, evidence, agent_name, session = _resolve_ask_target(req)
+        path, agent_name, session = _resolve_ask_target(req)
         key = _acquire_ask_lock(req, agent_name)
         events: queue.Queue = queue.Queue()
         box: dict[str, Any] = {}
@@ -582,7 +577,7 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
                 # 不得把会话锁永久悬在 acquire 与 runner 之间（双轴评审追补）
                 s = _catch_up(req, session)
                 answer, turn_q = _route_clarification(
-                    req, path, evidence, build_session_context(s) if s else None,
+                    req, path, build_session_context(s) if s else None,
                     on_event=events.put, trail=trail)
                 box["payload"] = _finish_ask(req, s, answer, question=turn_q,
                                              trail=trail)

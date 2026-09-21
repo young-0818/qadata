@@ -48,7 +48,8 @@ class AgentMeta:
     id: str
     name: str
     description: str = ""
-    evidence: str = ""  # 手动业务知识（后端字段名沿用 evidence＝BIRD/CLI 语境，UI 叫业务知识）
+    # evidence（手动业务知识）字段已随 ADR-0008 退役——口径唯一通道＝智能体目录
+    # knowledge.yaml（knowledge-feed 双门进料）；旧 meta.yaml 残留键读取忽略（M7 先例）。
     preset_questions: tuple[str, ...] = ()
 
 
@@ -96,8 +97,7 @@ class AgentStore:
             merged = replace(merged, name=self._checked_name(v))
         if (v := fields.get("description", _MISSING)) is not _MISSING:
             merged = replace(merged, description=self._checked_desc(v))
-        if (v := fields.get("evidence", _MISSING)) is not _MISSING:
-            merged = replace(merged, evidence=str(v or ""))
+        # evidence 请求字段＝不消费（退役键，见 AgentMeta 注记）
         if (v := fields.get("preset_questions", _MISSING)) is not _MISSING:
             merged = replace(merged, preset_questions=self._checked_questions(v))
         self._dump(self._dir_of(agent_id), merged)
@@ -148,13 +148,11 @@ class AgentStore:
             id=d.name,
             name=data["name"],
             description=str(data.get("description") or ""),
-            evidence=str(data.get("evidence") or ""),
             preset_questions=tuple(str(q) for q in (data.get("preset_questions") or [])),
         )
 
     def _dump(self, d: Path, meta: AgentMeta) -> None:
         body = {"name": meta.name, "description": meta.description,
-                "evidence": meta.evidence,
                 "preset_questions": list(meta.preset_questions)}
         atomic_write(d / "meta.yaml",
                      yaml.safe_dump(body, allow_unicode=True, sort_keys=False))

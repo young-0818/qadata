@@ -64,11 +64,11 @@ def test_patch_basic_fields(store):
     assert store.get(a.id).name == "新名"  # 持久化
 
 
-def test_patch_evidence_manual(store):
+def test_patch_evidence_key_inert(store):
+    """ADR-0008：AgentMeta.evidence 字段已撤——patch 传残键不消费、回写档无此键。"""
     a = store.create("x", "")
-    b = store.patch(a.id, evidence="总金额 = sum(loan.amount)")
-    assert b.evidence == "总金额 = sum(loan.amount)"
-    assert store.get(b.id).evidence == "总金额 = sum(loan.amount)"
+    b = store.patch(a.id, evidence="总金额 = sum(loan.amount)", description="改")
+    assert b.description == "改" and not hasattr(b, "evidence")
 
 
 # ── 预设问题 ────────────────────────────────────────────────────────
@@ -107,15 +107,17 @@ def test_datasource_rejects_non_sqlite_and_empty(store):
         store.store_datasource(a.id, b"", "ok.sqlite")
 
 
-def test_legacy_metrics_ref_key_ignored_on_load(store, tmp_path):
-    """退役键先例（M7 overlay/fresh_topic 同款）：旧 meta.yaml 残留 metrics_ref＝
-    读取忽略、无第二真源复活通道；回写档不再含该键。"""
+def test_legacy_retired_keys_ignored_on_load(store, tmp_path):
+    """退役键先例（M7 overlay/fresh_topic 同款）：旧 meta.yaml 残留 metrics_ref/evidence＝
+    读取忽略、无第二真源复活通道；回写档不再含这些键。"""
     a = store.create("x", "")
     f = tmp_path / "agents" / a.id / "meta.yaml"
-    f.write_text(f.read_text(encoding="utf-8") + "metrics_ref: financial\n", encoding="utf-8")
-    assert store.get(a.id).evidence == ""
+    f.write_text(f.read_text(encoding="utf-8")
+                 + "metrics_ref: financial\nevidence: 旧口径\n", encoding="utf-8")
+    assert not hasattr(store.get(a.id), "evidence")
     store.patch(a.id, description="改写触发回写")
-    assert "metrics_ref" not in f.read_text(encoding="utf-8")
+    body = f.read_text(encoding="utf-8")
+    assert "metrics_ref" not in body and "evidence" not in body
 
 
 def test_corrupted_meta_raises_not_silently_swallowed(store, tmp_path):

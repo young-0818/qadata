@@ -1,4 +1,4 @@
-"""M10 票 04 口径字典进料——智能体域档面（spec §二 Q8／ADR-0004/0006；查询路＝票 05）。
+"""M10 票 04 口径字典进料——智能体域档面（spec §二 Q8／ADR-0004/0006→0008；查询路＝票 05）。
 
 口径字典＝人进料的业务口径条目，住 `<智能体目录>/knowledge.yaml`（文件即数据库、
 跟智能体走、删智能体连带清——examples.yaml 同域同纪律；ADR-0004 人进料域）。
@@ -28,8 +28,8 @@ manifest＝(model_id, built_at)（智能体域无库可对账——库域四件�
 查询面（票 05，build_knowledge_recall）＝消解后题面**一次 embed**（题面 memo＝
 重试环不翻倍，值链/例题先例账形）→ numpy 全扫余弦 → 条数/阈值保守值截尾
 （KNOWLEDGE_TOP_K／KNOWLEDGE_MIN_SCORE，绝对阈不可靠系票 00 教训在本线的沿用、
-**票 07 已定标**）→ 口径字典块（节头单源字面，措辞自带 ADR-0006 优先级语义＝
-片段给整段压阵）。读侧**显式闸 stored.model_id**（票 04 移交在册——同维跨模型
+**票 07 已定标**）→ 口径字典块（节头单源字面；ADR-0008 起＝口径唯一通道，
+evidence 直塞层已撤）。读侧**显式闸 stored.model_id**（票 04 移交在册——同维跨模型
 向量不自提示、字典路没有关键词保底可兜）。缺档/空池/缺 embedder/过期/端点挂/
 打分炸＝不注入＋knowledge_recall 行入账（hits/pool/model/latency 形制，不烧
 生成调用数）；永不因检索挂拒答（ADR-0005）。保险丝「撤字典块」位在撤值纸条
@@ -217,10 +217,10 @@ KNOWLEDGE_TOP_K = 5     # 注入条目上限——票 07 定标（k3→k5 召回
 KNOWLEDGE_MIN_SCORE = 0.45  # 绝对二道闸——票 07 定标（0.35-0.55 区间召回不敏感，取中挡噪）
 
 # 节头＝渲染（本模块）与保险丝淘汰（gssc._cut_knowledge）共读的单源字面
-# （VALUE_STICKER_HEADER／EXAMPLES_HEADER 先例）。措辞自带 ADR-0006 优先级语义：
-# 检索片段非钦定全文——冲突时以「背景信息」（请求/智能体 evidence）为准。
-KNOWLEDGE_HEADER = ("## 口径字典片段（按题面从口径字典检索的业务口径，非钦定全文——"
-                    "与上方背景信息冲突时以背景信息为准；与本题无关则忽略）：")
+# （VALUE_STICKER_HEADER／EXAMPLES_HEADER 先例）。措辞随 ADR-0008 改：evidence 直塞层
+# 已撤，字典＝口径唯一通道；「非钦定全文」语义保留（检索条目仍可能被人工修订史落伍）。
+KNOWLEDGE_HEADER = ("## 口径字典片段（按题面从口径字典检索的业务口径，非钦定全文；"
+                    "与本题无关则忽略）：")
 
 
 def format_knowledge_block(entries: Sequence[str]) -> str:

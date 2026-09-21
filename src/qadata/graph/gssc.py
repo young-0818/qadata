@@ -47,7 +47,8 @@ class Zone(str, Enum):
     ROLE = "角色与政策"
     TASK = "任务"
     STATE = "状态"
-    EVIDENCE = "证据"
+    EVIDENCE = "证据"  # 名字保留（历史包袱注记）：现居民＝schema/字典块/例题/纸条/采样，
+    # evidence 直塞段本体已随 ADR-0008 撤
     MEMORY = "记忆"
     OUTPUT = "输出"
 
@@ -63,8 +64,8 @@ class Section(NamedTuple):
 # understand 头块含 {{}} 转义 JSON 契约，.format() 一次解转义即成品文本。
 _U_HEAD, _u_tail = _UNDERSTAND_TMPL.split("{history}", 1)
 _U_HEAD = _U_HEAD.format()
-_U_Q, _u_after = _u_tail.split("{question}", 1)
-_U_EV, _ = _u_after.split("{evidence}", 1)
+_U_Q, _u_tail2 = _u_tail.split("{question}", 1)
+_U_QTAIL = _u_tail2.format()  # question 之后只剩收尾换行（evidence 段已撤，ADR-0008）
 
 _R_HEAD = _RESPOND_TMPL.split("\n## 用户问题\n", 1)[0]
 _P0, _p1 = _PICK_PROMPT.split("{tables}", 1)
@@ -75,24 +76,22 @@ _P1, _P2 = _p1.split("{question}", 1)
 
 
 def gather_understand(state: dict, *, clarify: bool) -> dict[str, str]:
-    """understand 候选：L2 会话历史段（指代消解）＋题面＋口径＋澄清尾段。
+    """understand 候选：L2 会话历史段（指代消解）＋题面＋澄清尾段（口径段已撤 ADR-0008）。
     澄清尾段闸＝开关开且题面不含「补充说明：」标记（防循环指令侧——与节点侧
     消费复闸同源条件，understand_prompt 旧路同款）。"""
     question = state["question"]
     return {
         "session_block": format_session_history(state.get("session_context")),
         "question": question,
-        "evidence": state.get("evidence", ""),
         "clarify_tail": _CLARIFY_TAIL
         if clarify and SUPPLEMENT_MARK not in question else "",
     }
 
 
 def gather_generate(state: dict) -> dict[str, str]:
-    """generate 候选：schema＋口径＋题面＋失败历史（状态）＋L1 草稿（记忆）。"""
+    """generate 候选：schema＋题面＋失败历史（状态）＋L1 草稿（记忆）（口径段撤后由字典块走 Select 格，ADR-0008）。"""
     return {
         "schema": state.get("db_schema", ""),
-        "evidence": state.get("evidence", ""),
         "question": state["question"],
         "failure_history": format_failure_history(
             state.get("attempts", []), state.get("verify_note")),
@@ -360,8 +359,7 @@ def _structure_understand(p: dict[str, str]) -> list[Section]:
     return [
         Section(Zone.TASK, _U_HEAD),
         Section(Zone.MEMORY, block + "\n" if block else ""),
-        Section(Zone.TASK, _U_Q + p["question"]),
-        Section(Zone.EVIDENCE, _U_EV + (p["evidence"] or "（无）")),
+        Section(Zone.TASK, _U_Q + p["question"] + _U_QTAIL),
         Section(Zone.OUTPUT, p["clarify_tail"]),
     ]
 
@@ -373,11 +371,10 @@ def _structure_generate(p: dict[str, str]) -> list[Section]:
     sections = [
         Section(Zone.ROLE, SYSTEM_RULES),
         Section(Zone.EVIDENCE, "\n\n## 数据库 Schema\n" + p["schema"]),
-        Section(Zone.EVIDENCE, "\n\n## 背景信息\n" + (p["evidence"] or "（无）")),
     ]
     if knowledge:
-        # 口径优先级三级落位（ADR-0006）：evidence 整段在前、字典片段垫后——
-        # 片段给整段压阵不是相反；参考例题仍守「贴用户问题最近」旧位不动。
+        # ADR-0008（2026-09-21）：evidence 直塞层已撤，字典块＝口径唯一通道，
+        # schema 之后、参考例题之前落位；参考例题仍守「贴用户问题最近」旧位不动。
         sections.append(Section(Zone.EVIDENCE, "\n\n" + knowledge + "\n"))
     if examples:
         # 贴「## 用户问题」最近落位（块内已升序、最像的在块尾——DB-GPT 论文形态）

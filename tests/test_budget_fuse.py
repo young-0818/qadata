@@ -73,7 +73,7 @@ def test_understand_realistic_form_never_triggers():
     assert _no_trigger("understand",
                        gssc.gather_understand({"question": q, "evidence": _EV,
                                                "session_context": _CTX}, clarify=True),
-                       understand_prompt(q, _EV, format_session_history(_CTX),
+                       understand_prompt(q, format_session_history(_CTX),
                                          clarify=True)) > 300
 
 
@@ -103,7 +103,7 @@ def test_generate_realistic_form_never_triggers():
                                              "db_schema": schema, "attempts": attempts,
                                              "verify_note": vn,
                                              "session_context": _CTX}),
-                       sql_prompt(schema=schema, evidence=_EV, question=q,
+                       sql_prompt(schema=schema, question=q,
                                   history=format_failure_history(attempts, vn),
                                   draft=format_session_draft(_CTX))) > 3000
 
@@ -137,9 +137,9 @@ def test_bird_fixture_end_to_end_byte_equal(fixture_db):
     逐字节一致——评测形态零变化的端到端背书（行为零变化不需配对）。"""
     llm = ScriptedLLM(['{"question":"查学生数"}', "SELECT COUNT(*) FROM students",
                        "共 2 人"])
-    ans = run_question(fixture_db, "有多少学生", llm=llm, settings=_S, evidence=_EV)
+    ans = run_question(fixture_db, "有多少学生", llm=llm, settings=_S)
     assert ans.failed is False and llm.calls == 3
-    assert llm.prompts[0] == understand_prompt("有多少学生", _EV,
+    assert llm.prompts[0] == understand_prompt("有多少学生",
                                                format_session_history(None))
 
 

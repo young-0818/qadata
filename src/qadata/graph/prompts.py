@@ -22,17 +22,15 @@ SYSTEM_RULES = """你是一个严谨的数据分析 SQL 专家。规则：
 # 已随指标层退役（ADR-0007），见 graph/intent.py。
 # 花括号需双写（.format 模板）；「宁空勿造」纪律写在指令里，防模型推断改坏（M4-B v1 教训）。
 _UNDERSTAND_TMPL = """请把下面的用户问题改写为一句自包含的查询意图：保留原意、补全指代、不要回答问题。
-同时按「宁空勿造」从题面/背景信息中抽取意图字段：每个字段仅当题面或背景信息明示时才填写，否则一律 null，禁止猜测或推断。
+同时按「宁空勿造」从题面抽取意图字段：每个字段仅当题面明示时才填写，否则一律 null，禁止猜测或推断。
 只输出一个 JSON 对象，不要 Markdown 代码块、不要解释、不要多余文字。字段契约：
 {{"question": "改写后的一句话",
  "intent": {{
   "dimensions": ["题面明示的分组/视角轴（如「按月份」）"],
   "filters": ["题面明示的筛选条件，原样摘录题面措辞词；时间类条件只输出裸时间表达式（如 \"1993\" 而非 \"in 1993\"；另如 \"1993/2\"、\"去年\"），不带介词短语（票 04 裁决⑧：否则填槽的时间解析对英文题面系统性失效）"],
   "output_form": "题面明示的输出形态（如「百分比」「列出全部」「要输出哪几列」）",
-  "format_constraint": "题面明示的格式要求（如「保留两位小数」），未明示则 null",
-  "evidence_terms": ["背景信息中以「术语 = 定义」形式明示的条目，原样摘录"]}}}}
-{history}原始问题：{question}
-背景信息（evidence）：{evidence}"""
+  "format_constraint": "题面明示的格式要求（如「保留两位小数」），未明示则 null"}}}}
+{history}原始问题：{question}"""
 
 # M8 票 03 澄清保险丝（默认关；尾追静态段，开关关时 prompt 与今日逐字节一致）。
 # 保险丝不是主菜：指令把产出条件收紧到「任何 SQL 都是猜」，并明列不构成澄清的情形
@@ -50,7 +48,7 @@ def compose_supplement(original: str, ask: str, supplement: str) -> str:
 
 _CLARIFY_TAIL = """
 澄清例外（保险丝，不是常规出口）：仅当口径缺失到「任何 SQL 都只能是猜」的程度——
-题面与背景信息都定不了到底算什么、从哪算，两种以上合理读法会给出不同数字且无从取舍——
+题面定不了到底算什么、从哪算，两种以上合理读法会给出不同数字且无从取舍——
 才在上述 JSON 中额外追加一个字段 "clarification": "一句中文澄清问（问清缺的是什么，不超过 30 字）"；
 其他任何情况一律不写该字段或填 null。以下都**不构成**澄清理由：
 取值的具体写法/大小写（按 schema 所示形态处理）、列与表的归属（系统自会探查）、
@@ -70,9 +68,6 @@ _SQL_TMPL = SYSTEM_RULES + """
 
 ## 数据库 Schema
 {schema}
-
-## 背景信息
-{evidence}
 
 ## 用户问题
 {question}
@@ -216,22 +211,21 @@ def format_session_draft(ctx: dict | None) -> str:
     return block + (f"\n上一轮结果摘要：{head}" if head else "")
 
 
-def understand_prompt(question: str, evidence: str = "", session_block: str = "",
+def understand_prompt(question: str, session_block: str = "",
                       clarify: bool = False) -> str:
     """understand 的完整 prompt。clarify（M8 票 03）＝开关开**且**题面不含「补充说明：」
     标记才尾追澄清指令段——续轮必带标记（防死循环闸的指令侧；节点侧消费复闸在 nodes.understand）。
-    关态/带标记态与本函数参数加入前逐字节一致（专测钉死）。"""
+    （evidence 背景信息段已随 ADR-0008 撤——口径唯一通道＝字典检索块进 generate。）"""
     h = session_block + "\n" if session_block else ""
-    p = _UNDERSTAND_TMPL.format(question=question, evidence=evidence or "（无）", history=h)
+    p = _UNDERSTAND_TMPL.format(question=question, history=h)
     if clarify and SUPPLEMENT_MARK not in question:
         p += _CLARIFY_TAIL
     return p
 
 
-def sql_prompt(schema: str, evidence: str, question: str, history: str = "",
-               draft: str = "") -> str:
+def sql_prompt(schema: str, question: str, history: str = "", draft: str = "") -> str:
     h = ("\n" + history if history else "") + ("\n" + draft if draft else "")
-    return _SQL_TMPL.format(schema=schema, evidence=evidence or "（无）", question=question, history=h)
+    return _SQL_TMPL.format(schema=schema, question=question, history=h)
 
 
 # 失败历史节头（M9 票 04：保险丝第三级按此定位可缩段——respond 的「所用 SQL」同住

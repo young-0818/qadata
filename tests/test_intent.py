@@ -32,14 +32,13 @@ _NULL_INTENT = dict.fromkeys(INTENT_FIELDS)
 # ── 纯函数：parse_understand_response ──────────────────────────────
 
 
-def test_parse_success_returns_question_and_five_fields():
+def test_parse_success_returns_question_and_four_fields():
     text = _blob(
         question="已结束合同的违约率是多少",
         dimensions=["按月份"],
         filters=["已结束"],
         output_form="百分比",
         format_constraint="保留两位小数",
-        evidence_terms=["违约 = status 'B'"],
     )
     q, intent, clar = parse_understand_response(text)
     assert clar is None  # 票 03：模型没产澄清键＝恒 None（宁空勿造的默认形态）
@@ -49,7 +48,6 @@ def test_parse_success_returns_question_and_five_fields():
         "filters": ["已结束"],
         "output_form": "百分比",
         "format_constraint": "保留两位小数",
-        "evidence_terms": ["违约 = status 'B'"],
     }
 
 
@@ -86,7 +84,7 @@ def test_parse_json_without_usable_question_falls_back():
 
 
 def test_parse_bad_intent_yields_all_null_not_failure():
-    """改写成功但意图契约坏掉：保留改写（回退原文反而更差），五字段全 null。"""
+    """改写成功但意图契约坏掉：保留改写（回退原文反而更差），四字段全 null。"""
     q, intent, clar = parse_understand_response('{"question": "改写", "intent": " nonsense"}')
     assert q == "改写"
     assert intent == _NULL_INTENT and clar is None
@@ -112,7 +110,6 @@ def test_parse_normalization_ning_kong_wu_zao():
         "filters": None,
         "output_form": "百分比",
         "format_constraint": None,
-        "evidence_terms": None,
     }
 
 
@@ -153,7 +150,7 @@ def test_parse_clarification_ning_kong_wu_zao_forms():
             payload["clarification"] = bad
         _, intent, clar = parse_understand_response(_full(payload))
         assert clar is None, f"坏形态 {bad!r} 不得被采信"
-        assert intent == _NULL_INTENT  # 顺带钉：五字段照常归一
+        assert intent == _NULL_INTENT  # 顺带钉：四字段照常归一
 
 
 def test_parse_clarification_orthogonal_to_question_failure():
@@ -190,18 +187,8 @@ def test_understand_success_output_shape_and_single_call():
     assert llm.calls == 1  # 载体 A：改写＋意图同一次调用
 
 
-def test_understand_prompt_carries_evidence():
-    recorder = RecorderLLM(["x"])
-    make_nodes(recorder)["understand"]({"question": "谁有全名", "evidence": "全名指 first_name, last_name"})
-    p = recorder.prompts[0]
-    assert "全名指 first_name, last_name" in p  # 无 evidence 明示就抽不出 evidence_terms
-    for field in INTENT_FIELDS:
-        assert field in p  # 五字段契约写进 prompt
-    assert "宁空勿造" in p or "明示" in p
-
-
-# ── 图级（缝 A run_question）：calls 计数与负结果防线 ──────────────
-
+# （test_understand_prompt_carries_evidence 已随 ADR-0008 退役：背景信息段不复存在，
+#   "state 残键零注入"防回吹钉见 tests/test_gssc.py 双跑金标准。）
 
 def test_intent_success_path_zero_extra_calls(fixture_db):
     """载体 A 零新增调用：意图成功路径 calls 与纯文本回退一致（3＝understand+generate+respond）。"""
@@ -224,7 +211,7 @@ def test_generate_never_reads_intent(fixture_db):
                                    evidence_terms=["全名 = first_name, last_name"])):
         script = [understand_reply, "SELECT name FROM students WHERE id = 1", "结论"]
         recorder = RecorderLLM(script)
-        run_question(fixture_db, "谁最好", evidence="口径说明", llm=recorder, settings=_S)
+        run_question(fixture_db, "谁最好", llm=recorder, settings=_S)
         prompts.append(recorder.prompts[1])
     assert prompts[0] == prompts[1]
     assert "题面明示约束" not in prompts[1]

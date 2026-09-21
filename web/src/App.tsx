@@ -377,7 +377,6 @@ function AgentPage({
   const [err, setErr] = useState("");
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
-  const [evidence, setEvidence] = useState("");
   const [presets, setPresets] = useState<string[]>([]);
   const [newQ, setNewQ] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -392,7 +391,6 @@ function AgentPage({
       setAgent(a);
       setName(a.name);
       setDesc(a.description);
-      setEvidence(a.evidence);
       setPresets(a.preset_questions);
     } catch (e) {
       setErr(errMsg(e));
@@ -500,22 +498,7 @@ function AgentPage({
       </section>
 
       <section className="panel">
-        <h3>业务知识（问数时注入的背景口径）</h3>
-        <textarea
-          rows={4}
-          placeholder="每行一条，如：总金额 = sum(loan.amount)；违约 = loan.status='B'"
-          value={evidence}
-          onChange={(e) => setEvidence(e.target.value)}
-        />
-        <div className="row">
-          <button type="button" onClick={() => run(() => patchAgent(id, { evidence }))}>
-            保存业务知识
-          </button>
-        </div>
-      </section>
-
-      <section className="panel">
-        <h3>口径字典（按题面检索注入的片段，权限低于上方业务知识）</h3>
+        <h3>口径字典（回答本题口径的唯一来源，按题面检索注入）</h3>
         <p className="sub">
           进料认 md/txt/csv：一条口径一个空行块（csv 一行一条）；重复导入＝合并去重、
           只增不删——字典是累积资产，清库＝删智能体
@@ -741,10 +724,9 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
     setProgress([]);
     const trail: ProgressEvent[] = [];
     try {
-      // evidence 恒空＝智能体业务知识兜底（口径优先级在后端收口，同票 02.5）；
       // 有待答澄清时本条＝补充，服务端合成续跑（M8 票 03 改判，前端不再拼接）；
-      // discard＝用户显式放弃续答，本条按新话题问
-      const resp = await askStream(id, q, "", (ev) => {
+      // discard＝用户显式放弃续答，本条按新话题问（口径通道＝后端字典，前端零参数，ADR-0008）
+      const resp = await askStream(id, q, (ev) => {
         // 票 08：同节点相邻 thinking 帧并成一块（一次思考＝一条折行块，而非几十帧灌满面板）
         const last = trail[trail.length - 1];
         if (

@@ -187,11 +187,13 @@ def test_broken_datasource_reports_error_not_lies(store, tmp_path):
 # ── 业务知识：手动单态（引用态族测已随 M5 退役删除，ADR-0007）───────
 
 
-def test_business_knowledge_manual_single_source(store):
+def test_business_knowledge_field_retired_inert(store):
+    """ADR-0008：evidence/business_knowledge 键全撤——PATCH 传残键＝忽略不报错、
+    detail 回包无此键、prompt 零注入（见 test_run_question_never_gets_evidence）。"""
     client = _client(None, store)
     a = client.post("/api/agents", json={"name": "金融分析师"}).json()
     b = client.patch(f"/api/agents/{a['id']}", json={"evidence": "自己抄一份"}).json()
-    assert b["business_knowledge"] == "自己抄一份" == b["evidence"]
+    assert b["description"] == "" and "evidence" not in b and "business_knowledge" not in b
 
 
 def test_metrics_ref_request_key_inert(store):
@@ -246,24 +248,20 @@ def test_ask_clarification_round_contract(store, fixture_db):
     assert llm.calls == 1  # 澄清＝最省动路：不进 explore 不进沙箱
 
 
-def test_ask_evidence_precedence(store, fixture_db, monkeypatch):
-    """口径优先级＝请求显式 > 智能体业务知识（手动或派生）> 空。"""
+def test_run_question_never_gets_evidence(store, fixture_db, monkeypatch):
+    """ADR-0008：run_question 调用面永不再收 evidence kwarg（老客户端残键也伤不到）。"""
     seen = []
 
-    def fake_run(db_path, question, evidence="", **kw):
-        seen.append(evidence)
+    def fake_run(db_path, question, **kw):
+        seen.append(kw)
         return Answer(conclusion="ok")
 
     monkeypatch.setattr("qadata.web.app.run_question", fake_run)
-    a = _agent_with_datasource(store, fixture_db, evidence="库口径")
+    a = _agent_with_datasource(store, fixture_db)
     client = _client(ScriptedLLM([]), store)
-    client.post("/api/ask", json={"agent_id": a.id, "question": "题"})
-    client.post("/api/ask", json={"agent_id": a.id, "question": "题", "evidence": "会话输入"})
-    assert seen == ["库口径", "会话输入"]
-    b = store.create("空口径", "")
-    store.store_datasource(b.id, b"x", "s.sqlite")
-    client.post("/api/ask", json={"agent_id": b.id, "question": "题"})
-    assert seen[2] == ""  # 两头都空→如实空（导入库可正常问答）
+    client.post("/api/ask", json={"agent_id": a.id, "question": "题",
+                                  "evidence": "会话输入"})
+    assert len(seen) == 1 and "evidence" not in seen[0]
 
 
 def test_ask_without_datasource_400(store):

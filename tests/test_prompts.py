@@ -11,7 +11,7 @@ from qadata.types import SqlAttempt
 
 
 def test_system_rules_is_static_prefix_of_sql_prompt():
-    p = sql_prompt(schema="SCHEMA_TEXT", evidence="", question="问题")
+    p = sql_prompt(schema="SCHEMA_TEXT", question="问题")
     assert p.startswith(SYSTEM_RULES)  # 缓存纪律：静态规则必须最前
     assert "SCHEMA_TEXT" in p and "问题" in p
 
@@ -24,14 +24,14 @@ def test_system_rules_forbids_stringification_with_questiontext_exemption():
     assert "不字符串化输出" in SYSTEM_RULES
     assert "百分比或小数精度" in SYSTEM_RULES
     assert "不要拼接 %" in SYSTEM_RULES
-    p = sql_prompt(schema="S", evidence="", question="Q")
+    p = sql_prompt(schema="S", question="Q")
     assert "不字符串化输出" in p and p.startswith(SYSTEM_RULES)  # 前缀缓存纪律不变
 
 
 def test_system_rules_forbids_extra_columns():
     """M3 验证跑归因：5 道改坏题 4 道是「多选列」形态（多集匹配下多列即错）。"""
     assert "只选问题需要的列" in SYSTEM_RULES
-    p = sql_prompt(schema="S", evidence="", question="Q")
+    p = sql_prompt(schema="S", question="Q")
     assert "只选问题需要的列" in p and p.startswith(SYSTEM_RULES)
 
 
@@ -91,13 +91,13 @@ def test_compose_conclusion_bare_conclusion():
 
 
 def test_sql_prompt_static_prefix_preserved_with_history():
-    p = sql_prompt("S", "", "Q", history="## 之前的失败尝试\n尝试 1：...")
+    p = sql_prompt("S", "Q", history="## 之前的失败尝试\n尝试 1：...")
     assert p.startswith(SYSTEM_RULES)
     assert "之前的失败尝试" in p
 
 
 def test_sql_prompt_empty_history_no_section():
-    p = sql_prompt("S", "", "Q")
+    p = sql_prompt("S", "Q")
     assert "之前的失败尝试" not in p
 
 
@@ -148,5 +148,5 @@ def test_strip_conclusion_prefix_multiple_layers():
 
 def test_understand_prompt_demands_bare_time_filters():
     """裁决⑧（04→05 移交）：时间类 filters 输出裸时间表达式——否则填槽对英文题面系统性失效。"""
-    p = understand_prompt("原始问题", "ev")
+    p = understand_prompt("原始问题")
     assert "裸时间" in p and "in 1993" in p

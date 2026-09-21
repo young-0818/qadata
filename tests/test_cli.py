@@ -57,20 +57,7 @@ def test_missing_args_exit_nonzero():
     assert e.value.code != 0
 
 
-def test_ask_passes_evidence(fixture_db, monkeypatch):
-    import qadata.cli.main as m
-    from qadata.types import Answer
-
-    captured = {}
-
-    def fake_run_question(db_path, question, evidence="", **kw):
-        captured["evidence"] = evidence
-        return Answer(conclusion="ok", sql="SELECT 1")
-
-    monkeypatch.setattr(m, "run_question", fake_run_question)
-    cli_main.main(["ask", fixture_db, "问题", "--evidence", "A2 = district name"])
-    assert captured["evidence"] == "A2 = district name"
-
+# （M1 CLI --evidence 透传钉已随 ADR-0008 退役删除——flag 不复存在；ask 面零口径参数。）
 
 def test_report_with_types(tmp_path, capsys):
     import json

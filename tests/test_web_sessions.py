@@ -255,25 +255,21 @@ def test_second_ask_carries_l2_and_l1(store, fixture_db):
     assert llm.calls == 6  # 成本条款：多轮与单轮同调用数（3＋3）
 
 
-def test_session_ask_evidence_unchanged(store, fixture_db, monkeypatch):
-    """口径优先级不因会话而变（叠加框裁后回归钉）：请求显式 > 智能体业务知识 > 空
-    ——带 session_id 的问与单轮同语义（票 02.5 原样），会话只供记忆装载。"""
+def test_session_ask_free_of_evidence_kwarg(store, fixture_db, monkeypatch):
+    """ADR-0008 会话面同款：带 session_id 的问，run_question 亦永不收 evidence kwarg
+    （口径通道＝后端字典，会话只供记忆装载）。"""
     seen = []
 
-    def fake_run(db_path, question, evidence="", **kw):
-        seen.append(evidence)
+    def fake_run(db_path, question, **kw):
+        seen.append(kw)
         return Answer(conclusion="ok")
 
     monkeypatch.setattr("qadata.web.app.run_question", fake_run)
-    a = _agent_with_datasource(store, fixture_db, evidence="库口径")
+    a = _agent_with_datasource(store, fixture_db)
     client = _client(ScriptedLLM([]), store)
-    base = {"agent_id": a.id, "question": "题", "session_id": _SID}
-    client.post("/api/ask", json=base)
-    client.post("/api/ask", json={**base, "evidence": "显式口径"})
-    b = store.create("空口径", "")
-    store.store_datasource(b.id, b"x", "s.sqlite")
-    client.post("/api/ask", json={"agent_id": b.id, "question": "题"})
-    assert seen == ["库口径", "显式口径", ""]
+    client.post("/api/ask", json={"agent_id": a.id, "question": "题",
+                                  "session_id": _SID})
+    assert len(seen) == 1 and "evidence" not in seen[0]
 
 
 def test_draft_always_fed_when_last_success_authority_in_prompt(store, fixture_db):

@@ -3,10 +3,9 @@
 钉票面验收全表：
 ① 端到端：相关口径进 generate prompt、无关不进；空字典/缺 embedder/召回炸三路
   降级＋缺档＝逐字节现状姊妹钉（prompt 与无挂接基线等值、llm.calls 不掺账）；
-② 优先级三级行为钉＝落位顺序（请求显式 evidence > 智能体 evidence 字段 > 字典
-  召回块，ADR-0006）——web 层一钉（前两级＝_resolve_ask_target 既有合流、第三级＝
-  字典块垫后）＋图面一钉（evidence 段在字典块前、字典块在参考例题前＝例题
-  「贴用户问题最近」旧位不动）；evidence 既有契约与互斥态钉全数在别档原样绿；
+② 落位钉＝字典块在 schema 后、参考例题前（例题「贴用户问题最近」旧位不动），
+  并钉 evidence 退役键＝请求残键/状态残键零注入（ADR-0008 字典单通道，
+  双跑金标准侧另有防回吹钉）；
 ③ 保险丝「撤字典块」位在 test_budget_fuse 全链扩钉（撤纸条同族、撤例题之前）；
 ④ 账本 knowledge_recall 行形制（hits/pool/model/latency，无 token 标记＝不烧
   生成调用数）＋题面 memo 重试环不翻倍＋过期显式闸（票 04 移交在册：字典路无
@@ -230,19 +229,18 @@ def test_expired_model_gate_explicit(kb_dir, tmp_path):
 # ── ② 优先级落位（图面）＋第四格恒等（select 钉）───────────────────────
 
 
-def test_priority_placement_order_evidence_then_kb_then_examples(fixture_db, kb_dir):
-    """三种料齐备时落位顺序＝evidence（整段权威）> 字典召回块（片段垫后）；
-    参考例题守「贴用户问题最近」旧位不动（M9 论文形态钉不迁）。"""
+def test_kb_then_examples_landing_and_state_residue_inert(fixture_db, kb_dir):
+    """落位钉（ADR-0008 字典单通道）：字典块在 schema 后、参考例题前——例题守
+    「贴用户问题最近」旧位不动（M9 论文形态钉）；状态残键 evidence 零注入防回吹。"""
     llm = ScriptedLLM([Q1, _GOOD_SQL, "共 3 人"])
-    run_question(fixture_db, Q1, evidence="钦定口径：正常贷款以五级分类为准。",
-                 llm=llm, settings=_S,
+    run_question(fixture_db, Q1, llm=llm, settings=_S,
                  knowledge_recall=_recall(kb_dir),
                  recall=lambda q: format_examples_block([("旧问", "SELECT 1")]))
     p = llm.prompts[1]
-    i_ev, i_kb = p.index("## 背景信息"), p.index(KNOWLEDGE_HEADER)
+    i_schema, i_kb = p.index("## 数据库 Schema"), p.index(KNOWLEDGE_HEADER)
     i_ex, i_q = p.index(EXAMPLES_HEADER), p.index("## 用户问题")
-    assert i_ev < i_kb < i_ex < i_q
-    assert "五级分类" in p and REL in p and "SELECT 1" in p  # 三料齐备同框共存
+    assert i_schema < i_kb < i_ex < i_q
+    assert REL in p and "SELECT 1" in p and "背景信息" not in p
 
 
 def test_select_fourth_slot_identity_and_non_generate_untouched():
@@ -321,8 +319,10 @@ def test_knowledge_recall_not_a_state_key():
 # ── ② 三级行为钉（web 层）：请求显式 > 智能体 evidence > 字典块 ─────────
 
 
-def test_three_level_priority_web(store, fixture_db, tmp_path):
-    a = _agent_with_datasource(store, fixture_db, evidence="库口径：智能体钦定")
+def test_kb_channel_web_and_evidence_residue_inert(store, fixture_db, tmp_path):
+    """web 面（ADR-0008）：字典块＝口径唯一注入通道；老客户端多传 evidence 请求残键
+    ＝pydantic 未知键忽略、零注入不报错（退役键读取忽略先例的请求面同款）。"""
+    a = _agent_with_datasource(store, fixture_db)
     entry = "字典口径：贷款状态 'A' 计为正常。"
     src = tmp_path / "d.md"
     src.write_text(entry, encoding="utf-8")
@@ -338,9 +338,8 @@ def test_three_level_priority_web(store, fixture_db, tmp_path):
                                       "evidence": "会话口径：显式输入"})
     assert r.json()["failed"] is False
     p = llm.prompts[1]
-    assert "会话口径：显式输入" in p          # 第一级：请求显式压过智能体字段
-    assert "库口径：智能体钦定" not in p       # （既有合流语义，优先级契约零染指）
-    assert KNOWLEDGE_HEADER in p              # 第三级：字典块共存垫后
-    assert p.index("## 背景信息") < p.index(KNOWLEDGE_HEADER) < p.index("## 用户问题")
+    assert "会话口径：显式输入" not in p       # 退役请求键零注入（不报错、不生效）
+    assert KNOWLEDGE_HEADER in p              # 字典块＝唯一口径料
+    assert p.index("## 数据库 Schema") < p.index(KNOWLEDGE_HEADER) < p.index("## 用户问题")
     assert "字典口径" in p
     assert _kb_rows(tp)[0]["outcome"] == "ok"

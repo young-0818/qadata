@@ -316,8 +316,7 @@ def test_select_identity_when_unwired_or_empty_block():
     assert gssc.select("understand", {}, recall=lambda q: touched.append(q)) == {}
     assert not touched  # 非 generate 场景＝回调不冒泡（只有 SQL 生成吃例题）
     # 未挂接＝逐字节现状（空池＝默认关的装配面本体，金标准 oracle 同串）
-    assert gssc.assemble("generate", slots) == sql_prompt(schema="S", evidence="",
-                                                          question="Q")
+    assert gssc.assemble("generate", slots) == sql_prompt(schema="S", question="Q")
 
 
 # ── ⑥ 注入料吃保险丝：淘汰序新增「撤参考例题」（摘要后、值采样前）────────
@@ -346,6 +345,7 @@ def test_examples_zone_landing_in_generate():
                                        "session_context": None}),
                  examples=EXAMPLES_HEADER + "\n问：历\nSQL：SELECT 1")
     zones = [s.zone for s in gssc.structure("generate", slots)]
-    assert zones == [gssc.Zone.ROLE, gssc.Zone.EVIDENCE, gssc.Zone.EVIDENCE,
+    # 背景信息段已撤（ADR-0008）：ROLE→schema→例题块（EVIDENCE 两格）→TASK→…
+    assert zones == [gssc.Zone.ROLE, gssc.Zone.EVIDENCE,
                      gssc.Zone.EVIDENCE, gssc.Zone.TASK, gssc.Zone.STATE,
                      gssc.Zone.MEMORY, gssc.Zone.OUTPUT]

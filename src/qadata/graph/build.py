@@ -100,7 +100,7 @@ def _honest_failure(e: Exception) -> Answer:
     )
 
 
-def run_question(db_path: str, question: str, evidence: str = "", llm=None,
+def run_question(db_path: str, question: str, llm=None,
                  tracer=None, settings: Settings | None = None, limiter=None,
                  skip_respond: bool = False, on_event=None, session_context=None,
                  thread_id: str | None = None, checkpointer=None, obs=None,
@@ -149,7 +149,7 @@ def run_question(db_path: str, question: str, evidence: str = "", llm=None,
                             checkpointer=checkpointer if hitl else None, hitl=hitl,
                             recall=recall, table_recall=table_recall, value_link=value_link,
                             knowledge_recall=knowledge_recall)
-        initial = {"db_path": db_path, "question": question, "evidence": evidence}
+        initial = {"db_path": db_path, "question": question}
         if session_context is not None:
             initial["session_context"] = session_context
         final = (graph.invoke(initial, {"configurable": {"thread_id": thread_id}})

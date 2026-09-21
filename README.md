@@ -11,7 +11,7 @@ LangGraph 自研状态机，BIRD 基准评测驱动开发（每个数字绑实�
 - **自纠错状态机**：执行失败与校验可疑双条件边驱动重试环，预算 3 次、`attempts` 即账本；SQL 错误规则化分类＋中文修复建议（零 token）注入重试历史。
 - **只读沙箱四层**：只读连接唯一入口 / sqlglot 单语句白名单＋表名校验 / 5s 超时中断＋双行数上限 / sqlite 物理只读。全路径无旁路——模板产出的 SQL 照过四层。
 - **永不编造**：失败路径不调 LLM，输出规则化的诚实失败说明；答案四节中唯一来自模型的只有【结论】（M8 起为报告式 markdown 总结），【数据依据】【口径说明】【校验标注】全部代码组装。
-- **指标层（可选，默认关）**：人工审核的原子指标注册表（口径＝业务词到 SQL 计算的映射）＋两级匹配＋极值机制闸＋填槽渲染模板——Text-to-Metrics 与 Text-to-SQL 双路径并存，命中题直出「人审口径＋血缘」。
+- **口径字典（M10）**：业务口径以条目级切块住智能体目录 `knowledge.yaml`（md/txt/csv 进料、进料即向量化），按题面向量检索 top-K 注入 generate——口径唯一通道（evidence 直塞与 M5 指标注册表已退役，ADR-0007/0008）。
 - **多轮会话记忆**：三层记忆纯函数组装（工作草稿／预算驱动原文窗／全史归档）＋滚存摘要链——滑出窗口的轮懒补冻存逐轮一行、满批折段，无后台任务、短会话与评测形态零触发零花费；每轮附 trail 精简留痕，回放控制台与直播同形。
 - **上下文工程与观测（M9）**：图内一切进模型的内容走 GSSC 装配器唯一出口（字节等价收编，双跑对拍验收）＋tiktoken 预算保险丝（评测永不触发）；OTel 标准出口把进度帧流镜像为 span 树上报 Langfuse（默认 noop，审计账本原地不动）；例题库 hybrid 召回（只进人签题、默认关）。
 - **进度流与图表**：SSE 逐帧直播自纠错过程；图型判定为后端规则纯函数，LLM 不参与排版。
@@ -27,14 +27,14 @@ pip install -e ".[dev]"
 # 配置：填 API Key；QADATA_BASE_URL / QADATA_MODEL 可指向任意 OpenAI 兼容端点
 cp .env.example .env
 
-# 问第一个问题（需要 sqlite 库文件；--evidence 传业务口径）
-qadata ask /path/to/your.sqlite "去年销售额是多少" --evidence "销售额 = SUM(amount)"
+# 问第一个问题（需要 sqlite 库文件；业务口径走智能体的口径字典，ask 无 --evidence）
+qadata ask /path/to/your.sqlite "去年销售额是多少"
 
 # BIRD 评测（数据需自行从 bird-bench 官网下载，不入库）
 qadata eval --questions data/bird/dev/dev.json --db-dir data/bird/dev/dev_databases --sample 100
 
-# 两轮跑分 diff（含题型切片与分路径报告）
-qadata report --baseline runs/A.jsonl --current runs/B.jsonl --types runs/attribution.jsonl --paths
+# 两轮跑分 diff（含题型切片；M5 分路径模式已随指标层退役）
+qadata report --baseline runs/A.jsonl --current runs/B.jsonl --types runs/attribution.jsonl
 
 # Web 演示：先构建前端，再单进程起 API＋页面（同源）
 cd web && npm install && npm run build && cd ..
@@ -45,15 +45,12 @@ qadata serve --port 8000        # 打开 http://localhost:8000 创建智能体�
 
 ### 管线总览
 
-六节点＋一个可选指标层节点的自纠错状态机（双条件边；`metric_match` 为可选节点，默认关时整节点跳过）：
+六节点自纠错状态机（双条件边；M5 可选指标层节点已退役 ADR-0007）：
 
 ```mermaid
 flowchart LR
-    q([question]) --> u[understand<br/>改写＋六字段意图]
-    u -->|默认 · 指标层关| e[explore]
-    u -->|指标层开| mm{metric_match<br/>两级匹配＋极值闸}
-    mm -->|命中 · 填槽渲染模板| x[execute]
-    mm -->|未命中 · 宁漏勿错| e
+    q([question]) --> u[understand<br/>改写＋四字段意图]
+    u --> e[explore]
     e --> g[generate]
     g --> x
     x -->|成功| v[verify<br/>规则校验 · 零 token]
@@ -69,8 +66,7 @@ flowchart LR
 
 | 节点 | 做什么 | 关键纪律 |
 |---|---|---|
-| **understand** | 问题改写为自包含查询意图，同一次调用产出六字段结构化意图（指标提及/维度/过滤/输出形态等） | 「宁空勿造」：字段仅题面明示才填，失败回退原文、不烧预算 |
-| **metric_match**（可选） | 两级匹配人审注册表：确定性别名归一化 → LLM 整表复核；⑨ 极值闸拦「谁最高/第二大」类模板不可答题；填槽渲染 SQL | 宁漏勿错：每级失效跌回兜底路径；解析失败＝未命中 |
+| **understand** | 问题改写为自包含查询意图，同一次调用产出四字段结构化意图（维度/过滤/输出形态/格式约束） | 「宁空勿造」：字段仅题面明示才填，失败回退原文、不烧预算 |
 | **explore** | 选定相关表，注入 schema＋列注释（BIRD database_description 同款） | 表名经 sqlguard 校验，认表也认视图 |
 | **generate** | LLM 生成 SQL；重试时携带失败历史＋中文修复建议 | SYSTEM_RULES 固定 prompt 最前端（吃前缀缓存），动态内容只追加尾部 |
 | **execute** | 沙箱四层内只读执行 | 撞行数上限用 COUNT(*) 报真值，不静默截断 |
@@ -79,9 +75,9 @@ flowchart LR
 
 重试预算不新增状态键：`len(attempts)` 即账本。精准模式（可选，默认关）：同一 prompt 连打 K 发、结果级多数派票决——运行内采样噪声探针实证后保留代码、默认关闭。
 
-### 指标层（Text-to-Metrics，默认关）
+### 口径通道（M10；M5 指标层已退役）
 
-「口径」以人工审核、入库版本管理的注册表（`metrics/<db>.yaml`）为单一真源：每条原子指标登记六要素（定义/别名/SQL 模板/维度槽等），绑定防泄漏护栏（构建时禁读评测答案 SQL）。命中题直出人审口径引用＋血缘一行，零 token 组装。开关 `QADATA_METRIC_LAYER=1`；关态与纯 Text-to-SQL 在路由/调用数/账本/评测字段上逐行为一致。该层的真实价值与命中率由固定考卷判卷（见「评测与结果」）。
+「口径」唯一通道＝**口径字典**：业务条目住智能体目录 `knowledge.yaml`（`qadata knowledge-feed`／web 进料双门，md/txt/csv 条目级切块、进料即向量化），问数时按消解后题面向量检索 top-K（k5/阈 0.45，票 07 定标）注入 generate 的 schema 之后，账本 knowledge_recall 行入账、失败降级照常作答；答案【口径说明】节展示召回条目首行。~~Text-to-Metrics 注册表~~（`metrics/<db>.yaml`＋metric_match 节点＋⑨闸/填槽）2026-09-21 整层退役删除（ADR-0007，判词与历史数字见「评测与结果」轨道①行）；18 条人审口径已并入字典料转世（票 09 段 A）。
 
 ### 多轮会话与三层记忆
 
@@ -117,7 +113,7 @@ OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic <base64(pk:sk)>,x-langfuse-inges
 
 `qadata serve` 单进程同源（FastAPI＋静态产物）：
 
-- **智能体**＝一个数据分析助手：名称/描述＋sqlite 数据源（raw-body 字节流上传，全程零建连）＋业务知识（手动口径或引用指标注册表，二态互斥）。文件即数据库，真空启动零预置。
+- **智能体**＝一个数据分析助手：名称/描述＋sqlite 数据源（raw-body 字节流上传，全程零建连）＋口径字典（knowledge-feed／web 双门进料，ADR-0008 起为口径唯一面）。文件即数据库，真空启动零预置。
 - **问数双端点**：`POST /api/ask`（阻塞）与 `POST /api/ask/stream`（SSE 进度流），响应同一契约工厂产出、逐字段相等钉测；会话轮次两端点同走一个落盘收口。
 - **图表契约**：`chart` 字段由规则纯函数判定（时间列→折线、类别＋数值→柱、单标量→大数卡、其余→表格），前端只管渲染、零形状自判；配色与排版走已验证数据可视化规范。
 - **呈现纪律**：三节分节折叠、校验旗标徽标化（✗失败/降级/⚠截断，label 承载语义不靠颜色单传）、结果值一律 textContent 进 DOM。
@@ -139,15 +135,15 @@ OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic <base64(pk:sk)>,x-langfuse-inges
 
 ```
 src/qadata/
-├── graph/        # 六节点状态机：build / nodes / state / prompts / gssc（装配流水线＋保险丝）/ verify / metrics / intent …
+├── graph/        # 六节点状态机：build / nodes / state / prompts / gssc（装配流水线＋保险丝）/ verify / intent …
 ├── tools/        # 沙箱：db 只读连接 / sqlguard 语句校验 / executor 资源层 / schema
 ├── llm/          # OpenAI 兼容网关 + 限速 + tracing + embeddings 通道（召回向量化）
 ├── obs.py        # OTel 观测出口：帧流→span 镜像（默认 noop）
 ├── assets/       # cl100k_base 词表（计量硬资产，缺失如实炸）
 ├── eval/         # 跑分器 / 判分 / 题型 / 报告 / 变体矩阵
-├── web/          # FastAPI 服务面：app / agents / sessions / examples / charts / feedback / serve
-└── cli/          # ask / eval / report / serve / feedback-export / examples-sign 薄壳
-metrics/          # 人审指标注册表（按库名寻址）
+├── web/          # FastAPI 服务面：app / agents / sessions / charts / feedback / serve
+├── retrieval/      # M10 检索层：表卡 / 值索引 / 口径字典 / 例题召回 / 库指纹档面（升级判据在模块头）
+└── cli/          # ask / eval / report / serve / feedback-export / examples-sign / knowledge-feed / index-build 薄壳
 tests/            # 500+ pytest：ScriptedLLM 假模型、契约测试、AST 级纪律钉测
 web/              # Vite + React + TypeScript 前端（dist 构建产物不入库）
 data/  runs/      # 评测数据与运行产物（不入库）
@@ -161,7 +157,7 @@ data/  runs/      # 评测数据与运行产物（不入库）
 |---|---|---|---|
 | BIRD dev 随机 100 题（seed=42） | **63.0%**（simple 69.4 / moderate 53.6 / challenging 50.0） | qwen3.7-flash | M1 最小闭环基线（无自纠错环），2026-09-02 |
 | 固定 50 题跨库配对集 | 58.0% → 64.0% → 60.0% | deepseek-v4-flash-0731 | 自纠错＋沙箱 / verify 精准化 / M4 终局。末档 60% 为当日低档位运行——**同码同日三档 32→36→29**，端点跨时段漂移 ±4~7 题 ≫ 采样噪声 |
-| 轨道① financial 冻结 50 题：纯 SQL 对照 vs 指标层 | 28 vs 29；**命中率 0/50** | kimi-k2.7-code（同时段配对，同 commit） | Δ+1 落在该端点实测噪声带 ±5 内＝无统计含义；零命中归因＝BIRD 题面普遍是组合约束查询、与 18 条原子口径交集≈0 → **指标层默认保持关**（可开关演示，负结果成文） |
+| 轨道① financial 冻结 50 题：纯 SQL 对照 vs 指标层（**该层已退役 ADR-0007**） | 28 vs 29；**命中率 0/50** | kimi-k2.7-code（同时段配对，同 commit） | Δ+1 落在该端点实测噪声带 ±5 内＝无统计含义；零命中归因＝BIRD 题面普遍是组合约束查询、与 18 条原子口径交集≈0 → **指标层默认保持关**（可开关演示，负结果成文） |
 | 冒烟 10 题固定集 | **10/10** | glm-5.2 | 链路健康闸（非准确率指标），绑 commit f16fc7a；**与模型绑定，换模型必须重建基线** |
 
 方法学约束（比数字本身更重要的产出，均已入项目纪律）：

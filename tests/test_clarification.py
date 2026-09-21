@@ -55,8 +55,7 @@ def test_understand_node_flag_off_ignores_clarification_key():
         {"question": "学生表现如何"})
     assert out == {"original_question": "学生表现如何", "question": "学生的表现如何",
                    "intent": dict.fromkeys(("dimensions", "filters",
-                                            "output_form", "format_constraint",
-                                            "evidence_terms"))}
+                                            "output_form", "format_constraint"))}
     assert "answer" not in out
 
 
@@ -72,12 +71,12 @@ def test_understand_node_marker_gate_not_consumed():
 
 def test_clarify_tail_only_when_on_and_no_marker():
     """指令段形态：关态/带标记态逐字节等于参数加入前；开态无标记才尾追。"""
-    base = understand_prompt("学生表现如何", "口径")
-    assert understand_prompt("学生表现如何", "口径", clarify=False) == base
+    base = understand_prompt("学生表现如何")
+    assert understand_prompt("学生表现如何", clarify=False) == base
     composed = "学生表现如何补充说明：" + _ASK + " 指成绩"
-    assert understand_prompt(composed, "口径", clarify=True) == understand_prompt(
-        composed, "口径", clarify=False)  # 标记闸＝不加段（与关态同形）
-    on = understand_prompt("学生表现如何", "口径", clarify=True)
+    assert understand_prompt(composed, clarify=True) == understand_prompt(
+        composed, clarify=False)  # 标记闸＝不加段（与关态同形）
+    on = understand_prompt("学生表现如何", clarify=True)
     assert on.startswith(base) and "澄清例外" in on and '"clarification"' in on
     assert "不构成" in on  # 负清单在场（值写法/列归属/形态/时间都轮不到回问）
 
@@ -113,9 +112,8 @@ def test_prompt_off_state_byte_identical_in_graph(fixture_db):
     """关态逐字节：flag 关的 understand prompt ＝ understand_prompt(默认参)（今日形态），
     且与开态差异只在尾段（前缀缓存面不动）。"""
     recorder_off = RecorderLLM(_HAPPY)
-    run_question(fixture_db, "Bob 成绩如何", evidence="口径A", llm=recorder_off,
-                 settings=_S_OFF)
-    assert recorder_off.prompts[0] == understand_prompt("Bob 成绩如何", "口径A")
+    run_question(fixture_db, "Bob 成绩如何", llm=recorder_off, settings=_S_OFF)
+    assert recorder_off.prompts[0] == understand_prompt("Bob 成绩如何")
     assert "澄清例外" not in recorder_off.prompts[0]
 
 

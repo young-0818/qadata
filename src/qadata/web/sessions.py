@@ -18,8 +18,8 @@ owner 裁决（2026-09-14）：落盘替代 spec 原「内存 dict/重启丢历�
   可选尾键 digest_lines＋digest_upto 游标，无尾键旧档逐字节现状）。
 - L3 归档＝turns 全史，**永不进 prompt**——切窗只发生在 build_session_context。
 结果集只注摘要（result_head：标量→值；否则头部行）——全量展示行只活在轮次
-answer 载荷里供回放，不进任何上下文。口径注入照旧走请求显式 evidence > 智能体
-业务知识的票 02.5 语义（owner 裁 2026-09-15：撤销会话级口径叠加框）。
+answer 载荷里供回放，不进任何上下文。口径注入＝智能体目录 knowledge.yaml 检索块
+（ADR-0008 字典单通道；evidence 直塞与请求口径字段已退役，票 02.5 优先级语义作废）。
 """
 import uuid
 from dataclasses import dataclass, replace

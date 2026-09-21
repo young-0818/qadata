@@ -4,6 +4,8 @@
 
 ## 指标层
 
+> **整层已退役（2026-09-21，ADR-0007）**——以下词条保留为历史/归档词汇（凭证：`.scratch/qadata-m5/` 与 054388b 起 git 史），不再代表运行系统行为。
+
 **注册表**：
 人工审核、入库版本管理的业务口径字典（`metrics/*.yaml`）。每条登记一个原子指标绑定一个 SQL 模板。
 _Avoid_: 指标平台、指标库
@@ -49,10 +51,10 @@ _Avoid_: 过滤器（与 SQL WHERE 混）
 ## 意图
 
 **意图（Intent）**：
-understand 节点与问题改写同一次调用产出的六字段结构化题面摘要（metric_mention、dimensions、filters、output_form、format_constraint、evidence_terms）。
+understand 节点与问题改写同一次调用产出的四字段结构化题面摘要（dimensions、filters、output_form、format_constraint；metric_mention 随 ADR-0007、evidence_terms 随 ADR-0008 退役）。消费者＝值链搭车抽词。
 
 **宁空勿造**：
-意图字段仅当题面或 evidence 明示时填写，否则留 null——M4-D 让步纪律（规则 5）在抽取层的推广。
+意图字段仅当题面明示时填写，否则留 null——M4-D 让步纪律（规则 5）在抽取层的推广。
 
 ## 澄清（M8 票 03）
 
@@ -151,7 +153,8 @@ _Avoid_: query augmentation、题面增强
 选表的两段分工——检索段防漏料（阈值压宽、top-k 给足），LLM 精选段防错用（窄出），外加外键亲戚确定性补漏。两段不合并：漏料与错选分开记账、判卷才能分开归因。
 
 **口径字典（知识库）**：
-人工上传的业务口径条目召回料池（一条口径一块，不按字数切），跟智能体走。与 evidence 字段**共存**：evidence＝整段权威钦定口径，字典＝按题检索回来的片段；口径优先级＝请求显式 > 智能体 evidence > 字典召回块。"以后只维护字典"是操作迁移（进完料清字段），不是代码拆桥。
+人工上传的业务口径条目召回料池（一条口径一块，不按字数切），跟智能体走（`<智能体目录>/knowledge.yaml`，feed 双门）。**口径唯一通道**（2026-09-21 ADR-0008：evidence 直塞层退役、字段与请求位全撤，老客户端残键读取忽略）；按题检索 top-K 注入 generate，答案【口径说明】展示召回首行。整段钦定口径的需求由「条目入池」承接，不再回塞提示词字段。
+_Avoid_: 文档库（貌似 Word/PDF 解析管道，被否）；FAQ 库
 _Avoid_: 文档库（貌似 Word/PDF 解析管道，被否）；FAQ 库
 
 **双域归属**：
@@ -165,7 +168,7 @@ _Avoid_: 懒建（被否：首问替全库付钱，业界零先例）
 ## 评测
 
 **轨道①（指标考卷）**：
-financial 库按难度分层抽样的 50 题固定集（`tests/m5_financial_ids.json`），量化命中率与分路径准确率。
+financial 库按难度分层抽样的 50 题固定集（`tests/m5_financial_ids.json`），曾量化命中率与分路径准确率（指标层退役后，本卷面仍复用为票 07 轮 1 基线与复跑锚）。
 
 **轨道②（回归闸）**：
 既有 11 库混合 50 题固定集（`tests/m2_compare_ids.json`），守任何改动不引入全局回归。

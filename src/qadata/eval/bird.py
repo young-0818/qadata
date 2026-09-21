@@ -102,9 +102,8 @@ def run_eval(questions_path: str, db_dir: str, sample: int | None = None,
     空＝embedder None＝全部题目走现状路径，逐字节与历史评测一致。
     knowledge_dir（M10 票 05，缺省 None＝字典关＝逐字节历史现状）＝口径字典档目录
     （含 knowledge.yaml，knowledge-feed 落盘处）——字典验收必须经 eval 的通路在此
-    开（spec §二 Q8 两义分家：例题「eval 零触」钉守人签题对防自动吸收，不挡字典）；
-    判卷形态＝扣 evidence 直塞只给字典检索（spec §四 轮 4，evidence 题面字段照喂
-    与否归跑卷参数，本通道只管字典挂不挂）。"""
+    开（spec §二 Q8 两义分家：例题「eval 零触」钉守人签题对防自动吸收，不挡字典）。
+    evidence 直塞层已退役（ADR-0008）：数据集 evidence 字段一律不喂，字典＝口径唯一通道。"""
     questions = load_questions(questions_path, sample=sample, question_ids=question_ids)
     embedder = None
     if getattr(settings, "embed_model", ""):
@@ -253,7 +252,7 @@ def _run_one(q: dict, db_dir: str, llm, max_rows: int, tracer, settings=None,
         # M9 票 01：出口开时一题＝一条 trace，串联键 run_id＋question_id（判卷回查同锚）
         obs = obs_for(settings, q["question"], {
             "run_id": getattr(tracer, "run_id", ""), "question_id": str(q["question_id"])})
-        answer = run_question(str(db_path), q["question"], evidence=q.get("evidence", ""),
+        answer = run_question(str(db_path), q["question"],
                               llm=llm, tracer=tracer, settings=settings, limiter=limiter,
                               skip_respond=skip_respond, obs=obs,
                               table_recall=build_table_recall(str(db_path), embedder,
