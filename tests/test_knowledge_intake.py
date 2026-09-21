@@ -5,28 +5,33 @@
   块内原样），整档 embed＝一次调用（票 06「一次向量化调用＝档面本体」）；
 ② 装载闸——缺档 None／坏档整档如实炸／缺向量（挂账）／坏向量／manifest 缺
   model_id 全走整档报错（examples.yaml 装载闸同形）；
-③ 唯一写入口钉：管理面外源码出现 feed_knowledge 进料即红（零触扫描钉族扩位——
-  本钉守进料侧；消费侧两义分家归票 05）；
+③ 问数路径零进料钉（写入口单源 feed_knowledge；门＝CLI knowledge-feed＋
+  （owner 裁 2026-09-21 web 化前提）web 进料端点，双门共口、禁列见钉内注记）；
 ④ model_id 入档面 manifest：换 embedding 模型＝旧向量作废（整档 embed 天然全重刷）；
 ⑤ 删智能体连带清＋孤儿目录拒建；md/txt/csv 三格式切块＋Word/PDF 拒收；
   缺 embedder＝可落盘但向量化挂账明示（重喂补齐）。
 隔离纪律：全程 tmp_path（票 01 评审家法，真实 data/agents 零染指）。
 """
 import inspect
+import tempfile
 from pathlib import Path
 
 import pytest
 import yaml
+from fastapi.testclient import TestClient
 
+from qadata.config import Settings
 from qadata.retrieval.knowledge import (
     INTAKE_SUFFIXES,
     KNOWLEDGE_FILENAME,
+    PENDING_EMBED_NOTE,
     KnowledgeError,
     feed_knowledge,
     load_knowledge,
 )
 from qadata.web.agents import AgentStore
-from tests.fakes import BoomEmbedder, FakeEmbedder
+from qadata.web.app import create_app
+from tests.fakes import BoomEmbedder, FakeEmbedder, ScriptedLLM
 
 B1 = "正常贷款：贷款状态 'A' 表示正常。"
 B2 = "# 不良率口径\n逾期 90 天以上贷款余额占总贷款余额的比重。"
@@ -212,22 +217,89 @@ def test_orphan_dir_and_agent_delete_cascade(tmp_path):
 
 
 def test_intake_is_management_only():
-    """进料调用出现在管理面（CLI knowledge-feed）之外即红——问数路径永不写档。
-    本钉守**进料侧**（票 04 范围）；消费侧接读归票 05，届时两义分家照例题/值档先例
-    改写本钉禁列，勿扩用成挡查询路（spec §五）。"""
+    """进料调用出现在问数路径即红——查询路永不写档。
+    本钉守**进料侧**（票 04 范围）；禁列随 owner 裁 2026-09-21「web 化前提」收窄：
+    web/app 追加进料门（POST /api/agents/{id}/knowledge 与 CLI 双门共写入口
+    feed_knowledge——写门二、写口一，本钉本意「问数路径永不进料」不受影响），
+    app 端点行为测在 test_web_intake_* 三钉。"""
     import qadata.eval.bird as eval_bird
     import qadata.graph.build as build_mod
     import qadata.graph.gssc as gssc_mod
     import qadata.graph.nodes as nodes_mod
     import qadata.tools.schema as schema_mod
-    import qadata.web.app as app_mod
     import qadata.web.feedback as feedback_mod
     import qadata.web.serve as serve_mod
     import qadata.web.sessions as sessions_mod
 
-    for mod in (build_mod, nodes_mod, gssc_mod, schema_mod, app_mod, serve_mod,
+    for mod in (build_mod, nodes_mod, gssc_mod, schema_mod, serve_mod,
                 eval_bird, sessions_mod, feedback_mod):  # 覆盖面沿 M10 零触先例全表
         assert "feed_knowledge" not in inspect.getsource(mod), mod.__name__
+
+
+# ── 进料 web 门（owner 裁 2026-09-21 web 化前提；双门共写入口）──────────
+
+
+def _web_client(tmp_path, embedder):
+    store = AgentStore(tmp_path / "agents", metrics_dir=tmp_path / "metrics")
+    meta = store.create("字典门")
+    client = TestClient(create_app(
+        llm=ScriptedLLM([]), settings=Settings(api_key="", base_url="", model="m"),
+        agents=store, static_dir="__no_such_dist_for_tests__", embedder=embedder))
+    return store, meta, client
+
+
+def test_web_intake_roundtrip(tmp_path, monkeypatch):
+    """web 门进料＝与 CLI 同语义（合并去重、只增不删；回执整档/新增/向量化）。"""
+    made = []
+    real_mkstemp = tempfile.mkstemp
+
+    def spy(**kw):  # 临时文件留尸钉：记录端点造过的每个 tmp，请求收口后必须全部不在
+        fd, name = real_mkstemp(**kw)
+        made.append(name)
+        return fd, name
+
+    monkeypatch.setattr(tempfile, "mkstemp", spy)
+    store, meta, client = _web_client(tmp_path, _emb())
+    r = client.post(f"/api/agents/{meta.id}/knowledge", params={"name": "d.md"},
+                    content=MD_TEXT.encode("utf-8"))
+    assert r.status_code == 200
+    assert r.json() == {"total": 2, "added": 2, "embedded": 2, "note": ""}
+    assert [e.text for e in load_knowledge(store.agent_dir(meta.id)).entries] == [B1, B2]
+    r2 = client.post(f"/api/agents/{meta.id}/knowledge", params={"name": "d.md"},
+                     content=MD_TEXT.encode("utf-8"))
+    assert r2.json()["added"] == 0  # 重喂幂等（档面纪律在端点面的透传）
+    assert made and all(not Path(n).exists() for n in made)  # finally 清尸（含失败路）
+
+
+def test_web_intake_rejections_human_words(tmp_path):
+    """一切拒绝转人话（CLI 薄壳同形）：坏格式 400 指路、空料 400、无此智能体 404。"""
+    store, meta, client = _web_client(tmp_path, _emb())
+    r = client.post(f"/api/agents/{meta.id}/knowledge", params={"name": "x.docx"},
+                    content=b"fake")
+    assert r.status_code == 400 and "Word" in r.json()["detail"]
+    assert not (store.agent_dir(meta.id) / KNOWLEDGE_FILENAME).exists()  # 拒在落盘前
+    r = client.post(f"/api/agents/{meta.id}/knowledge", params={"name": "e.md"},
+                    content=b"  \n\n  ")
+    assert r.status_code == 400 and "0 条目" in r.json()["detail"]
+    r = client.post("/api/agents/000000000000/knowledge", params={"name": "d.md"},
+                    content=MD_TEXT.encode("utf-8"))
+    assert r.status_code == 404
+
+
+def test_web_intake_pending_note(tmp_path):
+    """缺 embedder＝可落盘、回执 note 回挂账真话——文案与 CLI 黄字共读单源
+    （PENDING_EMBED_NOTE 双消费者，字面漂移即红）。"""
+    import qadata.cli.main as cli_main
+
+    store, meta, client = _web_client(tmp_path, None)
+    r = client.post(f"/api/agents/{meta.id}/knowledge", params={"name": "d.md"},
+                    content=MD_TEXT.encode("utf-8"))
+    body = r.json()
+    assert body["embedded"] == 0 and body["note"] == PENDING_EMBED_NOTE
+    assert (store.agent_dir(meta.id) / KNOWLEDGE_FILENAME).is_file()  # 内容不丢
+    with pytest.raises(KnowledgeError, match="挂账"):  # 装载闸照旧拒读
+        load_knowledge(store.agent_dir(meta.id))
+    assert "PENDING_EMBED_NOTE" in inspect.getsource(cli_main)  # CLI 共读在册
 
 
 def test_constants():

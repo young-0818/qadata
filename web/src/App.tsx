@@ -21,6 +21,7 @@ import {
   patchAgent,
   postFeedback,
   uploadDatasource,
+  uploadKnowledge,
 } from "./api";
 import { ResultChart } from "./Chart";
 // M8 票 07 答案报告化：【结论】＝自由成文的 markdown 小报告，走子集安全渲染器
@@ -387,6 +388,9 @@ function AgentPage({
   const [newQ, setNewQ] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [fileKey, setFileKey] = useState(0);
+  const [kbFile, setKbFile] = useState<File | null>(null);
+  const [kbKey, setKbKey] = useState(0);
+  const [kbMsg, setKbMsg] = useState("");
 
   async function reload() {
     try {
@@ -562,6 +566,42 @@ function AgentPage({
             </div>
           </>
         )}
+      </section>
+
+      <section className="panel">
+        <h3>口径字典（按题面检索注入的片段，权限低于上方业务知识）</h3>
+        <p className="sub">
+          进料认 md/txt/csv：一条口径一个空行块（csv 一行一条）；重复导入＝合并去重、
+          只增不删——字典是累积资产，清库＝删智能体
+        </p>
+        <div className="row">
+          <input
+            key={kbKey}
+            type="file"
+            accept=".md,.txt,.csv"
+            onChange={(e) => setKbFile(e.target.files?.[0] ?? null)}
+          />
+          <button
+            type="button"
+            disabled={!kbFile}
+            onClick={() =>
+              kbFile &&
+              run(async () => {
+                const r = await uploadKnowledge(id, kbFile);
+                // 回执文案后端单源（note＝挂账真话，前端只贴不抄第二份字面量）
+                setKbMsg(
+                  `整档 ${r.total} 条（新增 ${r.added}，向量化 ${r.embedded} 发）` +
+                    (r.note ? `；${r.note}` : ""),
+                );
+                setKbFile(null);
+                setKbKey((k) => k + 1);
+              })
+            }
+          >
+            导入字典
+          </button>
+        </div>
+        {kbMsg && <p className="sub">{kbMsg}</p>}
       </section>
 
       <section className="panel">

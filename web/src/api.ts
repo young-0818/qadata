@@ -137,6 +137,25 @@ export async function uploadDatasource(id: string, file: File): Promise<void> {
   if (!res.ok) throw new Error(await errorText(res, "上传失败"));
 }
 
+// M10 票 05＋（web 化前提）：口径字典进料 web 门（回执文案后端单源，
+// note＝挂账真话，前端只贴不抄）
+export interface KnowledgeFeedResult {
+  total: number;
+  added: number;
+  embedded: number;
+  note: string;
+}
+
+export async function uploadKnowledge(id: string, file: File): Promise<KnowledgeFeedResult> {
+  const params = new URLSearchParams({ name: file.name });
+  const res = await fetch(`/api/agents/${id}/knowledge?${params.toString()}`, {
+    method: "POST",
+    body: file,
+  });
+  if (!res.ok) throw new Error(await errorText(res, "导入失败"));
+  return (await res.json()) as KnowledgeFeedResult;
+}
+
 // 票 03：进度流帧三型（M8 票 06 喂厚，文案后端单源，前端只贴标签）：
 // start 帧三字段不动；结果帧加 ok/duration_ms/tokens_in/tokens_out（chart 可选字段
 // 先例——旧消费者忽略即得）；tool 子事件帧无 attempt/status，kind:"tool" 判别。

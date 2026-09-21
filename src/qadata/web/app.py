@@ -25,9 +25,15 @@ M9 票 05：记忆格换代——两问数端点锁内同源挂 `_catch_up`（�
 M9 票 06：例题库召回挂 `_route_clarification` 单点（`_recall_for` 逐请求现读智能体目录
 内人签档 examples.yaml，embedder 注入＝DI 缝；空池/未配置/坏档/端点挂＝恒等或降级入账，
 问数两端点与 HITL 续答同源，CLI/eval 不经此门）。
+M10 票 05＋（owner 裁 2026-09-21 web 化前提）：口径字典进料开 web 门
+POST /api/agents/{id}/knowledge（raw-body 字节流沿 datasource 同族；与 CLI
+knowledge-feed 双门共写入口 feed_knowledge——写门二、写口一，去重合并语义零新逻辑；
+例题库人签门照旧不开，signed_by 纪律 UI 形态另议）。
 """
 import json
+import os
 import queue
+import tempfile
 import threading
 import uuid
 from dataclasses import dataclass
@@ -45,7 +51,11 @@ from qadata.graph.build import resume_question, run_question
 from qadata.graph.prompts import compose_supplement
 from qadata.obs import obs_for
 from qadata.retrieval.cards import build_table_recall
-from qadata.retrieval.knowledge import build_knowledge_recall
+from qadata.retrieval.knowledge import (
+    PENDING_EMBED_NOTE,
+    build_knowledge_recall,
+    feed_knowledge,
+)
 from qadata.retrieval.values import build_value_link
 from qadata.tools.db import open_readonly
 from qadata.tools.schema import list_tables
@@ -282,6 +292,33 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
         except AgentStoreError as e:
             raise _bad(e) from None
         return {"ok": True}
+
+    @app.post("/api/agents/{agent_id}/knowledge")
+    async def upload_knowledge(agent_id: str, request: Request,
+                               name: str = Query(...,
+                                                 description="原始文件名（仅用于扩展名白名单）"),
+                               ) -> dict[str, Any]:
+        # M10 票 05＋（owner 裁 2026-09-21 web 化前提）：进料 web 门＝与 CLI
+        # knowledge-feed 双门共写入口（feed_knowledge 单源，去重合并只增不删的语义
+        # 零新逻辑；「管理面不留第二写门」的担忧在写入口唯一处天然消解）。
+        # raw-body 字节流沿 datasource 上传同族（不引 multipart）；存在性闸在前、
+        # 一切拒绝转人话（CLI 薄壳同形）；挂账档（缺 embedder）照落盘、note 回真话
+        # （文案与 CLI 黄字共读 PENDING_EMBED_NOTE 单源）。全程零建连、问数路径不碰此门。
+        try:
+            meta = store.get(agent_id)  # 存在性闸在前（AgentNotFound → 404）
+        except AgentStoreError as e:
+            raise _bad(e) from None
+        fd, tmp_name = tempfile.mkstemp(suffix=Path(name).suffix.lower())
+        os.close(fd)  # 句柄即关（Windows 锁文件；feed 按路径重读）
+        try:
+            Path(tmp_name).write_bytes(await request.body())
+            res = feed_knowledge(store.agent_dir(meta.id), Path(tmp_name), embedder)
+        except Exception as e:  # noqa: BLE001 进料面一切拒绝转人话（坏格式/坏编码/空料/端点挂）
+            raise HTTPException(status_code=400, detail=str(e)) from None
+        finally:
+            Path(tmp_name).unlink(missing_ok=True)
+        return {"total": res.total, "added": res.added, "embedded": res.embedded,
+                "note": PENDING_EMBED_NOTE if res.embedded == 0 and res.total else ""}
 
     # ── 票 05：会话面（侧栏列表／重开回放）──────────────────────────────
     # 会话懒建档＝首问落盘才建文件；回放＝问答本体（answer 即契约 payload）

@@ -225,7 +225,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         from qadata.retrieval.knowledge import (
             KNOWLEDGE_FILENAME,  # 档名单源（回执路径不抄第二份字面量）
-            feed_knowledge,  # 逻辑全在包内，CLI 薄壳；唯一进料口
+            PENDING_EMBED_NOTE,  # 挂账文案单源（与 web 进料回执共读）
+            feed_knowledge,  # 逻辑全在包内，CLI 薄壳；写入口单源（web 门＝票 05＋web 化追加）
         )
         from qadata.web.agents import AgentStore
 
@@ -247,8 +248,7 @@ def main(argv: list[str] | None = None) -> int:
         console.print(f"口径字典 整档 {res.total} 条（新增 {res.added}，向量化 {res.embedded} 发）"
                       f" → {store.agent_dir(meta.id) / KNOWLEDGE_FILENAME}")
         if embedder is None:
-            console.print("[yellow]向量化挂账：未配置 QADATA_EMBED_MODEL——内容已落盘不丢，"
-                          "配好模型重喂同一文件即补齐（装载闸拒读挂账档，不静默带病召回）[/yellow]")
+            console.print(f"[yellow]{PENDING_EMBED_NOTE}[/yellow]")
         console.print("提示：进料口唯一——问数路径永不写档（零触钉族）；查询路在票 05 接，"
                       "本票建了没人读是预期（ADR-0004 人进料域，删智能体连带清）")
         return 0

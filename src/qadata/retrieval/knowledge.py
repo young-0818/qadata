@@ -56,6 +56,10 @@ from qadata.web._fs import atomic_write
 
 KNOWLEDGE_FILENAME = "knowledge.yaml"  # 智能体目录内口径字典唯一档名（写入口单源＝feed_knowledge）
 INTAKE_SUFFIXES = frozenset({".md", ".txt", ".csv"})  # 进料白名单（Word/PDF 被否在案）
+# 挂账文案单源（CLI 黄字与 web 进料回执 note 共读＝字面漂移不静默分家；
+# owner 裁 2026-09-21 web 化前提＝进料口双门共写入口）
+PENDING_EMBED_NOTE = ("向量化挂账：未配置 QADATA_EMBED_MODEL——内容已落盘不丢，"
+                      "配好模型重喂同一文件即补齐（装载闸拒读挂账档，不静默带病召回）")
 _BLOCK_SPLIT = re.compile(r"\n[ \t]*\n")  # 空行＝条目边界（块内换行原样保留＝保形）
 
 
