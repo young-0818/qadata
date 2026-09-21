@@ -55,10 +55,10 @@ def _clean_list(value):
 
 
 def parse_understand_response(text):
-    """understand 回复 → (改写问题, 五字段意图 dict 或 None, 澄清问句或 None)。
+    """understand 回复 → (改写问题, 四字段意图 dict 或 None, 澄清问句或 None)。
 
     成功判定：能提取出带非空 question 的 JSON 对象。意图契约坏掉（intent 缺失/非 dict）
-    但改写拿到了时五字段全 null——回退成 JSON 原文反而污染题面，不如留空；
+    但改写拿到了时四字段全 null——回退成 JSON 原文反而污染题面，不如留空；
     question 拿不到＝整体失败：原文当改写问题、意图判 None（行为与接线前逐字节一致）。
 
     M8 票 03 第三元（澄清保险丝，宁空勿造在解析层的形态）：仅当 JSON 对象里

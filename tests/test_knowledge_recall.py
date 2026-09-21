@@ -316,7 +316,7 @@ def test_knowledge_recall_not_a_state_key():
     assert "knowledge_recall" not in AgentState.__annotations__  # 可调用不进状态键
 
 
-# ── ② 三级行为钉（web 层）：请求显式 > 智能体 evidence > 字典块 ─────────
+# ── ② 口径通道钉（web 层）：字典块唯一注入＋请求残键惰性（ADR-0008）──
 
 
 def test_kb_channel_web_and_evidence_residue_inert(store, fixture_db, tmp_path):

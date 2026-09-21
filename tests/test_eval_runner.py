@@ -41,7 +41,7 @@ def test_run_eval_accuracy_with_fake_llm(tmp_path, monkeypatch):
 
     from qadata.graph.build import run_question
 
-    def fake_run_question(db_path_, question_, evidence="", **kw):
+    def fake_run_question(db_path_, question_, **kw):
         calls["n"] += 1
         if calls["n"] == 1:
             llm1 = ScriptedLLM(["q", "SELECT name FROM students", "ok"])
@@ -150,7 +150,7 @@ def test_run_eval_resume_skips_completed(tmp_path, monkeypatch):
     seen = []
     from qadata.types import Answer
 
-    def fake_run_question(db_path_, question_, evidence="", **kw):
+    def fake_run_question(db_path_, question_, **kw):
         seen.append(question_)
         return Answer(conclusion="ok", sql="SELECT 1", failed=False)
 
@@ -178,7 +178,7 @@ def test_run_eval_flush_makes_progress_visible(tmp_path, monkeypatch):
 
     from qadata.types import Answer
 
-    def fake_run_question(db_path_, question_, evidence="", **kw):
+    def fake_run_question(db_path_, question_, **kw):
         if question_ == "q1":
             lines = (tmp_path / "runs" / "eval-last.jsonl").read_text(encoding="utf-8").strip().splitlines()
             assert len(lines) == 1  # q0 已 flush 落盘
@@ -203,7 +203,7 @@ def test_run_eval_concurrent_stale_shards_cleared(tmp_path, monkeypatch):
     clean_intermediate = []
     from qadata.types import Answer
 
-    def fake(db_path_, question_, evidence="", **kw):
+    def fake(db_path_, question_, **kw):
         if question_ == "q0":
             time.sleep(0.5)  # 慢题：其 STALE 分片若未清，将混入首合并中间态
         elif question_ == "q1":
@@ -245,7 +245,7 @@ def test_run_eval_concurrent_creates_shards_and_merged(tmp_path, monkeypatch):
 
     sentinel = object()
 
-    def fake_run_question(db_path_, question_, evidence="", **kw):
+    def fake_run_question(db_path_, question_, **kw):
         calls.append(question_)
         limiters.add(kw.get("limiter"))
         return Answer(conclusion="ok", sql="SELECT 1", failed=False)
@@ -276,7 +276,7 @@ def test_run_eval_concurrent_resume_skips_completed_shards(tmp_path, monkeypatch
     seen = []
     from qadata.types import Answer
 
-    def fake_run_question(db_path_, question_, evidence="", **kw):
+    def fake_run_question(db_path_, question_, **kw):
         seen.append(question_)
         return Answer(conclusion="ok", sql="SELECT 1", failed=False)
 
@@ -293,7 +293,7 @@ def test_run_eval_concurrent_merge_idempotent(tmp_path, monkeypatch):
     _make_three(tmp_path, monkeypatch)
     from qadata.types import Answer
 
-    def fake_run_question(db_path_, question_, evidence="", **kw):
+    def fake_run_question(db_path_, question_, **kw):
         return Answer(conclusion="ok", sql="SELECT 1", failed=False)
 
     monkeypatch.setattr("qadata.eval.bird.run_question", fake_run_question)
@@ -303,7 +303,7 @@ def test_run_eval_concurrent_merge_idempotent(tmp_path, monkeypatch):
     # 第二次 resume：分片齐全 → 零调用，out 内容一字不差
     calls = {"n": 0}
 
-    def counting(db_path_, question_, evidence="", **kw):
+    def counting(db_path_, question_, **kw):
         calls["n"] += 1
         return Answer(conclusion="ok", sql="SELECT 1", failed=False)
 
@@ -320,7 +320,7 @@ def test_run_eval_skip_respond_plumbed(tmp_path, monkeypatch):
     captured = {}
     from qadata.types import Answer
 
-    def fake_run_question(db_path_, question_, evidence="", **kw):
+    def fake_run_question(db_path_, question_, **kw):
         captured["seen"] = captured.get("seen", 0) + 1
         captured["skip_respond"] = kw.get("skip_respond")
         return Answer(conclusion="ok", sql="SELECT 1", failed=False)
@@ -336,7 +336,7 @@ def test_run_eval_concurrent_traces_merged(tmp_path, monkeypatch):
     _make_three(tmp_path, monkeypatch)
     from qadata.types import Answer
 
-    def fake_run_question(db_path_, question_, evidence="", **kw):
+    def fake_run_question(db_path_, question_, **kw):
         tracer = kw.get("tracer")
         if tracer is not None:
             tracer.log("generate", latency_s=0.001, input_tokens=10, output_tokens=5, total_tokens=15)

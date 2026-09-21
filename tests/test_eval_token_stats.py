@@ -37,7 +37,7 @@ def _recs(tmp_path, name="runs/eval-last.jsonl"):
 def _fake_run_question(tmp_ids_fail=()):
     """每题固定记 2 次 LLM 调用（1.5s+0.5s；14/7/21 in/out/total）。"""
 
-    def fake(db_path_, question_, evidence="", **kw):
+    def fake(db_path_, question_, **kw):
         t = kw.get("tracer")
         if t is not None:
             t.log("understand", latency_s=1.5, input_tokens=10, output_tokens=5, total_tokens=15)
@@ -180,7 +180,7 @@ def test_missing_budget_file_refuses_before_any_call(tmp_path, monkeypatch):
     questions_path, db_dir = _setup(tmp_path, monkeypatch)
     seen = {"n": 0}
 
-    def counting(db_path_, question_, evidence="", **kw):
+    def counting(db_path_, question_, **kw):
         seen["n"] += 1
         return Answer(conclusion="c", sql="SELECT name FROM students", failed=False)
 

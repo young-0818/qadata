@@ -581,7 +581,7 @@ function AgentPage({
 const newSid = () => crypto.randomUUID().replace(/-/g, "").slice(0, 12);
 
 // M8 票 03 改判（经典 HITL）：待答澄清时回放恢复用的最小应答体——14 字段照契约
-// 逐字段摆齐（TS 编译器即钉子：第 15 字段来时这里编译不过，逼两侧同步）
+// 逐字段摆齐（TS 编译器即钉子：新字段来时这里编译不过，逼两侧同步；契约现 11 字段，ADR-0007/0008 重数）
 const pendingAskResp = (ask: string, sid: string): AskResponse => ({
   conclusion: ask, sql: null, columns: null, rows: null, truncated: null,
   elapsed_ms: null, failed: false, error_summary: null,

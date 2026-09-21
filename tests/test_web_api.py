@@ -225,12 +225,12 @@ def test_ask_success_contract(store, fixture_db):
     assert body["truncated"] is False and isinstance(body["elapsed_ms"], int)
     assert body["session_id"] is None
     assert body["chart"] is None  # 单格文本非标量数值→其余→表格（null）
-    assert body["clarification"] is None  # 票 03：关态/非澄清轮第 14 字段恒 null
+    assert body["clarification"] is None  # 票 03：关态/非澄清轮 clarification 恒 null（契约现 11 字段，ADR-0007/0008 重数）
     assert llm.calls == 3
 
 
 def test_ask_clarification_round_contract(store, fixture_db):
-    """M8 票 03：澄清轮＝第 14 字段出真值、failed=False（不是失败）、
+    """M8 票 03：澄清轮＝clarification 位出真值、failed=False（不是失败）、
     1 次 LLM 调用直达 END；澄清语即 conclusion（原样一句，非三节组装）。"""
     a = _agent_with_datasource(store, fixture_db)
     ask = "「表现」指成绩还是违约率？"
@@ -241,7 +241,7 @@ def test_ask_clarification_round_contract(store, fixture_db):
                                    static_dir="__no_such_dist_for_tests__"))
     body = client.post("/api/ask",
                        json={"agent_id": a.id, "question": "学生表现如何"}).json()
-    assert set(body) == _CONTRACT_KEYS  # 14 字段形状不扩不缩（一判双达同经本收口）
+    assert set(body) == _CONTRACT_KEYS  # 契约形状不扩不缩（现 11 键；一判双达同经本收口）
     assert body["clarification"] == ask and body["conclusion"] == ask
     assert body["failed"] is False and body["sql"] is None
     assert body["columns"] is None and body["chart"] is None

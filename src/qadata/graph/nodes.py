@@ -195,7 +195,7 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
                 if heads else "")
 
     def understand(state: dict) -> dict:
-        # 载体 A（M5 票 02 立、M9 票 03 值链接手）：改写＋六字段意图同调产出，零新增调用；
+        # 载体 A（M5 票 02 立、M9 票 03 值链接手）：改写＋四字段意图同调产出，零新增调用；
         # 意图入状态供值链搭车抽词（M10 票 03），generate 不读它（尾段注入线④判负已拆，
         # 见 graph/intent.py）；解析失败＝回退纯原文＋intent None，不写 attempts、不烧重试预算。
         # 票 05：L2 会话历史并进这次改写的 prompt（指代消解复用"补全指代"既有机制，零新增调用）
