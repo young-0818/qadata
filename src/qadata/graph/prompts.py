@@ -1,7 +1,7 @@
 """提示词。纪律：SYSTEM_RULES 永远位于 prompt 最前端（吃前缀缓存，见设计文档优化 #7）。
 
 M9 票 03 收编后本模块双角色：①模板字面单源（gssc 长静态块从这里 split 派生）；
-②五个装配函数（understand_prompt/sql_prompt/respond_prompt/metric_review_prompt 与
+②装配函数（understand_prompt/sql_prompt/respond_prompt 与
 schema 选表旧路）原样保留，充当双跑金标准测的参照实现（oracle）——改措辞必须连
 tests/test_gssc.py 一起过（新旧两路 diff 零差异即收编不漂移的铁证）。"""
 from collections.abc import Sequence
@@ -17,15 +17,15 @@ SYSTEM_RULES = """你是一个严谨的数据分析 SQL 专家。规则：
 5. 不字符串化输出：禁止 printf 改变数值的类型；不要拼接 % 等后缀字符；若题面明确要求百分比或小数精度，按题面要求计算并保留（如 *100、保留 N 位小数）。
 6. 只选问题需要的列，不要"顺带"返回多余列；除非问题明确要求全部列。"""
 
-# 载体 A（M5 票 02）：改写＋六字段意图同一次调用产出（零新增调用）；意图唯一消费者
-# 是 metric_match 填槽（票 05）——generate 尾段注入线判负已拆（④裁决，见 graph/intent.py）。
+# 载体 A（M5 票 02）：改写＋意图同一次调用产出（零新增调用）；意图消费者＝值链搭车
+# 抽词（M10 票 03）——generate 尾段注入线判负已拆（④裁决）、metric_match 填槽消费者
+# 已随指标层退役（ADR-0007），见 graph/intent.py。
 # 花括号需双写（.format 模板）；「宁空勿造」纪律写在指令里，防模型推断改坏（M4-B v1 教训）。
 _UNDERSTAND_TMPL = """请把下面的用户问题改写为一句自包含的查询意图：保留原意、补全指代、不要回答问题。
 同时按「宁空勿造」从题面/背景信息中抽取意图字段：每个字段仅当题面或背景信息明示时才填写，否则一律 null，禁止猜测或推断。
 只输出一个 JSON 对象，不要 Markdown 代码块、不要解释、不要多余文字。字段契约：
 {{"question": "改写后的一句话",
  "intent": {{
-  "metric_mention": "问题中指称指标的业务词（如「违约率」），未明示则 null",
   "dimensions": ["题面明示的分组/视角轴（如「按月份」）"],
   "filters": ["题面明示的筛选条件，原样摘录题面措辞词；时间类条件只输出裸时间表达式（如 \"1993\" 而非 \"in 1993\"；另如 \"1993/2\"、\"去年\"），不带介词短语（票 04 裁决⑧：否则填槽的时间解析对英文题面系统性失效）"],
   "output_form": "题面明示的输出形态（如「百分比」「列出全部」「要输出哪几列」）",
@@ -57,43 +57,13 @@ _CLARIFY_TAIL = """
 输出形态或精度未明示（选合理形态作答）、时间范围未给出（按题面处理）。
 能改写、能给出合理 SQL 就不要问。"""
 
-# M5 票 05 第二级 LLM 复核（spec「匹配机制」）：整表装入、只判身份、禁写 SQL。
-# 模板不进 prompt（防照抄、省 token）；⑨闸为 04→05 移交裁决（04 票单 §F.4：
-# 包含路径误命中户均条——具名个体极值/比较题不是聚合口径指标，一律 NONE）。
-_METRIC_REVIEW_TMPL = """你是指标口径审查员。下面是人工审定的指标注册表（每行：内部名｜展示名｜业务含义｜口径定义）。
-判断用户问题所求的指标是否恰好为其中某一条。只输出选中条目的内部名，或输出 NONE；禁止输出 SQL、解释或多余文字。
-规则：
-1. 只能选注册表内已有的内部名；题面指标与某条口径不完全等价、或你拿不准 → NONE（宁漏勿错）。
-2. 题面求具名个体的极值或比较（lowest / highest / top-N / which one / 「最…的账户/客户/地区」）→ 一律判 NONE。
-3. 命中不以题面给出时间/筛选条件为前提——参数填不填得齐由后续填槽裁决，你只判指标身份。
-## 指标注册表
-{table}
-## 背景信息（evidence）
-{evidence}
-## 用户问题
-{question}
-你的输出："""
-
-
-# explore 选表 prompt（M9 票 03 自 tools/schema.py 迁入——五场景模板字面在此统一当家；
+# explore 选表 prompt（M9 票 03 自 tools/schema.py 迁入——四场景模板字面在此统一当家
+# （M5 指标层退役见 ADR-0007，metric_review 模板随删）；
 # gssc split 派生装配，此处保留原样作双跑 oracle）。
 _PICK_PROMPT = (
     "数据库有如下表：{tables}。用户问题：{question}。"
     "请选出回答该问题最可能相关的表名，用英文逗号分隔，只输出表名："
 )
-
-
-def metric_table(metrics: list) -> str:
-    """注册表整表渲染（内部名｜展示名｜含义｜口径逐行）——复核 prompt 的唯一表料。"""
-    return "\n".join(
-        f"- {m.name}｜{m.display_name}｜{m.meaning}｜{m.definition}" for m in metrics
-    )
-
-
-def metric_review_prompt(question: str, evidence: str, metrics: list) -> str:
-    """L2 复核 prompt（旧路／oracle）：整表 ≤18 条一次装入（spec 匹配机制第二级）。"""
-    return _METRIC_REVIEW_TMPL.format(question=question, evidence=evidence or "（无）",
-                                      table=metric_table(metrics))
 
 
 _SQL_TMPL = SYSTEM_RULES + """
@@ -283,17 +253,12 @@ def format_examples_block(pairs: Sequence[tuple[str, str]]) -> str:
     return EXAMPLES_HEADER + "\n" + "\n".join(f"问：{q}\nSQL：{sql}" for q, sql in pairs)
 
 
-def format_failure_history(attempts: list, verify_note: str | None,
-                           metric_note: str | None = None) -> str:
+def format_failure_history(attempts: list, verify_note: str | None) -> str:
     """失败历史摘要（自纠错上下文工程核心素材）：SQL＋错误首行；空列表返回空串。
-
-    metric_note（票 05）：模板降级原因非空时先挂一段——generate 需知「上轮走的是指标模板
-    且已失败」，避免重蹈同一口径写法（降级后仍进本环，走的是常规 SQL 生成）。"""
+    （M5 metric_note 降级段参已随指标层退役删除，ADR-0007。）"""
     if not attempts:
         return ""
     lines = [FAILURE_HISTORY_HEADER]
-    if metric_note:
-        lines.insert(0, f"## 指标模板降级\n{metric_note}")
     last = len(attempts) - 1
     for i, a in enumerate(attempts):
         if a.sql:

@@ -13,7 +13,6 @@ const SHADOW_YUAN_PER_M_TOKENS = 3.9;
 // 帧词汇的展示映射（后端单源文案的贴签层；未知一律直显原文，不硬翻译）
 export const NODE_LABELS: Record<string, string> = {
   understand: "理解问题",
-  metric_match: "指标匹配",
   explore: "探查库表",
   generate: "生成 SQL",
   execute: "执行 SQL",

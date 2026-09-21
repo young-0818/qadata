@@ -257,20 +257,7 @@ def test_respond_failure_path_honest_sections_and_zero_llm():
     assert "【数据依据】无成功执行的查询，无可用结果集" in c
 
 
-def test_respond_failure_path_carries_template_downgrade_note():
-    """失败态校验标注接入模板降级原因（原样、零 LLM）。"""
-    from qadata.types import SqlAttempt
-
-    llm = ScriptedLLM([])
-    state = {"db_path": "unused", "question": "q", "current_sql": None, "result": None,
-             "attempts": [SqlAttempt(sql="SELECT 1", error="boom")],
-             "last_error": "boom", "matched_metric": None,
-             "metric_note": "指标模板「loan_count」执行失败：boom"}
-    out = make_nodes(llm)["respond"](state)
-    assert llm.calls == 0  # 降级原因入校验节是纯展示，零 LLM
-    c = out["answer"].conclusion
-    assert "【校验标注】" in c and "- 指标模板「loan_count」执行失败：boom" in c
-
+# （M5 模板降级标注测已随指标层退役删除，ADR-0007。）
 
 # ── M8 票 07：答案报告化（markdown 结论原样穿三节组装）─────────────
 

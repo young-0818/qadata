@@ -1,11 +1,9 @@
-"""图节点：understand →〔metric_match〕→ explore → generate → execute → verify → respond。
+"""图节点：understand → explore → generate → execute → verify → respond。
 
-M5 票 05：metric_match 为可选插入节点（总开关 Settings.metric_layer，默认关＝现状在
-路由/调用数/账本/评测字段上逐行为一致；票 07 三节展示属两态共用的展示层）。"""
+M5 指标层（metric_match 可选节点）已于 2026-09-21 退役（ADR-0007，票 09 段 B）——
+六节点自纠错状态机为唯一形态。"""
 import re
 import time
-from datetime import date, datetime
-from pathlib import Path
 
 from langgraph.types import interrupt
 
@@ -15,21 +13,10 @@ from qadata.graph.gssc import (
     assemble,
     fuse_ledger_fields,
     gather_generate,
-    gather_metric_review,
     gather_respond,
     gather_understand,
 )
 from qadata.graph.intent import parse_understand_response
-from qadata.graph.metrics import (
-    RegistryError,
-    fill_slots,
-    has_extreme_signal,
-    lineage_text,
-    load_registry,
-    match_metric,
-    parse_metric_review,
-    render_sql,
-)
 from qadata.graph.precise import NO_MAJORITY_ERROR, run_precise_batch
 from qadata.graph.prompts import (
     SUPPLEMENT_MARK,
@@ -38,7 +25,7 @@ from qadata.graph.prompts import (
     strip_conclusion_prefix,
 )
 from qadata.graph.verify import verify_result
-from qadata.llm.tracing import BEIJING, timed_invoke, timed_stream, tool_frame
+from qadata.llm.tracing import timed_invoke, timed_stream, tool_frame
 from qadata.tools.db import open_readonly
 from qadata.tools.executor import execute_sql
 from qadata.tools.schema import build_schema_context
@@ -48,12 +35,6 @@ from qadata.types import Answer, QueryResult, SqlAttempt
 _FENCE_RE = re.compile(r"```[a-zA-Z]*\n(.*?)```", re.DOTALL)
 
 PREVIEW_ROWS = 10  # 喂给 respond prompt 的结果预览行数（表格与 n= 均由此派生）
-
-
-def _today() -> date:
-    """填槽时钟缝：纯函数 fill_slots 不读钟，由节点注入；测试 monkeypatch 本函数。
-    取北京日历日（与 tracing 时间戳同口径），「去年」等相对词按中国时区解析。"""
-    return datetime.now(BEIJING).date()
 
 
 def extract_sql(text: str) -> str:
@@ -170,7 +151,7 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
 
     def _fuse(node: str):
         """保险丝降级入账回调（M9 票 04）：账本一行（budget_fuse，无 token 标记＝
-        不计为 LLM 调用，metric_match outcome 行先例）＋直播 tool 胶囊（控制台/回放/
+        不计为 LLM 调用，recall 行先例）＋直播 tool 胶囊（控制台/回放/
         trace 三出口同帧形，票 01 镜像零改动承接）。仅在真压缩时被装配器调用。"""
         def cb(info: dict) -> None:
             if tracer is not None:
@@ -212,9 +193,9 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         return timed_invoke(llm, prompt, node, tracer, limiter, sink=sink)
 
     def understand(state: dict) -> dict:
-        # 载体 A（M5 票 02）：改写＋六字段意图同调产出，零新增调用；意图只入状态供
-        # metric_match 消费（票 05），generate 不读它（尾段注入线④判负已拆，见 graph/intent.py）；
-        # 解析失败＝回退纯原文＋intent None，不写 attempts、不烧重试预算（§3.7 既定降级语义）。
+        # 载体 A（M5 票 02 立、M9 票 03 值链接手）：改写＋六字段意图同调产出，零新增调用；
+        # 意图入状态供值链搭车抽词（M10 票 03），generate 不读它（尾段注入线④判负已拆，
+        # 见 graph/intent.py）；解析失败＝回退纯原文＋intent None，不写 attempts、不烧重试预算。
         # 票 05：L2 会话历史并进这次改写的 prompt（指代消解复用"补全指代"既有机制，零新增调用）
         # 票 03（M8，默认关）：同一改写调用兼产澄清问（三元组，宁空勿造）——保险丝出口，
         # 关态与今日逐字节一致（prompt 不追加指令段、本节点不写 answer、路由 map 不含 END）。
@@ -251,55 +232,6 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
             _emit("understand", attempt, "理解完成")
         return {"original_question": state["question"], "question": question, "intent": intent}
 
-    def _registry_for(db_path: str):
-        """按库名寻址注册表（metrics/<db>.yaml）；无文件＝None（该库不进指标层）。
-        存在但损坏＝RegistryError 上抛，由 run_question 外层守护收敛为诚实失败
-        （票 03「不带病运行」——静默跳过会让坏文件冒充「未覆盖」骗过兜底 ≥ 基线条款）。"""
-        p = Path(s.metrics_dir) / f"{Path(db_path).stem}.yaml"
-        return load_registry(p) if p.is_file() else None
-
-    def _miss(state: dict, reason: str) -> dict:
-        """未命中统一出口：载荷显式清 None（整值覆盖纪律），零额外 LLM 消耗。"""
-        if tracer is not None:
-            tracer.log("metric_match", outcome="miss", reason=reason)
-        _emit("metric_match", len(state.get("attempts", [])), f"未命中：{reason}")
-        return {"matched_metric": None, "metric_note": None}
-
-    def metric_match(state: dict) -> dict:
-        """两级匹配→填槽→渲染（M5 票 05）。命中写 current_sql 直连 execute；
-        任何未命中形态（无注册表/无意图/两级皆空/填槽失败）走兜底，宁漏勿错。"""
-        metrics = _registry_for(state["db_path"])
-        if metrics is None:
-            return _miss(state, "该库无注册表文件（整节点跳过，零调用）")
-        intent = state.get("intent")
-        if not isinstance(intent, dict):
-            # 票面消费契约：解析失败回退态＝全部题判未命中，行为与 metric_layer=False 一致
-            return _miss(state, "意图解析失败回退态（intent=None）")
-        m = match_metric(intent.get("metric_mention"), metrics)
-        level = "L1"
-        if m is None:  # 第一级确定性未中 → 第二级 LLM 复核整表（禁写 SQL，只判身份）
-            level = "L2"
-            text = timed_invoke(llm, assemble("metric_match",
-                                              gather_metric_review(state, metrics),
-                                              on_compress=_fuse("metric_match")),
-                                "metric_match", tracer, limiter, sink=sink)
-            m = parse_metric_review(text, metrics)
-        if m is None:
-            return _miss(state, "两级匹配未命中（L2 判 NONE 或解析失败）")
-        # ⑨ 闸·机制版（票 06）：极值/比较题形在 L1/L2 任一级命中都撤销——
-        # 「谁最大」要的是明细排序答案，不是聚合口径；L2 指令只守得住 L2 那道门。
-        if has_extreme_signal(state.get("original_question"), state.get("question"),
-                              intent.get("metric_mention"), intent.get("output_form")):
-            return _miss(state, f"⑨ 闸：题形含具名极值/比较，撤销 {m.name} 命中走兜底")
-        fill = fill_slots(m, intent, today=_today())
-        if not fill.ok:
-            return _miss(state, f"{level} 命中 {m.name} 但填槽未过：{fill.reason}")
-        if tracer is not None:
-            tracer.log("metric_match", outcome="hit", metric=m.name, level=level)
-        _emit("metric_match", len(state.get("attempts", [])), f"命中：{m.name}")
-        return {"matched_metric": m.name, "metric_note": None,
-                "current_sql": render_sql(m, fill.params), "last_error": None}
-
     def explore(state: dict) -> dict:
         conn = open_readonly(state["db_path"])
         # 票 03：纸条调在本节点绑定搭车料（question＋intent），build_schema_context
@@ -316,9 +248,7 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         finally:
             conn.close()
         _emit("explore", len(state.get("attempts", [])), "取到 Schema")
-        # matched_metric 显式清 None：兜底路线（含模板降级后进环）不留命中载荷
-        # ——降级恰好一次的闸在此关闭；metric_note 保留（generate 可见＋respond 标注）
-        return {"db_schema": ctx, "matched_metric": None}
+        return {"db_schema": ctx}
 
     def generate(state: dict) -> dict:
         # 票 05：L1 上轮 SQL 草稿进尾部（增量改写参考）——仅素材不进路由，
@@ -407,12 +337,7 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
             msg = str(e)
             attempts.append(SqlAttempt(sql=sql, error=msg))
             _emit("execute", len(attempts), _exec_fail_status(msg), ok=False)
-            out = {"attempts": attempts, "result": None, "last_error": msg}
-            matched = state.get("matched_metric")
-            if matched:
-                # 模板 SQL 失败：入账后降级兜底（路由判 matched_metric → explore）
-                out["metric_note"] = f"指标模板「{matched}」执行失败：{msg.splitlines()[0]}"
-            return out
+            return {"attempts": attempts, "result": None, "last_error": msg}
         _tool("execute", "execute_sql", t0)
         attempts.append(SqlAttempt(sql=sql, row_count=res.row_count))
         _emit("execute", len(attempts), f"执行成功：{res.row_count} 行")
@@ -435,26 +360,13 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
             _emit("verify", attempt, "校验通过")
             return {"verify_note": None}
         _emit("verify", attempt, f"可疑：{verdict.reason}")
-        out = {"verify_note": verdict.reason}
-        matched = state.get("matched_metric")
-        if matched:
-            # 命中但结果可疑：留降级原因（进失败历史与 respond 标注），路由经 explore 降回兜底
-            out["metric_note"] = f"指标模板「{matched}」的结果未通过自动校验：{verdict.reason}"
-        return out
+        return {"verify_note": verdict.reason}
 
     def respond(state: dict) -> dict:
         res = state.get("result")
         sql = state.get("current_sql")
         attempts = state.get("attempts", [])
         fallback_note = None
-        # 评测路径字段（票 05）：matched_metric 非空＝模板作答；matched 已清但 metric_note
-        # 在＝模板降级后由兜底作答（fell_back）；二者皆无＝纯兜底。
-        matched = state.get("matched_metric")
-        metric_note = state.get("metric_note")
-        path_name = "metric" if matched else "fallback"
-        fell_back = matched is None and metric_note is not None
-        route_kwargs = {"path": path_name, "metric_name": matched,
-                        "template_fell_back": fell_back}
         if res is None and attempts and attempts[-1].sql and attempts[-1].error:
             # 执行失败耗尽（非提取失败耗尽，后者必须诚实失败——M2 钉死回归）：
             # 回退重执行最近成功候选，答案不丢失；重执行失败则维持原诚实失败路径
@@ -480,20 +392,17 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
                 conclusion = "\n".join(lines)
             else:
                 conclusion = f"未能完成查询：{state.get('last_error') or '未知错误'}"
-            notes = [metric_note] if metric_note else []
-            # 失败态不走命中指标口径（模板没答出来，展示其口径会误导"已由该口径作答"）
             _emit("respond", len(attempts), "如实报失败", ok=False)
             return {
                 "answer": Answer(
                     conclusion=compose_conclusion(
                         conclusion,
                         basis="无成功执行的查询，无可用结果集（尝试明细见结论）",
-                        caliber=_evidence_caliber(state), notes=notes),
+                        caliber=_evidence_caliber(state), notes=[]),
                     sql=sql,
                     result=None,
                     failed=True,
                     error_summary=state.get("last_error"),
-                    **route_kwargs,
                 )
             }
         preview = res.rows[:PREVIEW_ROWS]  # 预览行只算一次，表格与 n= 同源派生
@@ -514,18 +423,8 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
                 sink=sink,
             )
             conclusion = strip_conclusion_prefix(str(text))
-        # 口径说明节（票 07）：命中→注册表零 token 引用口径与血缘；查不到→evidence 命中项
-        caliber = ""
-        if matched:
-            try:
-                registry = _registry_for(state["db_path"])
-            except RegistryError:
-                registry = None  # 运行中途注册表损坏：已取回的真实数据不受连累，血缘诚实省略
-            m = next((x for x in (registry or []) if x.name == matched), None)
-            if m is not None:
-                caliber = lineage_text(m)
-        if not caliber:
-            caliber = _evidence_caliber(state)
+        # 口径说明节（M5 票 07）：evidence 命中项兜底（注册表血缘分支已随指标层退役，ADR-0007）
+        caliber = _evidence_caliber(state)
         notes = []
         note = state.get("verify_note")
         if note:  # 可疑但预算耗尽：数据真实，如实呈现＋标注（不是假失败）
@@ -536,18 +435,13 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
             notes.append(f"结果已截断：结论仅基于前 {len(preview)} 行预览生成")
         if fallback_note:  # 回退作答：数据真实，如实标注来源
             notes.append(fallback_note)
-        if fell_back and metric_note and not fallback_note:  # 模板降级由兜底 SQL 作答，如实标注
-            # fallback_note 已置＝答案实为 _last_good_sql 复活的（可能是模板本身），
-            # 此时再称"由兜底路径生成"会与实际数据矛盾（数字诚实），交回退标注说明即可
-            notes.append(f"{metric_note}，最终答案由兜底路径生成")
         _emit("respond", len(attempts), "作答完成")
         return {"answer": Answer(
             conclusion=compose_conclusion(conclusion, _basis_line(res, sql), caliber, notes),
-            sql=sql, result=res, failed=False, **route_kwargs)}
+            sql=sql, result=res, failed=False)}
 
     return {
         "understand": _wrap("understand", understand),
-        "metric_match": _wrap("metric_match", metric_match),
         "explore": _wrap("explore", explore),
         "generate": _wrap("generate", generate),
         "execute": _wrap("execute", execute),

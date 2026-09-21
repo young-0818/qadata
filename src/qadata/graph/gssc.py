@@ -12,7 +12,7 @@ Gather 收齐候选（gather_*＝读状态、格式化素材，节点侧不再�
 → Compress 预算压缩（M9 票 04 tiktoken 保险丝在此入住，见下方 FUSE 段）。
 
 本票＝纯结构收编：模板措辞零改动、路由/调用数/账本/prompt 文本逐字节原样。
-字节等价验收＝tests/test_gssc.py 五场景「装配器出口 vs 旧路」双跑 diff 零差异；
+字节等价验收＝tests/test_gssc.py 四场景「装配器出口 vs 旧路」双跑 diff 零差异（M5 metric_match 场景已退役，ADR-0007）；
 prompts.py 的旧装配函数（understand_prompt 等）原样保留充当参照实现（oracle）。
 长静态块（JSON 契约/审查员规则/报告指令/选表一行）从现有模板 split 派生——字面
 单源零重抄（compose_supplement／tool_frame 先例）；短节头脚手架此处重写，漂移由
@@ -24,7 +24,6 @@ from typing import NamedTuple
 
 from qadata.graph.prompts import (
     _CLARIFY_TAIL,
-    _METRIC_REVIEW_TMPL,
     _PICK_PROMPT,
     _RESPOND_TMPL,
     _UNDERSTAND_TMPL,
@@ -39,7 +38,6 @@ from qadata.graph.prompts import (
     format_failure_history,
     format_session_draft,
     format_session_history,
-    metric_table,
 )
 
 
@@ -68,7 +66,6 @@ _U_HEAD = _U_HEAD.format()
 _U_Q, _u_after = _u_tail.split("{question}", 1)
 _U_EV, _ = _u_after.split("{evidence}", 1)
 
-_M_HEAD = _METRIC_REVIEW_TMPL.split("\n## 指标注册表\n", 1)[0]
 _R_HEAD = _RESPOND_TMPL.split("\n## 用户问题\n", 1)[0]
 _P0, _p1 = _PICK_PROMPT.split("{tables}", 1)
 _P1, _P2 = _p1.split("{question}", 1)
@@ -98,18 +95,8 @@ def gather_generate(state: dict) -> dict[str, str]:
         "evidence": state.get("evidence", ""),
         "question": state["question"],
         "failure_history": format_failure_history(
-            state.get("attempts", []), state.get("verify_note"),
-            state.get("metric_note")),
+            state.get("attempts", []), state.get("verify_note")),
         "draft": format_session_draft(state.get("session_context")),
-    }
-
-
-def gather_metric_review(state: dict, metrics: list) -> dict[str, str]:
-    """metric_match（L2 复核）候选：整表渲染＋口径＋题面。"""
-    return {
-        "table": metric_table(metrics),
-        "evidence": state.get("evidence", ""),
-        "question": state["question"],
     }
 
 
@@ -170,7 +157,6 @@ def select(scenario: str, slots: dict[str, str], *, recall=None,
 FUSE_TOKENS: dict[str, int] = {
     "understand": 4293,    # 账本最大 1431 × 3
     "generate": 15645,     # 5215 × 3
-    "metric_match": 3954,  # 1318 × 3
     "respond": 17628,      # 5876 × 3
     "explore": 522,        # 174 × 3
 }
@@ -406,16 +392,6 @@ def _structure_generate(p: dict[str, str]) -> list[Section]:
     return sections
 
 
-def _structure_metric_review(p: dict[str, str]) -> list[Section]:
-    return [
-        Section(Zone.ROLE, _M_HEAD),
-        Section(Zone.EVIDENCE, "\n## 指标注册表\n" + p["table"]),
-        Section(Zone.EVIDENCE, "\n## 背景信息（evidence）\n" + (p["evidence"] or "（无）")),
-        Section(Zone.TASK, "\n## 用户问题\n" + p["question"]),
-        Section(Zone.OUTPUT, "\n你的输出："),
-    ]
-
-
 def _structure_respond(p: dict[str, str]) -> list[Section]:
     return [
         Section(Zone.ROLE, _R_HEAD),
@@ -439,7 +415,6 @@ def _structure_schema_pick(p: dict[str, str]) -> list[Section]:
 _STRUCTURE = {
     "understand": _structure_understand,
     "generate": _structure_generate,
-    "metric_match": _structure_metric_review,
     "respond": _structure_respond,
     "explore": _structure_schema_pick,
 }
@@ -449,7 +424,7 @@ def structure(scenario: str, slots: dict[str, str]) -> list[Section]:
     try:
         build = _STRUCTURE[scenario]
     except KeyError:
-        raise KeyError(f"未登记的 prompt 场景：{scenario!r}——收编出口只认五场景") from None
+        raise KeyError(f"未登记的 prompt 场景：{scenario!r}——收编出口只认四场景（metric_match 场景已退役 ADR-0007）") from None
     return build(slots)
 
 

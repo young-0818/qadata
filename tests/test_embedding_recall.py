@@ -47,7 +47,7 @@ from tests.test_web_api import _HAPPY_SCRIPT, _S, _agent_with_datasource
 
 @pytest.fixture
 def store(tmp_path):
-    return AgentStore(tmp_path / "agents", metrics_dir=tmp_path / "metrics")
+    return AgentStore(tmp_path / "agents")
 
 
 def _pair(q, sql, vec, by="owner"):

@@ -190,7 +190,7 @@ def _wired_kwargs(monkeypatch, fixture_db, value_sampling: bool):
     nodes = make_nodes(ScriptedLLM([]), settings=Settings(
         api_key="", base_url="", model="", value_sampling=value_sampling))
     out = nodes["explore"]({"db_path": fixture_db, "question": "q"})
-    assert out == {"db_schema": "CTX", "matched_metric": None}
+    assert out == {"db_schema": "CTX"}
     return seen["sample_values"]
 
 

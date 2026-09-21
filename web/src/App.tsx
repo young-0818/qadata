@@ -16,7 +16,6 @@ import {
   getSession,
   getModel,
   listAgents,
-  listRegistries,
   listSessions,
   patchAgent,
   postFeedback,
@@ -173,10 +172,9 @@ function AnswerBubble({
     <div className={`bubble agent${resp.failed ? " failed" : ""}`}>
       {/* 票 04：校验旗标以徽标呈现（label 承载语义，不靠颜色单传）；
           M8 票 03：澄清轮徽标——直接打字回答即可（下一问前端自动合成补充说明） */}
-      {(resp.failed || resp.template_fell_back || resp.truncated || resp.clarification) && (
+      {(resp.failed || resp.truncated || resp.clarification) && (
         <div className="badges">
           {resp.failed && <span className="badge danger">✗ 失败</span>}
-          {resp.template_fell_back && <span className="badge warn">⚠ 模板降级</span>}
           {resp.truncated && <span className="badge warn">⚠ 已截断</span>}
           {resp.clarification && <span className="badge warn">？ 待澄清</span>}
         </div>
@@ -227,8 +225,6 @@ function AnswerBubble({
         </>
       )}
       <div className="meta">
-        <span>{resp.path === "metric" ? "指标命中" : "兜底路线"}</span>
-        {resp.metric_name && <span>· {resp.metric_name}</span>}
         {resp.elapsed_ms !== null && <span>· {resp.elapsed_ms} ms</span>}
         {/* 票 05：session_id 出真值＝本轮活在会话里；null＝单轮请求照旧 */}
         <span>· {resp.session_id === null ? "单轮" : "会话"}</span>
@@ -378,12 +374,10 @@ function AgentPage({
   onHome: () => void;
 }) {
   const [agent, setAgent] = useState<AgentDetail | null>(null);
-  const [registries, setRegistries] = useState<string[]>([]);
   const [err, setErr] = useState("");
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
   const [evidence, setEvidence] = useState("");
-  const [refSel, setRefSel] = useState("");
   const [presets, setPresets] = useState<string[]>([]);
   const [newQ, setNewQ] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -399,16 +393,13 @@ function AgentPage({
       setName(a.name);
       setDesc(a.description);
       setEvidence(a.evidence);
-      setRefSel(a.metrics_ref);
       setPresets(a.preset_questions);
-      setErr(a.business_knowledge_error ? `业务知识：${a.business_knowledge_error}` : "");
     } catch (e) {
       setErr(errMsg(e));
     }
   }
   useEffect(() => {
     reload();
-    listRegistries().then(setRegistries).catch(() => setRegistries([]));
     // 依赖只认 id：换智能体重载，reload 闭包引用是稳定的
   }, [id]);
 
@@ -432,8 +423,6 @@ function AgentPage({
       </div>
     );
   }
-  const referencing = agent.metrics_ref !== "";
-
   return (
     <div className="page detail">
       <div className="detail-head">
@@ -512,60 +501,17 @@ function AgentPage({
 
       <section className="panel">
         <h3>业务知识（问数时注入的背景口径）</h3>
-        {referencing ? (
-          <>
-            <p className="sub">
-              引用指标注册表 <b>{agent.metrics_ref}</b> · 每次问数读取期派生（注册表改则随动，无双写）
-            </p>
-            <pre className="kb-preview">{agent.business_knowledge}</pre>
-            <div className="row">
-              <button
-                type="button"
-                onClick={() => run(() => patchAgent(id, { metrics_ref: "" }))}
-              >
-                解除引用，改手动
-              </button>
-            </div>
-          </>
-        ) : (
-          <>
-            <textarea
-              rows={4}
-              placeholder="每行一条，如：总金额 = sum(loan.amount)；违约 = loan.status='B'"
-              value={evidence}
-              onChange={(e) => setEvidence(e.target.value)}
-            />
-            <div className="row">
-              <button type="button" onClick={() => run(() => patchAgent(id, { evidence }))}>
-                保存业务知识
-              </button>
-              {registries.length > 0 && (
-                <span className="row">
-                  或引用指标注册表{" "}
-                  <select value={refSel} onChange={(e) => setRefSel(e.target.value)}>
-                    <option value="">（选择）</option>
-                    {registries.map((r) => (
-                      <option key={r} value={r}>
-                        {r}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    disabled={!refSel}
-                    onClick={() =>
-                      // 单发 PATCH：清手动＋设引用一次合并提交（存储层合并后过双写校验），
-                      // 两次调用会留"手动口径已抹、引用失败"的中间窗（评审收紧）
-                      run(() => patchAgent(id, { evidence: "", metrics_ref: refSel }))
-                    }
-                  >
-                    引用
-                  </button>
-                </span>
-              )}
-            </div>
-          </>
-        )}
+        <textarea
+          rows={4}
+          placeholder="每行一条，如：总金额 = sum(loan.amount)；违约 = loan.status='B'"
+          value={evidence}
+          onChange={(e) => setEvidence(e.target.value)}
+        />
+        <div className="row">
+          <button type="button" onClick={() => run(() => patchAgent(id, { evidence }))}>
+            保存业务知识
+          </button>
+        </div>
       </section>
 
       <section className="panel">
@@ -655,8 +601,8 @@ const newSid = () => crypto.randomUUID().replace(/-/g, "").slice(0, 12);
 // 逐字段摆齐（TS 编译器即钉子：第 15 字段来时这里编译不过，逼两侧同步）
 const pendingAskResp = (ask: string, sid: string): AskResponse => ({
   conclusion: ask, sql: null, columns: null, rows: null, truncated: null,
-  elapsed_ms: null, failed: false, error_summary: null, path: "fallback",
-  metric_name: null, template_fell_back: false, session_id: sid, chart: null,
+  elapsed_ms: null, failed: false, error_summary: null,
+  session_id: sid, chart: null,
   clarification: ask,
 });
 

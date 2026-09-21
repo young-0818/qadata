@@ -24,14 +24,12 @@ from qadata.config import Settings, load_settings
 from qadata.graph import gssc
 from qadata.graph.build import run_question
 from qadata.graph.gssc import count_tokens
-from qadata.graph.metrics import load_registry
 from qadata.graph.prompts import (
     _PICK_PROMPT,
     TRUNCATION_HINT,
     format_failure_history,
     format_session_draft,
     format_session_history,
-    metric_review_prompt,
     respond_prompt,
     sql_prompt,
     understand_prompt,
@@ -103,21 +101,11 @@ def test_generate_realistic_form_never_triggers():
     assert _no_trigger("generate",
                        gssc.gather_generate({"question": q, "evidence": _EV,
                                              "db_schema": schema, "attempts": attempts,
-                                             "verify_note": vn, "metric_note": None,
+                                             "verify_note": vn,
                                              "session_context": _CTX}),
                        sql_prompt(schema=schema, evidence=_EV, question=q,
-                                  history=format_failure_history(attempts, vn, None),
+                                  history=format_failure_history(attempts, vn),
                                   draft=format_session_draft(_CTX))) > 3000
-
-
-def test_metric_match_realistic_form_never_triggers():
-    metrics = load_registry(Path("metrics/financial.yaml"))  # 票 04 定稿 18 条整表
-    assert len(metrics) == 18
-    q = "去年各季度贷款违约率是多少，用百分比表示"
-    assert _no_trigger("metric_match",
-                       gssc.gather_metric_review({"question": q, "evidence": _EV},
-                                                 metrics),
-                       metric_review_prompt(q, _EV, metrics)) > 300
 
 
 def test_respond_realistic_form_never_triggers():
@@ -168,7 +156,7 @@ def test_eviction_order_memory_then_samples_then_history(monkeypatch):
     events = []
     slots = gssc.gather_generate({
         "question": "有几名学生", "evidence": "", "db_schema": schema,
-        "attempts": attempts, "verify_note": None, "metric_note": None,
+        "attempts": attempts, "verify_note": None,
         "session_context": {"turns": [],
                             "draft": {"sql": "SELECT " + "draft_body " * 60,
                                       "head": "标量值 3"}}})
@@ -219,7 +207,7 @@ def test_full_eviction_chain_includes_sticker_and_knowledge(monkeypatch):
     monkeypatch.setitem(gssc.FUSE_TOKENS, "generate", 1)  # 逼到全链走一遍
     slots = dict(gssc.gather_generate({
         "question": "有几名学生", "evidence": "", "db_schema": schema,
-        "attempts": attempts, "verify_note": None, "metric_note": None,
+        "attempts": attempts, "verify_note": None,
         "session_context": {"turns": [],
                             "draft": {"sql": "SELECT " + "draft_body " * 40,
                                       "head": "标量值 3"}}}),
@@ -334,7 +322,7 @@ def test_all_sites_wired_to_fuse_sink():
     import qadata.graph.nodes as nodes_mod
     import qadata.tools.schema as schema_mod
     nsrc, ssrc = inspect.getsource(nodes_mod), inspect.getsource(schema_mod)
-    assert len(re.findall(r"on_compress=_fuse\(", nsrc)) == 4, "graph 四场景挂点"
+    assert len(re.findall(r"on_compress=_fuse\(", nsrc)) == 3, "graph 三场景挂点（metric_match 随 ADR-0007 退役）"
     assert "on_compress=_on_compress" in ssrc and '"budget_fuse"' in ssrc, "explore 挂点"
     console = Path("web/src/Console.tsx").read_text(encoding="utf-8")
     assert 'budget_fuse: "预算保险丝"' in console, "前端胶囊标签在册（label 承载语义）"

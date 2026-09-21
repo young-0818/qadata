@@ -12,9 +12,7 @@ export interface AskResponse {
   elapsed_ms: number | null;
   failed: boolean;
   error_summary: string | null;
-  path: "metric" | "fallback"; // 与 Answer.path 取值域对齐（M5 票 05）
-  metric_name: string | null;
-  template_fell_back: boolean;
+  // M5 path/metric_name/template_fell_back 三键已随指标层退役删除（ADR-0007）
   session_id: string | null; // 票 05：带会话即回显请求所带 sid；单轮＝null
   chart: ChartSpec | null; // 票 04：后端规则纯函数判定的图型，null＝表格
   clarification: string | null; // M8 票 03（默认关恒 null）：澄清轮问句本体——非失败非答案；
@@ -54,9 +52,7 @@ export interface AgentDetail {
   name: string;
   description: string;
   evidence: string; // 手动业务知识（后端字段名沿用 evidence，UI 叫业务知识）
-  metrics_ref: string; // 非空＝引用态：业务读取期派生，手动编辑被后端拒绝
-  business_knowledge: string; // 实际生效的业务知识（引用态＝派生文本）
-  business_knowledge_error: string | null;
+  business_knowledge: string; // ＝evidence 直读别名（引用态派生已随 ADR-0007 退役）
   preset_questions: string[];
   datasource: DatasourceInfo;
 }
@@ -88,12 +84,6 @@ export function getModel(): Promise<ModelCard> {
   return getJson<ModelCard>("/api/model");
 }
 
-export function listRegistries(): Promise<string[]> {
-  return getJson<{ registries: string[] }>("/api/metrics-registries").then(
-    (b) => b.registries,
-  );
-}
-
 export function listAgents(): Promise<AgentSummary[]> {
   return getJson<{ agents: AgentSummary[] }>("/api/agents").then((b) => b.agents);
 }
@@ -113,7 +103,7 @@ export function createAgent(name: string, description: string): Promise<AgentDet
 // 部分更新：只发显式字段（PATCH 语义由后端 model_fields_set 钉）
 export function patchAgent(
   id: string,
-  fields: Partial<Pick<AgentDetail, "name" | "description" | "evidence" | "metrics_ref" | "preset_questions">>,
+  fields: Partial<Pick<AgentDetail, "name" | "description" | "evidence" | "preset_questions">>,
 ): Promise<AgentDetail> {
   return sendJson<AgentDetail>(`/api/agents/${id}`, {
     method: "PATCH",

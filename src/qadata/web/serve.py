@@ -54,7 +54,7 @@ def index_announcements(store: AgentStore, embed_model: str, *,
 def run_server(host: str = "127.0.0.1", port: int = 8000,
                agents_dir: str = DEFAULT_AGENTS_DIR) -> None:
     settings = load_settings()  # 缺密钥在这里诚实报错（.env 参照 .env.example）
-    store = AgentStore(agents_dir, metrics_dir=settings.metrics_dir)
+    store = AgentStore(agents_dir)
     # M9 票 06：embed_model 为空＝召回未配置（例题库有货也如实入账不召回）；有＝建通道
     embedder = build_embedder(settings) if settings.embed_model else None
     app = create_app(llm=build_llm(settings), settings=settings, agents=store,

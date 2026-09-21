@@ -365,7 +365,7 @@ def test_eval_wired_cli_not():
 
 
 def test_serve_announcement_reads_value_index(tmp_path, fixture_db, ix):
-    store = AgentStore(tmp_path / "agents", metrics_dir=tmp_path / "metrics")
+    store = AgentStore(tmp_path / "agents")
     a = store.create("学校")
     p = store.store_datasource(a.id, Path(fixture_db).read_bytes(), "school.sqlite")
     vf = index_dir_for(p, root=ix) / VALUE_FILENAME

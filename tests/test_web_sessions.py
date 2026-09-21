@@ -62,7 +62,7 @@ def _turn(q, sql=_SQL1, failed=False, row_count=1, head="标量值 120", ts="202
 
 @pytest.fixture
 def store(tmp_path):
-    return AgentStore(tmp_path / "agents", metrics_dir=tmp_path / "metrics")
+    return AgentStore(tmp_path / "agents")
 
 
 @pytest.fixture

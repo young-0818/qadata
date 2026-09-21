@@ -1,9 +1,8 @@
 """M7-rev2 票 02.5：智能体存储——一只智能体＝一个目录（真空启动，零预置）。
 
 data/agents/<uuid12>/{meta.yaml, source.sqlite}。名称是展示属性可重复、
-uuid 才是键；删智能体＝删目录，生命周期零悬挂。业务知识双态互斥：
-手动 evidence 文本，或 metrics_ref 引用指标注册表——**引用态读取期派生**
-（口径随注册表动，比票 02 的加载期抄写更彻底：没有第二份文本存在）。
+uuid 才是键；删智能体＝删目录，生命周期零悬挂。指标注册表引用态（metrics_ref）
+已随 M5 退役（ADR-0007）；旧 meta.yaml 残留键读取忽略（M7 退役键先例，兼容测在册）。
 数据源＝浏览器上传唯一路，固定落盘 source.sqlite（原始文件名不进文件系统，
 恶意名/路径穿越问题整体消失）；换库＝覆盖。本模块只搬文件，从不建数据库
 连接——三层唯一入口钉测（AST 禁 sqlite3／导入零建连／问答走 open_readonly）
@@ -17,7 +16,6 @@ from pathlib import Path
 
 import yaml
 
-from qadata.graph.metrics import Metric, load_registry
 from qadata.web._fs import atomic_write
 
 # 智能体数据目录（仓库根 cwd 约定；data/ 已在 .gitignore，不入库）
@@ -51,7 +49,6 @@ class AgentMeta:
     name: str
     description: str = ""
     evidence: str = ""  # 手动业务知识（后端字段名沿用 evidence＝BIRD/CLI 语境，UI 叫业务知识）
-    metrics_ref: str = ""  # 指标注册表引用名；非空即引用态，evidence 必为空
     preset_questions: tuple[str, ...] = ()
 
 
@@ -59,11 +56,10 @@ _MISSING = object()
 
 
 class AgentStore:
-    """文件即数据库：meta.yaml 人可读可审（metrics/ 同款纪律），无索引大文件。"""
+    """文件即数据库：meta.yaml 人可读可审，无索引大文件。"""
 
-    def __init__(self, root: str | Path, *, metrics_dir: str | Path = "metrics"):
+    def __init__(self, root: str | Path):
         self._root = Path(root)
-        self._metrics_dir = Path(metrics_dir)
 
     # ── 查询 ────────────────────────────────────────────────────────
 
@@ -77,25 +73,9 @@ class AgentStore:
     def get(self, agent_id: str) -> AgentMeta:
         return self._load(self._dir_of(agent_id))
 
-    def registries(self) -> list[str]:
-        """可引用的指标注册表名（metrics/*.yaml 文件主干）。"""
-        if not self._metrics_dir.is_dir():
-            return []
-        return sorted(p.stem for p in self._metrics_dir.glob("*.yaml"))
-
     def datasource_path(self, meta: AgentMeta) -> Path | None:
         p = self._dir_of(meta.id) / _DATASOURCE_FILENAME
         return p if p.is_file() else None
-
-    def effective_evidence(self, meta: AgentMeta) -> str:
-        """问数实际注入的业务知识：引用态→读取期派生；手动态→原文。"""
-        if meta.metrics_ref:
-            f = self._metrics_dir_file(meta.metrics_ref)
-            if not f.is_file():
-                raise AgentStoreError(
-                    f"引用的指标注册表不存在：metrics/{meta.metrics_ref}.yaml")
-            return metric_evidence_text(meta.metrics_ref, load_registry(f))
-        return meta.evidence
 
     # ── 变更 ────────────────────────────────────────────────────────
 
@@ -109,7 +89,7 @@ class AgentStore:
         return meta
 
     def patch(self, agent_id: str, **fields) -> AgentMeta:
-        """部分更新：只动传入字段。引用/手动双写在此互斥（护栏见 _validated）。"""
+        """部分更新：只动传入字段。"""
         meta = self.get(agent_id)
         merged = meta
         if (v := fields.get("name", _MISSING)) is not _MISSING:
@@ -118,11 +98,8 @@ class AgentStore:
             merged = replace(merged, description=self._checked_desc(v))
         if (v := fields.get("evidence", _MISSING)) is not _MISSING:
             merged = replace(merged, evidence=str(v or ""))
-        if (v := fields.get("metrics_ref", _MISSING)) is not _MISSING:
-            merged = replace(merged, metrics_ref=str(v or "").strip())
         if (v := fields.get("preset_questions", _MISSING)) is not _MISSING:
             merged = replace(merged, preset_questions=self._checked_questions(v))
-        merged = self._validated(merged)
         self._dump(self._dir_of(agent_id), merged)
         return merged
 
@@ -148,20 +125,6 @@ class AgentStore:
 
     # ── 内部 ────────────────────────────────────────────────────────
 
-    def _metrics_dir_file(self, name: str) -> Path:
-        return self._metrics_dir / f"{name}.yaml"
-
-    def _validated(self, meta: AgentMeta) -> AgentMeta:
-        if meta.metrics_ref:
-            if not self._metrics_dir_file(meta.metrics_ref).is_file():
-                raise AgentStoreError(
-                    f"指标注册表不存在：metrics/{meta.metrics_ref}.yaml（可引用：{self.registries()}）")
-            if meta.evidence:
-                raise AgentStoreError(
-                    "引用指标注册表时不得同时保存手动业务知识——双写＝第二真源；"
-                    "先清空一头再换另一头")
-        return meta
-
     def agent_dir(self, agent_id: str) -> Path:
         """公开目录定位（票 05 会话存储层共用）：hex12 防穿越在此单一真源；
         目录存在与否不在此判——存在性语义归各调用方（get/save 各自如实报错）。"""
@@ -186,13 +149,12 @@ class AgentStore:
             name=data["name"],
             description=str(data.get("description") or ""),
             evidence=str(data.get("evidence") or ""),
-            metrics_ref=str(data.get("metrics_ref") or ""),
             preset_questions=tuple(str(q) for q in (data.get("preset_questions") or [])),
         )
 
     def _dump(self, d: Path, meta: AgentMeta) -> None:
         body = {"name": meta.name, "description": meta.description,
-                "evidence": meta.evidence, "metrics_ref": meta.metrics_ref,
+                "evidence": meta.evidence,
                 "preset_questions": list(meta.preset_questions)}
         atomic_write(d / "meta.yaml",
                      yaml.safe_dump(body, allow_unicode=True, sort_keys=False))
@@ -219,20 +181,3 @@ class AgentStore:
         if any(not q for q in qs):
             raise AgentStoreError("预设问题不允许空条目")
         return qs
-
-
-# ── 指标注册表→业务知识派生（迁移自票 02，读取期复用）─────────────
-
-
-def metric_evidence_text(db_name: str, metrics: Sequence[Metric]) -> str:
-    """从指标注册表确定性派生业务知识文本（演示摘录，零 LLM）。
-
-    头行指回真源并标注「演示摘录，非第二真源」；每指标一行，多行 definition
-    以全角分号承接（evidence 通道是喂 prompt 的自由文本，不炸排版）。
-    """
-    src = f"metrics/{db_name}.yaml"
-    lines = [f"口径摘录（摘自 {src}，演示摘录，非第二真源，权威以指标注册表为准）："]
-    for m in metrics:
-        flat = "；".join(part.strip() for part in m.definition.splitlines() if part.strip())
-        lines.append(f"- {m.display_name}（{m.name}）：{flat}")
-    return "\n".join(lines)

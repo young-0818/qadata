@@ -1,15 +1,16 @@
 """意图结构化（载体 A，M5 票 02）：understand 同调输出的解析。
 
 纯函数模块（先例 graph/precise.py），不开图即可单测钉死。契约（CONTEXT.md「意图」）：
-- 六字段：metric_mention / dimensions / filters / output_form / format_constraint / evidence_terms；
+- 五字段：dimensions / filters / output_form / format_constraint / evidence_terms
+  （metric_mention 已随 M5 指标层退役删除，ADR-0007）；
 - 宁空勿造：字段仅当题面或 evidence 明示时填写，否则 null——M4-D 让步纪律在抽取层的推广；
 - 解析失败回退（主设计 §3.7 既定降级语义）：纯原文当改写问题、intent 判 null，
   不写 attempts、不烧重试预算（调用方 nodes.understand 保证）。
 
 2026-09-09 票 02 条款④判负裁决（owner 签字）：三约束字段「注入 generate 尾段」的
 软用途验效不过（翻转不可复现、注入信号 ≤ 载体 A 改写漂移噪声带，见 02 票判卷结论），
-该注入线已拆除不再恢复；意图六字段保留，prompt 消费者唯一＝metric_match 填槽（票 05，
-验收门改判为轨道①命中路径直检契约）。票 07 起新增一个**展示消费者**：respond 兜底
+该注入线已拆除不再恢复。意图消费者现状＝值链搭车抽词 filters（M10 票 03）；
+metric_match 填槽消费者已随指标层退役（ADR-0007）。票 07 起另有一个**展示消费者**：respond 兜底
 口径说明引用 evidence_terms——只进答案文本组装、零 prompt 注入，「勿再喂 prompt」纪律
 不破（test_generate_never_reads_intent 仍钉死）。
 
@@ -21,7 +22,6 @@ import json
 import re
 
 INTENT_FIELDS = (
-    "metric_mention",
     "dimensions",
     "filters",
     "output_form",
@@ -56,10 +56,10 @@ def _clean_list(value):
 
 
 def parse_understand_response(text):
-    """understand 回复 → (改写问题, 六字段意图 dict 或 None, 澄清问句或 None)。
+    """understand 回复 → (改写问题, 五字段意图 dict 或 None, 澄清问句或 None)。
 
     成功判定：能提取出带非空 question 的 JSON 对象。意图契约坏掉（intent 缺失/非 dict）
-    但改写拿到了时六字段全 null——回退成 JSON 原文反而污染题面，不如留空；
+    但改写拿到了时五字段全 null——回退成 JSON 原文反而污染题面，不如留空；
     question 拿不到＝整体失败：原文当改写问题、意图判 None（行为与接线前逐字节一致）。
 
     M8 票 03 第三元（澄清保险丝，宁空勿造在解析层的形态）：仅当 JSON 对象里

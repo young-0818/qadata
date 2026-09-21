@@ -164,7 +164,7 @@ def test_coarse_narrow_fk_e2e(big_db, tmp_path, ix):
 
 
 def test_recall_memo_one_vectorize_per_question(big_db, ix):
-    """同问重装配（指标降级环重进 explore＝调用方重取）＝memo 命中返回同对象，
+    """同问重装配（失败重试环重进 explore＝调用方重取）＝memo 命中返回同对象，
     向量化不逐次翻倍（recall 先例账形）。"""
     emb = _emb(big_db, "Q")
     build_index(big_db, emb, root=ix)
@@ -274,7 +274,7 @@ def test_fk_closure_is_one_hop_deterministic(big_db):
 
 
 def test_serve_announcements_missing_broken_stale(tmp_path, fixture_db, ix):
-    store = AgentStore(tmp_path / "agents", metrics_dir=tmp_path / "metrics")
+    store = AgentStore(tmp_path / "agents")
     a = store.create("学校")
     p = store.store_datasource(a.id, Path(fixture_db).read_bytes(), "school.sqlite")
     assert "缺档" in "\n".join(index_announcements(store, "fake-embed", root=ix))

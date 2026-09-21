@@ -240,7 +240,7 @@ def test_intake_is_management_only():
 
 
 def _web_client(tmp_path, embedder):
-    store = AgentStore(tmp_path / "agents", metrics_dir=tmp_path / "metrics")
+    store = AgentStore(tmp_path / "agents")
     meta = store.create("字典门")
     client = TestClient(create_app(
         llm=ScriptedLLM([]), settings=Settings(api_key="", base_url="", model="m"),

@@ -237,7 +237,7 @@ def test_web_ask_attaches_correlation(tmp_path, fixture_db, monkeypatch):
 
     seen: list[dict] = []
     monkeypatch.setattr(webapp, "obs_for", lambda s, name, attrs: seen.append(attrs) or None)
-    store = AgentStore(tmp_path / "agents", metrics_dir=tmp_path / "metrics")
+    store = AgentStore(tmp_path / "agents")
     a = store.create("试验智能体", "观测契约用")
     with open(fixture_db, "rb") as f:
         store.store_datasource(a.id, f.read(), "school.sqlite")

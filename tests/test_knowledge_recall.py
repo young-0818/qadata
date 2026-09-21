@@ -55,7 +55,7 @@ _GOOD_SQL = "SELECT name FROM students WHERE id = 2"
 
 @pytest.fixture
 def store(tmp_path):
-    return AgentStore(tmp_path / "agents", metrics_dir=tmp_path / "metrics")
+    return AgentStore(tmp_path / "agents")
 
 
 @pytest.fixture

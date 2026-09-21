@@ -38,12 +38,7 @@ class Answer:
     result: QueryResult | None = None
     failed: bool = False
     error_summary: str | None = None
-    # M5 票 05 评测路径字段：path＝metric（命中模板作答）/fallback（兜底路线，含指标层关闭）；
-    # metric_name＝命中指标名（降级后被 explore 清载荷，随之路失——trace 可回溯）；
-    # template_fell_back＝模板失败降级旗标
-    path: str = "fallback"
-    metric_name: str | None = None
-    template_fell_back: bool = False
     # M8 票 03（默认关）：口径缺失到「任何 SQL 都是猜」时 understand 回问的一句澄清；
-    # None＝非澄清轮（尾键先例同 path/metric_name——加键不改既有位置）
+    # None＝非澄清轮（M5 评测路径字段 path/metric_name/template_fell_back 已随指标层
+    # 退役删除，ADR-0007——本键升尾）
     clarification: str | None = None

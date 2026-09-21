@@ -157,7 +157,7 @@ def test_parse_rejects_malformed_output():
 
 @pytest.fixture
 def store(tmp_path):
-    return AgentStore(tmp_path / "agents", metrics_dir=tmp_path / "metrics")
+    return AgentStore(tmp_path / "agents")
 
 
 def test_digest_tail_roundtrip_and_guards(store):

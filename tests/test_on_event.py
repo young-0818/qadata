@@ -97,8 +97,7 @@ def test_off_state_answer_identical(fixture_db):
     frames, scripted, ans_on = _collect(fixture_db, _RETRY_SCRIPT)
     assert scripted.calls == plain.calls == 4
     assert frames  # 对照组真收到了帧（防两跑都空转的假一致）
-    for f in ("conclusion", "sql", "failed", "error_summary", "path",
-              "metric_name", "template_fell_back"):
+    for f in ("conclusion", "sql", "failed", "error_summary"):
         assert getattr(ans_on, f) == getattr(ans_plain, f), f
     r1, r2 = ans_plain.result, ans_on.result
     assert (r1.columns, r1.rows, r1.row_count, r1.truncated) == \
@@ -110,7 +109,7 @@ def test_off_state_answer_identical(fixture_db):
 
 def test_frame_shape_three_kinds(fixture_db):
     frames, _, _ = _collect(fixture_db, _RETRY_SCRIPT)
-    nodes = {"understand", "metric_match", "explore", "generate", "execute",
+    nodes = {"understand", "explore", "generate", "execute",
              "verify", "respond"}
     saw_tool = saw_result = False
     for f in frames:
@@ -131,7 +130,7 @@ def test_frame_shape_three_kinds(fixture_db):
             assert isinstance(f["tokens_in"], int) and isinstance(f["tokens_out"], int)
     assert saw_tool, "票 06：tool 子事件帧必须真实出现（防全序列退化为两型）"
     assert saw_result
-    assert not any(f["node"] == "metric_match" for f in frames)  # 指标层默认关＝节点不进
+    assert not any(f["node"] == "metric_match" for f in frames)  # 退役节点不应现身（ADR-0007）
 
 
 # ── 完整序列钉死（票面：失败→重试→成功＋tool 子事件与失败红点）──────

@@ -48,7 +48,7 @@ def test_atomic_write_replace_failure_keeps_original(tmp_path, monkeypatch):
 
 @pytest.fixture
 def store(tmp_path):
-    return AgentStore(tmp_path / "agents", metrics_dir=tmp_path / "metrics")
+    return AgentStore(tmp_path / "agents")
 
 
 def test_meta_dump_via_store_atomic(store):

@@ -180,7 +180,7 @@ def _run_concurrent_path(questions, db_dir, llm, max_rows, out, resume,
                            "difficulty": q.get("difficulty"), "question": q["question"],
                            "gold_sql": q["SQL"], "gold_failed": False, "pred_sql": None,
                            "correct": False, "error": f"并发分片异常：{e}",
-                           "error_class": "answer_failed", **_FALLBACK_PATH,
+                           "error_class": "answer_failed",
                            **_run_stats(tracer, q)}
                 shard_rec.parent.mkdir(parents=True, exist_ok=True)
                 shard_rec.write_text(json.dumps(rec, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -199,9 +199,6 @@ def _run_concurrent_path(questions, db_dir, llm, max_rows, out, resume,
 
 
 _STAT_KEYS = ("llm_calls", "input_tokens", "output_tokens", "total_tokens", "latency_s")
-
-# 票 05 路径字段缺省：尚未拿到 Answer 的记录（单题异常/并发分片异常）按纯兜底计
-_FALLBACK_PATH = {"path": "fallback", "metric_name": None, "template_fell_back": False}
 
 
 def _emit_run_stats(run_id, settings, out, processed_ids, records, budget_path=None) -> None:
@@ -273,33 +270,31 @@ def _run_one(q: dict, db_dir: str, llm, max_rows: int, tracer, settings=None,
                                   if knowledge_dir else None))
     except Exception as e:  # noqa: BLE001 单题隔离：评测器最外层，单题任何失败不阻塞整批
         return {**base, **_run_stats(tracer, q), "pred_sql": None, "correct": False, "error": str(e),
-                "error_class": "answer_failed", **_FALLBACK_PATH}
-    # 票 05 路径字段：Answer 是带默认值的 dataclass，三字段恒在（指标层关时 path=fallback）
-    path = {"path": answer.path, "metric_name": answer.metric_name,
-            "template_fell_back": answer.template_fell_back}
+                "error_class": "answer_failed"}
+    # （M5 path/metric_name/template_fell_back 三字段已随指标层退役删除，ADR-0007）
     if answer.clarification:
         # M8 票 03：澄清轮弃答入账（每题 clarified≈判负——判卷读的就是误伤上界）；
         # pred 未生成不执行不判分。默认关态澄清恒 None＝本分支不可达（票面如实注）
         return {**base, **_run_stats(tracer, q), "pred_sql": None, "correct": False,
                 "error": f"澄清问：{answer.clarification}",
-                "error_class": "clarified", **path}
+                "error_class": "clarified"}
     if answer.failed or not answer.sql:
         return {**base, **_run_stats(tracer, q), "pred_sql": answer.sql, "correct": False,
-                "error": answer.error_summary or "no sql", "error_class": "answer_failed", **path}
+                "error": answer.error_summary or "no sql", "error_class": "answer_failed"}
     try:
         pred_rows = _exec(str(db_path), answer.sql, max_rows)
     except Exception as e:  # noqa: BLE001 单题隔离
         return {**base, **_run_stats(tracer, q), "pred_sql": answer.sql, "correct": False,
-                "error": str(e), "error_class": "pred_exec_failed", **path}
+                "error": str(e), "error_class": "pred_exec_failed"}
     try:
         gold_rows = _exec(str(db_path), q["SQL"], max_rows)
     except Exception as e:  # noqa: BLE001 gold 失败单独成类：与 pred 失败分标
         return {**base, **_run_stats(tracer, q), "pred_sql": answer.sql, "correct": False,
                 "error": f"gold 执行失败：{e}", "gold_failed": True,
-                "error_class": "gold_failed", **path}
+                "error_class": "gold_failed"}
     correct = results_match(pred_rows, gold_rows)
     return {**base, **_run_stats(tracer, q), "pred_sql": answer.sql, "correct": correct, "error": None,
-            "error_class": None if correct else "judge_mismatch", **path}
+            "error_class": None if correct else "judge_mismatch"}
 
 
 def _exec(db_path: str, sql: str, max_rows: int) -> list[tuple]:

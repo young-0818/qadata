@@ -16,7 +16,6 @@
 测试语义：一律 ScriptedLLM＋calls 计数（纪律⑤）；prompt 形态走 RecorderLLM。
 """
 import json
-from dataclasses import replace
 
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -55,7 +54,7 @@ def test_understand_node_flag_off_ignores_clarification_key():
     out = make_nodes(ScriptedLLM([_BLOB]), settings=_S_OFF)["understand"](
         {"question": "学生表现如何"})
     assert out == {"original_question": "学生表现如何", "question": "学生的表现如何",
-                   "intent": dict.fromkeys(("metric_mention", "dimensions", "filters",
+                   "intent": dict.fromkeys(("dimensions", "filters",
                                             "output_form", "format_constraint",
                                             "evidence_terms"))}
     assert "answer" not in out
@@ -127,13 +126,11 @@ def _understand_targets(settings) -> set:
 
 
 def test_route_map_end_branch_assembled_only_with_flag():
-    """关态路由 map 与今日逐分支一致：END 出边根本不装配；开态才挂（含与
-    metric_layer 同开时三出口并存）。"""
+    """关态路由 map 与今日逐分支一致：END 出边根本不装配；开态才挂。
+    （metric_match 出口已随 ADR-0007 退役，关态出边集＝{explore}。）"""
     assert "__end__" not in _understand_targets(_S_OFF)
-    assert _understand_targets(_S_OFF) == {"explore", "metric_match"}
+    assert _understand_targets(_S_OFF) == {"explore"}
     assert "__end__" in _understand_targets(_S_ON)
-    both = replace(_S_ON, metric_layer=True)
-    assert _understand_targets(both) == {"__end__", "explore", "metric_match"}
 
 
 # ── 经典 HITL（owner 改判 2026-09-16）：interrupt 暂停／Command(resume) 续跑────

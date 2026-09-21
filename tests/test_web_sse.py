@@ -32,7 +32,7 @@ _RETRY_SCRIPT = ["改写", _BAD_SQL, _GOOD_SQL, "Bob 数学 88 分"]
 
 @pytest.fixture
 def store(tmp_path):
-    return AgentStore(tmp_path / "agents", metrics_dir=tmp_path / "metrics")
+    return AgentStore(tmp_path / "agents")
 
 
 def _app(llm, store):

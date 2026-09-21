@@ -17,8 +17,6 @@ class Settings:
     max_qps: float = 0.0  # 全局限速（次/秒）；0=不限速（并发评测用 --qps 打开）
     precise_candidates: int = 1  # M4-C 精准模式候选数（1=关闭；3/5 建议奇数）
     precise_temperature: float = 0.3  # 精准模式采样温度（候选>1 时生效；关闭时无效）
-    metric_layer: bool = False  # M5 票 05 指标层总开关（False 时管线与纯 SQL 现状逐行为一致）
-    metrics_dir: str = "metrics"  # 注册表目录（按库名寻址 metrics/<db>.yaml）
     value_sampling: bool = False  # M8 票 02 值采样注入（False 时 schema 上下文与现状逐字节一致）
     clarification: bool = False  # M8 票 03 澄清回合（False 时 understand prompt 与路由 map 与今日逐字节一致）
     otel_enabled: bool = False  # M9 票 01 OTLP 上报出口（False＝noop，埋点帧流零挂接、行为逐字节照旧）
@@ -84,8 +82,6 @@ def load_settings() -> Settings:
         max_qps=_env_float("QADATA_MAX_QPS", 0.0, minimum=0.0),
         precise_candidates=_env_int("QADATA_PRECISE_CANDIDATES", 1, minimum=1),
         precise_temperature=_env_float("QADATA_PRECISE_TEMPERATURE", 0.3, minimum=0.0),
-        metric_layer=_env_bool("QADATA_METRIC_LAYER", False),
-        metrics_dir=os.getenv("QADATA_METRICS_DIR", "metrics"),
         value_sampling=_env_bool("QADATA_VALUE_SAMPLING", False),
         clarification=_env_bool("QADATA_CLARIFICATION", False),
         otel_enabled=_env_bool("QADATA_OTEL_ENABLED", False),

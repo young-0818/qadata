@@ -2,7 +2,7 @@
 
 2026-09-09 条款④裁决（owner 签字）：三约束字段注入 generate 尾段的软用途验效不过，
 注入线已拆——本文件同时钉死「generate 永远不读 intent」这条负结果防线
-（防未来无意间把注入接回去）。意图保留，唯一消费者＝metric_match（票 05）。
+（防未来无意间把注入接回去）。意图保留，消费者＝值链搭车（M10 票 03；metric_match 已随 ADR-0007 退役）。
 
 测试语义：图级一律 ScriptedLLM＋calls 计数（载体 A 零新增调用）；
 prompt 形态走 RecorderLLM 旧例。
@@ -32,10 +32,9 @@ _NULL_INTENT = dict.fromkeys(INTENT_FIELDS)
 # ── 纯函数：parse_understand_response ──────────────────────────────
 
 
-def test_parse_success_returns_question_and_six_fields():
+def test_parse_success_returns_question_and_five_fields():
     text = _blob(
         question="已结束合同的违约率是多少",
-        metric_mention="违约率",
         dimensions=["按月份"],
         filters=["已结束"],
         output_form="百分比",
@@ -46,7 +45,6 @@ def test_parse_success_returns_question_and_six_fields():
     assert clar is None  # 票 03：模型没产澄清键＝恒 None（宁空勿造的默认形态）
     assert q == "已结束合同的违约率是多少"
     assert intent == {
-        "metric_mention": "违约率",
         "dimensions": ["按月份"],
         "filters": ["已结束"],
         "output_form": "百分比",
@@ -88,7 +86,7 @@ def test_parse_json_without_usable_question_falls_back():
 
 
 def test_parse_bad_intent_yields_all_null_not_failure():
-    """改写成功但意图契约坏掉：保留改写（回退原文反而更差），六字段全 null。"""
+    """改写成功但意图契约坏掉：保留改写（回退原文反而更差），五字段全 null。"""
     q, intent, clar = parse_understand_response('{"question": "改写", "intent": " nonsense"}')
     assert q == "改写"
     assert intent == _NULL_INTENT and clar is None
@@ -100,7 +98,6 @@ def test_parse_normalization_ning_kong_wu_zao():
         {
             "question": "改写",
             "intent": {
-                "metric_mention": "  ",
                 "dimensions": [],
                 "filters": None,
                 "output_form": "百分比",
@@ -111,7 +108,6 @@ def test_parse_normalization_ning_kong_wu_zao():
     )
     _, intent, _clar = parse_understand_response(text)
     assert intent == {
-        "metric_mention": None,
         "dimensions": None,
         "filters": None,
         "output_form": "百分比",
@@ -157,7 +153,7 @@ def test_parse_clarification_ning_kong_wu_zao_forms():
             payload["clarification"] = bad
         _, intent, clar = parse_understand_response(_full(payload))
         assert clar is None, f"坏形态 {bad!r} 不得被采信"
-        assert intent == _NULL_INTENT  # 顺带钉：六字段照常归一
+        assert intent == _NULL_INTENT  # 顺带钉：五字段照常归一
 
 
 def test_parse_clarification_orthogonal_to_question_failure():
@@ -200,7 +196,7 @@ def test_understand_prompt_carries_evidence():
     p = recorder.prompts[0]
     assert "全名指 first_name, last_name" in p  # 无 evidence 明示就抽不出 evidence_terms
     for field in INTENT_FIELDS:
-        assert field in p  # 六字段契约写进 prompt
+        assert field in p  # 五字段契约写进 prompt
     assert "宁空勿造" in p or "明示" in p
 
 
@@ -210,7 +206,7 @@ def test_understand_prompt_carries_evidence():
 def test_intent_success_path_zero_extra_calls(fixture_db):
     """载体 A 零新增调用：意图成功路径 calls 与纯文本回退一致（3＝understand+generate+respond）。"""
     llm = ScriptedLLM(
-        [_blob(question="谁成绩最好", metric_mention="成绩"),
+        [_blob(question="谁成绩最好", output_form="计数"),
          "SELECT name FROM students WHERE id = 1", "Alice"]
     )
     ans = run_question(fixture_db, "谁最好", llm=llm, settings=_S)

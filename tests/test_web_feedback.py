@@ -38,7 +38,7 @@ def _turn(q, sql, ts=_TS, failed=False):
 
 @pytest.fixture
 def store(tmp_path):
-    return AgentStore(tmp_path / "agents", metrics_dir=tmp_path / "metrics")
+    return AgentStore(tmp_path / "agents")
 
 
 @pytest.fixture

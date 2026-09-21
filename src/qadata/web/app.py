@@ -128,7 +128,6 @@ class AgentPatchRequest(BaseModel):
     name: str | None = None
     description: str | None = None
     evidence: str | None = None
-    metrics_ref: str | None = None
     preset_questions: list[str] | None = None
 
 
@@ -155,9 +154,6 @@ def answer_to_payload(answer: Answer, session_id: str | None = None) -> dict[str
         "elapsed_ms": res.elapsed_ms if res else None,
         "failed": answer.failed,
         "error_summary": answer.error_summary,
-        "path": answer.path,
-        "metric_name": answer.metric_name,
-        "template_fell_back": answer.template_fell_back,
         "session_id": session_id,
         "chart": decide_chart(columns or [], rows or []) if res else None,
         "clarification": answer.clarification,
@@ -218,13 +214,11 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
             return {"has_file": True, "table_count": None, "error": str(e)}
 
     def _detail(meta: AgentMeta) -> dict[str, Any]:
-        try:
-            kb, kb_err = store.effective_evidence(meta), None
-        except AgentStoreError as e:
-            kb, kb_err = "", str(e)
+        # 引用态派生（effective_evidence/metrics_ref/business_knowledge_error）已随
+        # M5 指标层退役删除（ADR-0007）；business_knowledge＝evidence 直读（票 08 定去留）
         return {"id": meta.id, "name": meta.name, "description": meta.description,
-                "evidence": meta.evidence, "metrics_ref": meta.metrics_ref,
-                "business_knowledge": kb, "business_knowledge_error": kb_err,
+                "evidence": meta.evidence,
+                "business_knowledge": meta.evidence,
                 "preset_questions": list(meta.preset_questions),
                 "datasource": _datasource_info(meta)}
 
@@ -234,10 +228,6 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
     def model_card() -> dict[str, Any]:
         return {"model": settings.model if settings else None,
                 "source": "环境 .env → QADATA_MODEL", "writable": False}
-
-    @app.get("/api/metrics-registries")
-    def metric_registries() -> dict[str, list[str]]:
-        return {"registries": store.registries()}
 
     # ── 智能体 CRUD（真空启动：初始为空列表）────────────────────────
 
@@ -429,7 +419,7 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
                 raise HTTPException(status_code=400,
                                     detail=f"智能体「{meta.name}」未配置数据源（详情页上传 .sqlite 后再问）")
             session = sessions.load(req.agent_id, req.session_id) if req.session_id else None
-            evidence = req.evidence.strip() or store.effective_evidence(meta)
+            evidence = req.evidence.strip() or meta.evidence
         except (AgentStoreError, SessionStoreError) as e:
             raise _bad(e) from None
         return str(path), evidence, meta.name, session

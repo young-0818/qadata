@@ -143,35 +143,7 @@ def test_strip_conclusion_prefix_multiple_layers():
     assert strip_conclusion_prefix("结论:结论：结论：Bob") == "Bob"
 
 
-# ── M5 票 05：L2 复核 prompt（⑨极值闸）＋⑧ understand 裸时间微调 ──────
-
-from qadata.graph.metrics import Metric
-from qadata.graph.prompts import metric_review_prompt
-
-_REVIEW_MS = [
-    Metric(name="loan_default_rate", display_name="贷款违约率", meaning="违约占比",
-           definition="违约＝status 'B'；B÷全部×100", sql_template="SELECT {time_start}",
-           aliases=("违约率",), available_dimensions={}, source_tables=("loan",)),
-    Metric(name="loan_count", display_name="贷款笔数", meaning="批准的合同数量",
-           definition="按批准日期计条", sql_template="SELECT 1", aliases=(),
-           available_dimensions={}, source_tables=("loan",)),
-]
-
-
-def test_metric_review_prompt_loads_whole_table_and_contract():
-    p = metric_review_prompt("去年贷款违约率", "违约＝已结束未还清", _REVIEW_MS)
-    assert "loan_default_rate" in p and "loan_count" in p  # 整表装入（≤18 条全量）
-    assert "贷款违约率" in p and "违约＝status 'B'" in p  # 展示名＋口径供语义比对
-    assert "NONE" in p and "只输出" in p  # 输出契约：内部名或 NONE
-    assert "去年贷款违约率" in p and "违约＝已结束未还清" in p
-    # 复核只判身份不写 SQL：模板不进 prompt（防照抄、省 token）
-    assert "SELECT" not in p
-
-
-def test_metric_review_prompt_has_named_extreme_gate():
-    """裁决⑨（04→05 移交）：具名个体极值/比较判 NONE——包含路径误命中户均条的闸。"""
-    p = metric_review_prompt("q", "", _REVIEW_MS)
-    assert "极值" in p and "lowest" in p and "top-N" in p
+# ── M5 裁决⑧：understand 裸时间微调（票 05 复核 prompt 族测已随指标层退役，ADR-0007）
 
 
 def test_understand_prompt_demands_bare_time_filters():

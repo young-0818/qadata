@@ -25,17 +25,16 @@ from qadata.web import sessions as web_sessions
 from qadata.web.agents import AgentStore
 from qadata.web.app import create_app
 from tests.fakes import ScriptedLLM
-from tests.web_shared import ONE_METRIC_YAML
 
 _S = Settings(api_key="", base_url="", model="test-model", retry_budget=3)
 _S_CLAR = replace(_S, clarification=True)  # M8 票 03 开态（web 演示场景＝开闸面）
 
-# 契约字段全集（票 01 冻结 12＋票 04 新增可选 chart＋票 03 新增可选 clarification）
-# ——多一个少一个都算改卷
+# 契约字段全集（票 01 冻结＋票 05 session_id 转正＋票 04 可选 chart＋票 03 可选
+# clarification；M5 path/metric_name/template_fell_back 三键已随指标层退役删除，
+# ADR-0007——重数后 11 字段）——多一个少一个都算改卷
 _CONTRACT_KEYS = {
     "conclusion", "sql", "columns", "rows", "truncated", "elapsed_ms",
-    "failed", "error_summary", "path", "metric_name", "template_fell_back",
-    "session_id", "chart", "clarification",
+    "failed", "error_summary", "session_id", "chart", "clarification",
 }
 
 _HAPPY_SCRIPT = ["改写", "SELECT name FROM students WHERE id = 2", "Bob 的数学 88 分"]
@@ -43,15 +42,7 @@ _HAPPY_SCRIPT = ["改写", "SELECT name FROM students WHERE id = 2", "Bob 的数
 
 @pytest.fixture
 def store(tmp_path):
-    return AgentStore(tmp_path / "agents", metrics_dir=tmp_path / "metrics")
-
-
-@pytest.fixture
-def store_with_registry(tmp_path):
-    mdir = tmp_path / "metrics"
-    mdir.mkdir()
-    (mdir / "financial.yaml").write_text(ONE_METRIC_YAML, encoding="utf-8")
-    return AgentStore(tmp_path / "agents", metrics_dir=mdir)
+    return AgentStore(tmp_path / "agents")
 
 
 def _client(llm, store, **kw) -> TestClient:
@@ -85,9 +76,10 @@ def test_model_card_is_readonly(store):
     assert "QADATA_MODEL" in body["source"]  # 真源指回 .env
 
 
-def test_metrics_registries_listing(store_with_registry):
-    res = _client(None, store_with_registry).get("/api/metrics-registries")
-    assert res.json() == {"registries": ["financial"]}
+def test_metrics_registries_endpoint_gone(store):
+    """退役端点（ADR-0007）：GET /api/metrics-registries 不复存在（404/405 均算不活）。"""
+    res = _client(None, store).get("/api/metrics-registries")
+    assert res.status_code >= 400
 
 
 # ── 智能体 CRUD ─────────────────────────────────────────────────────
@@ -192,45 +184,24 @@ def test_broken_datasource_reports_error_not_lies(store, tmp_path):
     assert body["datasource"]["error"]  # 打不开如实上报，不装库正常
 
 
-# ── 业务知识：手动态／引用态（读取期派生）＋双写拒绝 ───────────────
+# ── 业务知识：手动单态（引用态族测已随 M5 退役删除，ADR-0007）───────
 
 
-def test_business_knowledge_manual_and_derived(store_with_registry):
-    client = _client(None, store_with_registry)
+def test_business_knowledge_manual_single_source(store):
+    client = _client(None, store)
     a = client.post("/api/agents", json={"name": "金融分析师"}).json()
-    b = client.patch(f"/api/agents/{a['id']}", json={"metrics_ref": "financial"}).json()
-    assert "演示摘录，非第二真源" in b["business_knowledge"] and "贷款笔数" in b["business_knowledge"]
-    assert b["business_knowledge_error"] is None
-    res = client.patch(f"/api/agents/{a['id']}", json={"evidence": "自己抄一份"})
-    assert res.status_code == 400 and "双写" in res.json()["detail"]  # 引用态禁手动第二真源
-    assert client.patch(f"/api/agents/{a['id']}",
-                        json={"metrics_ref": "nope"}).status_code == 400
+    b = client.patch(f"/api/agents/{a['id']}", json={"evidence": "自己抄一份"}).json()
+    assert b["business_knowledge"] == "自己抄一份" == b["evidence"]
 
 
-def _ref_then_registry_gone(store_with_registry, fixture_db, tmp_path):
-    """公开面诚实构造漂移态：正常设好引用 → 注册表文件被删（不穿存储内部）。"""
-    a = _agent_with_datasource(store_with_registry, fixture_db)
-    store_with_registry.patch(a.id, metrics_ref="financial")
-    (tmp_path / "metrics" / "financial.yaml").unlink()
-    return a
-
-
-def test_missing_registry_fails_honestly(store_with_registry, fixture_db, tmp_path):
-    a = _ref_then_registry_gone(store_with_registry, fixture_db, tmp_path)
-    res = _client(None, store_with_registry).get(f"/api/agents/{a.id}")
-    assert res.status_code == 200  # 详情页还能看（诚实报错而非整页 500）
-    body = res.json()
-    assert body["business_knowledge"] == ""
-    assert "financial" in body["business_knowledge_error"]
-
-
-def test_ask_ref_broken_400_before_llm(store_with_registry, fixture_db, tmp_path):
-    a = _ref_then_registry_gone(store_with_registry, fixture_db, tmp_path)
-    llm = ScriptedLLM(_HAPPY_SCRIPT)
-    res = _client(llm, store_with_registry).post(
-        "/api/ask", json={"agent_id": a.id, "question": "题"})
-    assert res.status_code == 400 and "financial" in res.json()["detail"]
-    assert llm.calls == 0  # 口径真源缺失也拒在调模型之前，不带病问数
+def test_metrics_ref_request_key_inert(store):
+    """请求面 metrics_ref＝未知键忽略（Pydantic 默认）且绝不回写——引用态通道封死，
+    无 API 复活路（存储面旧档残留键另有 test_legacy_metrics_ref_key_ignored_on_load）。"""
+    client = _client(None, store)
+    a = client.post("/api/agents", json={"name": "x"}).json()
+    b = client.patch(f"/api/agents/{a['id']}",
+                     json={"metrics_ref": "financial", "description": "改"}).json()
+    assert b["description"] == "改" and "metrics_ref" not in b
 
 
 # ── /api/ask：契约与口径优先级 ─────────────────────────────────────
@@ -250,7 +221,7 @@ def test_ask_success_contract(store, fixture_db):
     assert body["columns"] == ["name"]
     assert body["rows"] == [["Bob"]]
     assert body["truncated"] is False and isinstance(body["elapsed_ms"], int)
-    assert body["path"] == "fallback" and body["session_id"] is None
+    assert body["session_id"] is None
     assert body["chart"] is None  # 单格文本非标量数值→其余→表格（null）
     assert body["clarification"] is None  # 票 03：关态/非澄清轮第 14 字段恒 null
     assert llm.calls == 3
@@ -392,8 +363,7 @@ def test_run_server_wires_dependencies(monkeypatch, tmp_path):
     import qadata.web.serve as serve_mod
 
     calls = {}
-    fake_settings = Settings(api_key="", base_url="", model="m1",
-                             metrics_dir=str(tmp_path / "no_metrics"))
+    fake_settings = Settings(api_key="", base_url="", model="m1")
     monkeypatch.setattr(serve_mod, "load_settings", lambda: fake_settings)
     monkeypatch.setattr(serve_mod, "build_llm", lambda s: f"LLM<{s.model}>")
     monkeypatch.setattr(serve_mod, "TraceLogger", lambda p: f"TRACER<{p}>")
