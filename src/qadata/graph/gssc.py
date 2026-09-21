@@ -134,15 +134,21 @@ def gather_schema_pick(tables: list[str], question: str) -> dict[str, str]:
     return {"tables": ", ".join(tables), "question": question}
 
 
-def select(scenario: str, slots: dict[str, str], *, recall=None) -> dict[str, str]:
+def select(scenario: str, slots: dict[str, str], *, recall=None,
+           knowledge_recall=None) -> dict[str, str]:
     """挑选阶段（M9 票 06 上岗）：generate 场景经 recall 回调（question→注入块，
     例题库 embedding top-K＋关键词保底，web/examples 装配）把召回块放进 "examples" 槽；
-    回调空串＝本无料或降级，槽不加。recall 缺省 None／非 generate 场景＝恒等通过
-    （原对象返回——默认关与空池＝逐字节现状，金标准测网共守；select 测试钉 identity）。"""
-    if recall is None or scenario != "generate":
+    M10 票 05 第四格＝knowledge_recall 回调（同形，口径字典检索块，retrieval/knowledge
+    装配）进 "knowledge" 槽。回调空串＝本无料或降级，槽不加。两回调缺省 None／非
+    generate 场景＝恒等通过（原对象返回——默认关与空池＝逐字节现状，金标准测网共守；
+    select 测试钉 identity）。"""
+    if scenario != "generate":
         return slots
-    block = recall(slots["question"])
-    return {**slots, "examples": block} if block else slots
+    if recall is not None and (block := recall(slots["question"])):
+        slots = {**slots, "examples": block}
+    if knowledge_recall is not None and (kb := knowledge_recall(slots["question"])):
+        slots = {**slots, "knowledge": kb}
+    return slots
 
 
 # ── Compress 总闸：tiktoken 预算保险丝（M9 票 04，spec §二 Q3／ADR-0002）──────
@@ -155,7 +161,9 @@ def select(scenario: str, slots: dict[str, str], *, recall=None) -> dict[str, st
 # 评测形态永不触发＝行为零变化；触发只可能出现在生产长会话/巨 schema 形态。
 # 淘汰序（资料类只有程序硬砍，spec §五 勿回锅）：先丢最老窗口原文行、次摘要行、
 # 再纪要段（M9 票 05 接线＝先丢行、后丢段——密度越高越守得住），次撤值纸条
-# （M10 票 03＝最可再生资料类，index-build 一键重得，挨着参考例题格），次撤参考例题
+# （M10 票 03＝最可再生资料类，index-build 一键重得），次撤字典块
+# （M10 票 05＝撤纸条同族——字典档恒在、逐问免费重召回，撤块只对本问隐去；
+# 人签例题系 signed_by 稀缺资产，让位在其后），次撤参考例题
 # （票 06 注入料在此吃兜底），次砍值采样、再缩失败历史——按 Zone 优先级逐级、
 # 确定性、零 LLM；任务与输出分区永不砍，无料可砍的分区（respond 结果表、
 # explore 表清单等）如实入账不硬砍。
@@ -274,6 +282,21 @@ def _cut_value_stickers(sections: list[Section]) -> str | None:
     return None
 
 
+def _cut_knowledge(sections: list[Section]) -> str | None:
+    """撤字典块（M10 票 05 注入料吃保险丝）：整段确定性一刀（撤参考例题同族姿势，
+    块自成一段 Section、split 不连累他料）。淘汰位在撤值纸条**之后**、撤参考例题
+    **之前**——判据：字典档恒在智能体目录、逐问重召回＝免费管理动作外零花费
+    （与值纸条同属"撤了随时拿得回"）；参考例题系人签稀缺资产（signed_by 进料闸），
+    本波最可再生序让位给前两者。KNOWLEDGE_HEADER 定位（节头单源共读，
+    VALUE_STICKER_HEADER 先例；惰性 import 防环）。"""
+    from qadata.retrieval.knowledge import KNOWLEDGE_HEADER
+    for i, s in enumerate(sections):
+        if s.zone is Zone.EVIDENCE and KNOWLEDGE_HEADER in s.text:
+            sections[i] = s._replace(text="")
+            return "撤字典块"
+    return None
+
+
 def _cut_examples(sections: list[Section]) -> str | None:
     """撤参考例题（M9 票 06 注入料吃保险丝兜底）：召回块整段撤（确定性一刀，
     值采样同款姿势）。排序在摘要面之后、值采样之前——few-shot 是最可再生的资料类，
@@ -312,8 +335,8 @@ def _shrink_failure_history(sections: list[Section]) -> str | None:
 
 def compress(scenario: str, sections: list[Section], *, on_compress=None) -> str:
     """预算压缩阶段：限内＝恒等拼接（逐字节零变化）；超限＝按 Zone 优先级确定性淘汰
-    （窗口原文行→摘要行→纪要段→值纸条→参考例题→值采样→失败历史，任务/输出永不砍），
-    每步一单位直至限内或无料可砍。
+    （窗口原文行→摘要行→纪要段→值纸条→字典块→参考例题→值采样→失败历史，
+    任务/输出永不砍），每步一单位直至限内或无料可砍。
     on_compress（降级入账回调）仅在真压缩时触发一次——账本＋直播帧流两出口由挂点自持。"""
     budget = FUSE_TOKENS[scenario]
     cur = "".join(s.text for s in sections)
@@ -329,6 +352,7 @@ def compress(scenario: str, sections: list[Section], *, on_compress=None) -> str
                   or _evict_digest(sections, DIGEST_LINE_HEADER, "丢最老摘要行")
                   or _evict_digest(sections, DIGEST_PARA_HEADER, "丢最老纪要段")
                   or _cut_value_stickers(sections)
+                  or _cut_knowledge(sections)
                   or _cut_examples(sections)
                   or _cut_value_samples(sections) or _shrink_failure_history(sections))
         if action is None:
@@ -358,11 +382,16 @@ def _structure_understand(p: dict[str, str]) -> list[Section]:
 def _structure_generate(p: dict[str, str]) -> list[Section]:
     history, draft = p["failure_history"], p["draft"]
     examples = p.get("examples") or ""  # 票 06：Select 格召回块（select 未挂接＝无此槽＝逐字节现状）
+    knowledge = p.get("knowledge") or ""  # M10 票 05 第四格：字典检索块（同纪律——未挂接＝逐字节现状）
     sections = [
         Section(Zone.ROLE, SYSTEM_RULES),
         Section(Zone.EVIDENCE, "\n\n## 数据库 Schema\n" + p["schema"]),
         Section(Zone.EVIDENCE, "\n\n## 背景信息\n" + (p["evidence"] or "（无）")),
     ]
+    if knowledge:
+        # 口径优先级三级落位（ADR-0006）：evidence 整段在前、字典片段垫后——
+        # 片段给整段压阵不是相反；参考例题仍守「贴用户问题最近」旧位不动。
+        sections.append(Section(Zone.EVIDENCE, "\n\n" + knowledge + "\n"))
     if examples:
         # 贴「## 用户问题」最近落位（块内已升序、最像的在块尾——DB-GPT 论文形态）
         sections.append(Section(Zone.EVIDENCE, "\n\n" + examples + "\n"))
@@ -427,10 +456,13 @@ def structure(scenario: str, slots: dict[str, str]) -> list[Section]:
 
 
 def assemble(scenario: str, slots: dict[str, str], *, on_compress=None,
-             recall=None) -> str:
+             recall=None, knowledge_recall=None) -> str:
     """跑完 Select→Structure→Compress，产出进模型的最终 prompt。
     on_compress（票 04）＝保险丝降级入账回调（仅在真压缩时触发），缺省 None＝只压缩不入账。
-    recall（票 06）＝例题库召回回调（question→注入块），缺省 None＝Select 恒等照旧。"""
+    recall（票 06）＝例题库召回回调（question→注入块），缺省 None＝Select 恒等照旧。
+    knowledge_recall（M10 票 05）＝口径字典召回回调（同形，第四格 "knowledge" 槽），
+    缺省 None＝Select 恒等照旧。"""
     return compress(scenario,
-                    structure(scenario, select(scenario, slots, recall=recall)),
+                    structure(scenario, select(scenario, slots, recall=recall,
+                                               knowledge_recall=knowledge_recall)),
                     on_compress=on_compress)

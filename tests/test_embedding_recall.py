@@ -295,8 +295,11 @@ def test_empty_bank_byte_identical_current(store, fixture_db, tmp_path):
         "/api/ask", json={"agent_id": a.id, "question": "有几个学生"})
     assert r.json()["failed"] is False and llm.calls == 3
     assert emb.calls == 0 and EXAMPLES_HEADER not in llm.prompts[1]
+    # M10 票 05 两义分家：账本检查从泛指 "recall" 收窄为例题专名行（"node": "recall"）——
+    # knowledge_recall 是独立账目族（值链同纪律：无开关、缺料逐问入账可见），
+    # 本钉只守例题面空池＝零行
     assert not (tmp_path / "traces.jsonl").exists() or \
-        "recall" not in (tmp_path / "traces.jsonl").read_text(encoding="utf-8")
+        '"node": "recall"' not in (tmp_path / "traces.jsonl").read_text(encoding="utf-8")
 
 
 def test_select_identity_when_unwired_or_empty_block():

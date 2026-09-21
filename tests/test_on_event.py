@@ -69,11 +69,12 @@ def test_run_question_signature_tail_default_none():
     （本断言原钉 on_event 为末位；票 05 合法追加后钉"末两位皆缺省 None"；
     HITL 改判追加后钉"末四位皆缺省 None"；M9 票 01 观测出口追加后钉"末五位"；
     M9 票 06 召回回调追加后钉"末六位"；M10 票 01 表卡粗召回沿同一族追加后钉"末七位"；
-    M10 票 03 值链查询调沿同一族追加后钉"末八位"。）"""
+    M10 票 03 值链查询调沿同一族追加后钉"末八位"；M10 票 05 字典召回回调沿同一族
+    追加后钉"末九位"。）"""
     params = list(inspect.signature(run_question).parameters.values())
-    for tail, want in ((-1, "value_link"), (-2, "table_recall"), (-3, "recall"),
-                       (-4, "obs"), (-5, "checkpointer"), (-6, "thread_id"),
-                       (-7, "session_context"), (-8, "on_event")):
+    for tail, want in ((-1, "knowledge_recall"), (-2, "value_link"), (-3, "table_recall"),
+                       (-4, "recall"), (-5, "obs"), (-6, "checkpointer"),
+                       (-7, "thread_id"), (-8, "session_context"), (-9, "on_event")):
         assert params[tail].name == want and params[tail].default is None
 
 

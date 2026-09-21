@@ -17,6 +17,7 @@ from qadata.graph.build import run_question
 from qadata.llm.tracing import TRACE_PATH, TraceLogger, now_beijing
 from qadata.obs import obs_for, shutdown
 from qadata.retrieval.cards import build_table_recall
+from qadata.retrieval.knowledge import build_knowledge_recall
 from qadata.retrieval.values import build_value_link
 from qadata.tools.db import open_readonly
 
@@ -87,7 +88,8 @@ def run_eval(questions_path: str, db_dir: str, sample: int | None = None,
              llm=None, max_rows: int = 10000,
              out_path: str = "runs/eval-last.jsonl", resume: bool = False,
              concurrency: int = 1, settings=None, limiter=None,
-             skip_respond: bool = False, budget_path: str | None = None) -> dict:
+             skip_respond: bool = False, budget_path: str | None = None,
+             knowledge_dir: str | None = None) -> dict:
     """跑评测。concurrency>1 走分片并发；=1 保持 M3 串行语义（逐题 flush）。
 
     skip_respond：评测模式跳过结论 LLM 生成（判分只读 answer.sql 的执行结果，
@@ -97,7 +99,12 @@ def run_eval(questions_path: str, db_dir: str, sample: int | None = None,
     （题数×调用/tokens 实测；估算成本与累计两列留「待填」由人折算）。
     M10 票 01：settings.embed_model 非空＝建向量化通道，逐题现查库指纹表卡档
     （有档大库走宽进窄出、缺档现读降级——与 serve 同库域档，ADR-0004）；
-    空＝embedder None＝全部题目走现状路径，逐字节与历史评测一致。"""
+    空＝embedder None＝全部题目走现状路径，逐字节与历史评测一致。
+    knowledge_dir（M10 票 05，缺省 None＝字典关＝逐字节历史现状）＝口径字典档目录
+    （含 knowledge.yaml，knowledge-feed 落盘处）——字典验收必须经 eval 的通路在此
+    开（spec §二 Q8 两义分家：例题「eval 零触」钉守人签题对防自动吸收，不挡字典）；
+    判卷形态＝扣 evidence 直塞只给字典检索（spec §四 轮 4，evidence 题面字段照喂
+    与否归跑卷参数，本通道只管字典挂不挂）。"""
     questions = load_questions(questions_path, sample=sample, question_ids=question_ids)
     embedder = None
     if getattr(settings, "embed_model", ""):
@@ -111,7 +118,7 @@ def run_eval(questions_path: str, db_dir: str, sample: int | None = None,
     if concurrency > 1:
         summary = _run_concurrent_path(questions, db_dir, llm, max_rows, out, resume,
                                        concurrency, settings, limiter, skip_respond,
-                                       budget_path, embedder)
+                                       budget_path, embedder, knowledge_dir)
         shutdown()  # M9 票 01：轮末冲刷观测批缓冲（关态 noop provider 无 shutdown＝如实跳过）
         return summary
 
@@ -128,7 +135,7 @@ def run_eval(questions_path: str, db_dir: str, sample: int | None = None,
         for q in todo:
             tracer.set_context(question_id=str(q["question_id"]))
             rec = _run_one(q, db_dir, llm, max_rows, tracer, settings, limiter,
-                           skip_respond, embedder)
+                           skip_respond, embedder, knowledge_dir)
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
             f.flush()  # 逐题落盘：运行中 tail 文件可见进度（M2 痛点）
 
@@ -143,7 +150,7 @@ def run_eval(questions_path: str, db_dir: str, sample: int | None = None,
 
 def _run_concurrent_path(questions, db_dir, llm, max_rows, out, resume,
                          concurrency, settings, limiter, skip_respond,
-                         budget_path=None, embedder=None) -> dict:
+                         budget_path=None, embedder=None, knowledge_dir=None) -> dict:
     """并发分片流程：每题独立分片（评测记录＋traces），主线程单写者收口合并。"""
     run_id = uuid.uuid4().hex[:12]
     todo = [q for q in questions
@@ -161,7 +168,7 @@ def _run_concurrent_path(questions, db_dir, llm, max_rows, out, resume,
                 tracer = TraceLogger(shard_trace, run_id=run_id)
                 tracer.set_context(question_id=str(q["question_id"]))
                 fut = ex.submit(_run_one, q, db_dir, llm, max_rows, tracer, settings,
-                                limiter, skip_respond, embedder)
+                                limiter, skip_respond, embedder, knowledge_dir)
                 futs[fut] = (q, shard_rec, shard_trace, tracer)
             for fut in as_completed(futs):
                 q, shard_rec, shard_trace, tracer = futs[fut]
@@ -234,10 +241,13 @@ def _run_stats(tracer, q: dict) -> dict:
 
 
 def _run_one(q: dict, db_dir: str, llm, max_rows: int, tracer, settings=None,
-             limiter=None, skip_respond: bool = False, embedder=None) -> dict:
+             limiter=None, skip_respond: bool = False, embedder=None,
+             knowledge_dir: str | None = None) -> dict:
     """单题评测：异常隔离，单题失败不阻塞整批；错误分类进 error_class。
     embedder（M10 票 01）＝表卡粗召回的向量化通道（eval 与 serve 共用同一库域档，
-    ADR-0004——库派生物的验收必须经 eval）；None＝现状一把梭逐字节一致。"""
+    ADR-0004——库派生物的验收必须经 eval）；None＝现状一把梭逐字节一致。
+    knowledge_dir（M10 票 05）＝口径字典档目录（None＝字典不挂、逐字节历史现状；
+    给了＝逐题现读 knowledge.yaml，缺料/过期/端点挂各按 knowledge_recall 行入账）。"""
     db_path = Path(db_dir) / q["db_id"] / f"{q['db_id']}.sqlite"
     base = {"question_id": q["question_id"], "db_id": q["db_id"],
             "difficulty": q.get("difficulty"), "question": q["question"],
@@ -254,7 +264,13 @@ def _run_one(q: dict, db_dir: str, llm, max_rows: int, tracer, settings=None,
                               # M10 票 03：值链同点装配（票 07 值链轮 eval＝库派生物
                               # 验收经 eval 的既定义务；缺料四路＝入账降级照常作答）
                               value_link=build_value_link(str(db_path), embedder,
-                                                          tracer=tracer))
+                                                          tracer=tracer),
+                              # M10 票 05：口径字典挂 eval＝两义分家钉生效后的人进料
+                              # 验收通路（spec §二 Q8——「eval 零触」只守人签题对）；
+                              # knowledge_dir 缺省＝不构造回调＝逐字节历史现状零行
+                              knowledge_recall=(build_knowledge_recall(
+                                  knowledge_dir, embedder, tracer=tracer)
+                                  if knowledge_dir else None))
     except Exception as e:  # noqa: BLE001 单题隔离：评测器最外层，单题任何失败不阻塞整批
         return {**base, **_run_stats(tracer, q), "pred_sql": None, "correct": False, "error": str(e),
                 "error_class": "answer_failed", **_FALLBACK_PATH}

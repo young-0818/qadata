@@ -343,10 +343,10 @@ def test_calibration_note_registered_in_source():
 
 
 def test_run_question_tail_param_value_link():
-    # build_graph/resume_question 尾三位钉在 test_table_cards（更新原钉）——此处只补
+    # build_graph/resume_question 尾四位钉在 test_table_cards（更新原钉）——此处只补
     # run_question 门面形（评审追补：勿三处逐字复制同一断言）
     params = list(inspect.signature(run_question).parameters)
-    assert params[-3:] == ["recall", "table_recall", "value_link"]
+    assert params[-4:] == ["recall", "table_recall", "value_link", "knowledge_recall"]
     assert "value_link" not in AgentState.__annotations__  # 不进状态键（可调用沿参纪律）
 
 

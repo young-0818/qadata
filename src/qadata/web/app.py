@@ -45,6 +45,7 @@ from qadata.graph.build import resume_question, run_question
 from qadata.graph.prompts import compose_supplement
 from qadata.obs import obs_for
 from qadata.retrieval.cards import build_table_recall
+from qadata.retrieval.knowledge import build_knowledge_recall
 from qadata.retrieval.values import build_value_link
 from qadata.tools.db import open_readonly
 from qadata.tools.schema import list_tables
@@ -485,11 +486,17 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
         recall = _recall_for(req.agent_id)
         table_recall = build_table_recall(path, embedder, tracer=tracer)
         value_link = build_value_link(path, embedder, tracer=tracer)
+        # M10 票 05：口径字典召回调同点装配（智能体域档＝逐请求现读目录，进料即
+        # 生效；无开关＝产物即开关，缺料/过期/端点挂＝knowledge_recall 行入账＋
+        # 不注入逐字节现状，降级在 retrieval/knowledge 闭包内自持）
+        knowledge_recall = build_knowledge_recall(store.agent_dir(req.agent_id),
+                                                  embedder, tracer=tracer)
         if pend is not None:
             answer = resume_question(pend.thread, req.question.strip(), llm=llm,
                                      settings=settings, tracer=tracer, on_event=on_event,
                                      checkpointer=checkpoint, obs=obs, recall=recall,
-                                     table_recall=table_recall, value_link=value_link)
+                                     table_recall=table_recall, value_link=value_link,
+                                     knowledge_recall=knowledge_recall)
             if answer.clarification:  # 不该发生（标记复闸保证续轮必答）；万一即塞回，不装没发生过
                 _pending[pkey] = pend
             return answer, compose_supplement(pend.question, pend.ask, req.question)
@@ -499,7 +506,7 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
                               settings=settings, tracer=tracer, on_event=on_event,
                               session_context=ctx, thread_id=thread, checkpointer=checkpoint,
                               obs=obs, recall=recall, table_recall=table_recall,
-                              value_link=value_link)
+                              value_link=value_link, knowledge_recall=knowledge_recall)
         if thread is not None and answer.clarification:
             _pending[pkey] = _PendingAsk(thread=thread, question=req.question.strip(),
                                          ask=answer.clarification)

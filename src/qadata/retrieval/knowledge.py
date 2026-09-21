@@ -24,14 +24,27 @@ manifest＝(model_id, built_at)（智能体域无库可对账——库域四件�
 
 坏档纪律（examples/load_cards 同门）：形状不正整档如实炸 KnowledgeError，
 调用方负责降级入账不静默——缺档＝None＝默认关＝逐字节现状。
+
+查询面（票 05，build_knowledge_recall）＝消解后题面**一次 embed**（题面 memo＝
+重试环不翻倍，值链/例题先例账形）→ numpy 全扫余弦 → 条数/阈值保守值截尾
+（KNOWLEDGE_TOP_K／KNOWLEDGE_MIN_SCORE，绝对阈不可靠系票 00 教训在本线的沿用、
+**待票 07 定标**）→ 口径字典块（节头单源字面，措辞自带 ADR-0006 优先级语义＝
+片段给整段压阵）。读侧**显式闸 stored.model_id**（票 04 移交在册——同维跨模型
+向量不自提示、字典路没有关键词保底可兜）。缺档/空池/缺 embedder/过期/端点挂/
+打分炸＝不注入＋knowledge_recall 行入账（hits/pool/model/latency 形制，不烧
+生成调用数）；永不因检索挂拒答（ADR-0005）。保险丝「撤字典块」位在撤值纸条
+之后、撤参考例题之前（gssc 淘汰序，判据注释在册）。
 """
 import csv
 import io
 import re
+import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NamedTuple
 
+import numpy as np
 import yaml
 
 from qadata.llm.tracing import now_beijing
@@ -187,3 +200,122 @@ def feed_knowledge(agent_dir: str | Path, source: str | Path,
          "entries": body_entries}, allow_unicode=True, sort_keys=False))
     return KnowledgeFeed(total=len(texts), added=added,
                          embedded=len(texts) if embedder is not None else 0)
+
+
+# ── 票 05 查询面：消解后题面 embed → numpy 全扫 → 保守截尾 → 字典块 ──────
+
+# 条数/阈值＝保守起步值（spec §二 Q8「条数/阈值保守值」）：top-K 封顶防灌爆
+# prompt；绝对阈只滤明显噪声——票 00 教训「绝对阈值不可靠」（探针实测正误 margin
+# 仅 0.043）在字典线同样成立，本值取低档宁漏杀不误杀，**待票 07 定标**。
+KNOWLEDGE_TOP_K = 3     # 注入条目上限——待票 07 定标
+KNOWLEDGE_MIN_SCORE = 0.35  # 绝对二道闸（同文短串对常见 0.6+，此值只挡正交噪声）——待票 07 定标
+
+# 节头＝渲染（本模块）与保险丝淘汰（gssc._cut_knowledge）共读的单源字面
+# （VALUE_STICKER_HEADER／EXAMPLES_HEADER 先例）。措辞自带 ADR-0006 优先级语义：
+# 检索片段非钦定全文——冲突时以「背景信息」（请求/智能体 evidence）为准。
+KNOWLEDGE_HEADER = ("## 口径字典片段（按题面从口径字典检索的业务口径，非钦定全文——"
+                    "与上方背景信息冲突时以背景信息为准；与本题无关则忽略）：")
+
+
+def format_knowledge_block(entries: Sequence[str]) -> str:
+    """字典块渲染（纯函数，零 LLM 确定性拼装）；空＝""＝不注入逐字节现状。
+    条目级切块可含换行（md 块内原样＝保形纪律）——续行两空格缩进承接
+    （_drop_oldest_entry 缩进续行同法，不美化不重排）。"""
+    if not entries:
+        return ""
+    lines: list[str] = []
+    for text in entries:
+        head, *rest = text.splitlines() or [""]
+        lines.append(f"- {head}")
+        lines.extend(f"  {ln}" for ln in rest)
+    return KNOWLEDGE_HEADER + "\n" + "\n".join(lines)
+
+
+def _scan_entries(stored: StoredKnowledge, qv: list[float], *,
+                  top_k: int, min_score: float) -> list[str]:
+    """numpy 全扫余弦（cards._top_tables 同姿势）：行序＝档内进料序（已确定），
+    零向量得分记 0；同分 stable argsort 保构建序确定性；维度不合＝宁降级不误打分。"""
+    m = np.asarray([e.vec for e in stored.entries], dtype=float)
+    q = np.asarray(qv, dtype=float)
+    if m.ndim != 2 or m.shape[1] != q.shape[0]:  # 端点异常/换模型残留＝不带病排序
+        raise KnowledgeError(f"向量维度不合：档内 {m.shape[1:]} ≠ 查询 {q.shape[0]}")
+    denom = np.linalg.norm(m, axis=1) * np.linalg.norm(q)
+    scores = np.divide(m @ q, denom, out=np.zeros(len(stored.entries)), where=denom > 0)
+    order = np.argsort(-scores, kind="stable")
+    return [stored.entries[i].text for i in order if scores[i] >= min_score][:top_k]
+
+
+def build_knowledge_recall(agent_dir: str | Path, embedder, *, tracer=None,
+                           top_k: int = KNOWLEDGE_TOP_K,
+                           min_score: float = KNOWLEDGE_MIN_SCORE) -> Callable[[str], str]:
+    """装配口径字典查询回调 `question→注入块`（""＝本轮不注入＝逐字节现状）。
+
+    恒返回回调（值链同族——无开关、缺料入账可见，spec §五「产物即开关」）；逐请求
+    现读档面（文件即数据库、进料即生效，_recall_for 同纪律）。每问 ≤1 次向量调用
+    （题面 memo＝generate 重试环/精准模式不翻倍）；缺档/空池/缺 embedder/过期/
+    端点挂/打分炸＝不注入＋knowledge_recall 行入账、照常作答（ADR-0005）。
+    过期闸**显式判 stored.model_id**（票 04 移交在册——字典路无关键词保底，
+    同维跨模型向量不会自提示）。账目归因序沿值链：缺档→空池→缺 embedder→过期
+    （一行给出一个可操作根因，不套双份）。"""
+    memo: dict[str, str] = {}
+
+    def _ledger(outcome: str, *, hits: int = 0, pool: int = 0,
+                reason: str = "", t0: float = 0.0) -> None:
+        if tracer is not None:
+            tracer.log("knowledge_recall", outcome=outcome, hits=hits, pool=pool,
+                       model=str(getattr(embedder, "model", "")),
+                       **({"latency_s": round(time.perf_counter() - t0, 2)}
+                          if outcome == "ok" else {"reason": reason[:160]}))
+
+    def recall(question: str) -> str:
+        if question in memo:
+            return memo[question]
+        try:
+            stored = load_knowledge(agent_dir)
+        except KnowledgeError as e:  # 坏档/挂账档＝如实入账（票 05 消费面接住票 04 挂账明示）
+            memo[question] = ""
+            _ledger("failed", reason=str(e))
+            return ""
+        except OSError as e:  # 权限/坏软链等裸 IO 错＝同路降级（值链票 03 评审追补同钉）
+            memo[question] = ""
+            _ledger("failed", reason=f"口径字典档读不动：{e}")
+            return ""
+        if stored is None:
+            memo[question] = ""
+            _ledger("skipped", reason="缺口径字典档（现读降级＝现状；进料＝qadata knowledge-feed）")
+            return ""
+        if not stored.entries:
+            memo[question] = ""
+            _ledger("skipped", reason="字典空档（建过但无条目）")
+            return ""
+        if embedder is None:
+            memo[question] = ""
+            _ledger("failed", pool=len(stored.entries),
+                    reason="向量化未配置（QADATA_EMBED_MODEL 为空）")
+            return ""
+        if stored.model_id != embedder.model:
+            memo[question] = ""
+            _ledger("failed", pool=len(stored.entries),
+                    reason=f"字典档过期（建档模型 {stored.model_id} ≠ 当前 {embedder.model}）"
+                           "——重新进料即整档刷新")
+            return ""
+        t0 = time.perf_counter()
+        try:
+            qv = embedder.embed([question])[0]  # 一批一发＝每问唯一向量调用（memo 之后不再碰）
+        except Exception as e:  # noqa: BLE001 端点挂＝降级不注入（失败纪律：入账、照常、不重试）
+            memo[question] = ""
+            _ledger("failed", pool=len(stored.entries),
+                    reason=f"向量化调用失败：{e}", t0=t0)
+            return ""
+        try:
+            picked = _scan_entries(stored, qv, top_k=top_k, min_score=min_score)
+        except KnowledgeError as e:  # 维度不合等打分异常＝同路降级，绝不拦答题
+            memo[question] = ""
+            _ledger("failed", pool=len(stored.entries), reason=str(e), t0=t0)
+            return ""
+        block = format_knowledge_block(picked)
+        memo[question] = block
+        _ledger("ok", hits=len(picked), pool=len(stored.entries), t0=t0)
+        return block
+
+    return recall

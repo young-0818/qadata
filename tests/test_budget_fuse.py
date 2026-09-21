@@ -203,10 +203,13 @@ def test_memory_drops_oldest_first_one_line_at_a_time(monkeypatch):
 
 
 def test_full_eviction_chain_includes_value_sticker(monkeypatch):
-    """M10 票 03 扩钉（全灌爆走满淘汰序）：记忆→值纸条→参考例题→值采样→失败历史，
-    撤值纸条位挨着撤参考例题（库派生物比人签例题更可再生＝更先出局）；
-    纸条恒贴 schema 最末，split 切尾不连累值采样块（两刀各安其位由序保证）。"""
+    """M10 票 03 扩钉、票 05 再扩（全灌爆走满淘汰序）：记忆→值纸条→字典块→参考例题→
+    值采样→失败历史。撤值纸条位挨着撤字典块（库派生物比人签料更可再生＝更先出局）；
+    撤字典块在撤参考例题**之前**——判据在册 gssc._cut_knowledge（字典档恒在、逐问
+    免费重召回 vs signed_by 人签稀缺资产）；纸条恒贴 schema 最末，split 切尾不连累
+    值采样块（各刀安位由序保证）。"""
     from qadata.graph.prompts import EXAMPLES_HEADER, format_examples_block
+    from qadata.retrieval.knowledge import format_knowledge_block
     from qadata.retrieval.values import VALUE_STICKER_HEADER
     schema = ("CREATE TABLE a(b TEXT);\n" * 20 + "\n"
               + VALUE_SAMPLE_HEADER + "\n" + "- b：'x'｜'y'\n" * 8 + "\n"
@@ -220,14 +223,16 @@ def test_full_eviction_chain_includes_value_sticker(monkeypatch):
         "session_context": {"turns": [],
                             "draft": {"sql": "SELECT " + "draft_body " * 40,
                                       "head": "标量值 3"}}}),
-        examples=format_examples_block([("历", "SELECT 1")]))
+        examples=format_examples_block([("历", "SELECT 1")]),
+        knowledge=format_knowledge_block(["贷款状态 'A' 表示正常贷款。"]))
     events = []
     out = gssc.assemble("generate", slots, on_compress=events.append)
-    assert events[0]["actions"] == ["整段撤记忆", "撤值纸条", "撤参考例题", "砍值采样",
-                                    "缩失败历史", "缩失败历史", "缩失败历史"], \
-        "逐级生效序含撤纸条位（摘要面后、撤参考例题前——淘汰位挨着参考例题格）"
+    assert events[0]["actions"] == ["整段撤记忆", "撤值纸条", "撤字典块", "撤参考例题",
+                                    "砍值采样", "缩失败历史", "缩失败历史",
+                                    "缩失败历史"], \
+        "逐级生效序含撤纸条与撤字典块位（摘要面后、撤参考例题前——票 05 淘汰位在册）"
     for gone in ("draft_body", VALUE_STICKER_HEADER, EXAMPLES_HEADER,
-                 VALUE_SAMPLE_HEADER, "no such table"):
+                 "贷款状态 'A' 表示正常贷款。", VALUE_SAMPLE_HEADER, "no such table"):
         assert gone not in out
     assert "CREATE TABLE a" in out and out.endswith("输出一条 SQL：")  # 地板与任务/输出面在位
 

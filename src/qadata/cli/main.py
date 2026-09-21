@@ -63,6 +63,9 @@ def main(argv: list[str] | None = None) -> int:
     p_eval.add_argument("--budget", default=None,
                         help="预算账本 markdown：轮末自动追加一行（题数×调用/tokens 实测；"
                              "估算成本与累计两列留待填由人折算），如 runs/m5-budget.md")
+    p_eval.add_argument("--knowledge", default=None,
+                        help="口径字典档目录（含 knowledge.yaml，knowledge-feed 落盘处）——"
+                             "M10 票 05 字典验收经 eval 的通道；缺省＝字典不挂＝逐字节历史现状")
 
     p_serve = sub.add_parser("serve", help="本地起问数 web demo（M7 票 02.5）：API＋前端同源＋智能体管理")
     p_serve.add_argument("--host", default="127.0.0.1")
@@ -164,6 +167,7 @@ def main(argv: list[str] | None = None) -> int:
             llm=build_llm(settings),  # 共享实例贯穿所有线程（替代逐题自建）
             skip_respond=args.skip_respond,
             budget_path=args.budget,
+            knowledge_dir=args.knowledge,
         )
         return 0
     if args.cmd == "serve":

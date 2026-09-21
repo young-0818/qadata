@@ -306,9 +306,11 @@ def test_index_follows_db_not_agent(tmp_path, fixture_db, ix):
 def test_wiring_tail_params_and_no_state_key():
     for fn in (build_graph, resume_question):
         params = list(inspect.signature(fn).parameters)
-        # 票 03 值链沿参追加后尾三位（M10 票 03 专测另钉末段全形）
-        assert params[-3:] == ["recall", "table_recall", "value_link"], fn.__name__
-    for name in ("table_recall", "value_link"):
+        # 票 03 值链沿参追加后尾三位；票 05 字典召回沿参后尾四位（M10 票 03 专测另钉
+        # run_question 门面形）
+        assert params[-4:] == ["recall", "table_recall", "value_link",
+                               "knowledge_recall"], fn.__name__
+    for name in ("table_recall", "value_link", "knowledge_recall"):
         assert name not in AgentState.__annotations__  # 不进状态键（可调用沿参）
     assert COARSE_TOP_K == 10
     assert FULL_SCHEMA_LIMIT == 8000  # 大库闸阈值＝表卡路的入口条件（现状家法同源）
