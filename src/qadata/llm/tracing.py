@@ -14,7 +14,7 @@ from qadata.llm.gateway import _is_retryable, backoff_delay, invoke_with_backoff
 
 BEIJING = timezone(timedelta(hours=8))
 
-# 节点级 trace 落盘路径（单一真源：ask/eval/serve 共用；仓库根 cwd 约定与 metrics_dir 同款）
+# 节点级 trace 落盘路径（单一真源：ask/eval/serve 共用；仓库根 cwd 约定与 DEFAULT_INDEX_DIR 同款）
 TRACE_PATH = "runs/traces.jsonl"
 
 _ZERO_USAGE = {"llm_calls": 0, "input_tokens": 0, "output_tokens": 0,

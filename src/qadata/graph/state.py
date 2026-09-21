@@ -10,9 +10,9 @@ class AgentState(TypedDict, total=False):
     original_question: str  # understand 改写前的原问题（多轮/审计用）
     # evidence 键已删（ADR-0008，2026-09-21）：口径唯一通道＝字典检索块经 Select 格
     # 进 generate，不再直塞状态。
-    intent: dict | None  # M5 载体 A：understand 同调产出的六字段题面摘要（宁空勿造，未明示即 null）；
-    # None＝解析失败回退态（原文当改写问题，不烧重试预算）。消费者＝值链搭车抽词（M10 票 03）
-    # ＋ respond 兜底口径说明展示消费 evidence_terms（零 prompt 注入，只进答案文本组装）；
+    intent: dict | None  # M5 载体 A：understand 同调产出的四字段题面摘要（宁空勿造，未明示即 null）；
+    # None＝解析失败回退态（原文当改写问题，不烧重试预算）。消费者＝值链搭车抽词（M10 票 03）；
+    # evidence_terms 展示消费者已随 ADR-0008 退役（respond 口径说明改读字典召回块）；
     # 尾段注入喂 generate 的软用途已判负拆除（2026-09-09 ④裁决，见 graph/intent.py 头注）；
     # metric_match 填槽消费者已随指标层退役（ADR-0007）
     db_schema: str
