@@ -202,7 +202,7 @@ def test_memory_drops_oldest_first_one_line_at_a_time(monkeypatch):
     assert "## 会话历史" in out and "原始问题：这些呢" in out  # 节头与任务面在位
 
 
-def test_full_eviction_chain_includes_value_sticker(monkeypatch):
+def test_full_eviction_chain_includes_sticker_and_knowledge(monkeypatch):
     """M10 票 03 扩钉、票 05 再扩（全灌爆走满淘汰序）：记忆→值纸条→字典块→参考例题→
     值采样→失败历史。撤值纸条位挨着撤字典块（库派生物比人签料更可再生＝更先出局）；
     撤字典块在撤参考例题**之前**——判据在册 gssc._cut_knowledge（字典档恒在、逐问

@@ -161,14 +161,21 @@ def build_table_recall(db_path: str | Path, embedder, *, tracer=None,
     return recall
 
 
+def cosine_scores(m: np.ndarray, q: np.ndarray) -> np.ndarray:
+    """检索域共读单源的余弦全扫（extract_keywords 共读先例同纪律）：每行与查询向的
+    余弦点积，零向量行得分记 0（宁不误排不假高分）。维度校验归调用方——
+    各家异常型与降级入账文案不同（RetrievalError/KnowledgeError 分域）。"""
+    denom = np.linalg.norm(m, axis=1) * np.linalg.norm(q)
+    return np.divide(m @ q, denom, out=np.zeros(len(m), dtype=float), where=denom > 0)
+
+
 def _top_tables(stored: StoredCards, qv: list[float], top_k: int) -> list[str]:
     """numpy 全扫余弦点积（owner 裁预装的点积引擎；几万条内正解——usearch README 口径）。
-    零向量行得分记 0（宁不误排不假高分）；同分按档内构建序（stable argsort＝确定性）。"""
+    同分按档内构建序（stable argsort＝确定性）。"""
     m = np.asarray([c.vec for c in stored.cards], dtype=float)
     q = np.asarray(qv, dtype=float)
     if m.shape[1] != q.shape[0]:  # 维度不合＝换模型残留/端点异常，宁降级不误打分
         raise RetrievalError(f"向量维度不合：档内 {m.shape[1]} ≠ 查询 {q.shape[0]}")
-    denom = np.linalg.norm(m, axis=1) * np.linalg.norm(q)
-    scores = np.divide(m @ q, denom, out=np.zeros(len(stored.cards)), where=denom > 0)
+    scores = cosine_scores(m, q)
     order = np.argsort(-scores, kind="stable")[:top_k]
     return [stored.cards[i].table for i in order]

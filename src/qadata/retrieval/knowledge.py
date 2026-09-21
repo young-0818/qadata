@@ -48,6 +48,7 @@ import numpy as np
 import yaml
 
 from qadata.llm.tracing import now_beijing
+from qadata.retrieval.cards import cosine_scores
 
 # atomic_write 唯一原子写入口复用（store.py 同门：跨层 import 好过三份
 # tmp+fsync+os.replace 字面漂移）
@@ -233,14 +234,13 @@ def format_knowledge_block(entries: Sequence[str]) -> str:
 
 def _scan_entries(stored: StoredKnowledge, qv: list[float], *,
                   top_k: int, min_score: float) -> list[str]:
-    """numpy 全扫余弦（cards._top_tables 同姿势）：行序＝档内进料序（已确定），
-    零向量得分记 0；同分 stable argsort 保构建序确定性；维度不合＝宁降级不误打分。"""
+    """numpy 全扫余弦（cards.cosine_scores 共读单源）：行序＝档内进料序（已确定），
+    同分 stable argsort 保构建序确定性；维度不合＝宁降级不误打分。"""
     m = np.asarray([e.vec for e in stored.entries], dtype=float)
     q = np.asarray(qv, dtype=float)
     if m.ndim != 2 or m.shape[1] != q.shape[0]:  # 端点异常/换模型残留＝不带病排序
         raise KnowledgeError(f"向量维度不合：档内 {m.shape[1:]} ≠ 查询 {q.shape[0]}")
-    denom = np.linalg.norm(m, axis=1) * np.linalg.norm(q)
-    scores = np.divide(m @ q, denom, out=np.zeros(len(stored.entries)), where=denom > 0)
+    scores = cosine_scores(m, q)
     order = np.argsort(-scores, kind="stable")
     return [stored.entries[i].text for i in order if scores[i] >= min_score][:top_k]
 

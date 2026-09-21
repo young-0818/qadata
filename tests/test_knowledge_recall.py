@@ -110,20 +110,66 @@ def test_no_wiring_baseline_vs_degradations_byte_identical(fixture_db, kb_dir, t
     (empty / KNOWLEDGE_FILENAME).write_text("", encoding="utf-8")  # 空文件＝空池
     for rec in (_recall(empty),                          # 空字典
                 build_knowledge_recall(kb_dir, None),    # 缺 embedder
-                build_knowledge_recall(kb_dir, BoomEmbedder()),  # 端点挂/过期双闸见下
+                build_knowledge_recall(kb_dir, BoomEmbedder()),  # boom 模型名不合＝过期闸先拦
                 _recall(tmp_path / "never-fed")):        # 缺档（现状）
         assert _run(rec) == base
+    # （闸后真撞端点的挂法＝档与 embedder 模型名相合，入账半边见下面 ledger 测）
 
 
 def test_pending_archive_degrades_to_empty(tmp_path):
     """挂账档（票 04 缺 embedder 落盘、无向量）读侧显形＝装载闸拒读→不注入
-    （消费面不白刷进料面的账）。"""
+    ＋failed 入账点名挂账（消费面接住进料面的账，修法文案在票 04 报错单源里）。"""
     d = tmp_path / "no-vec"
     d.mkdir()
     src = tmp_path / "d.md"
     src.write_text(REL, encoding="utf-8")
     feed_knowledge(d, src, None)  # 挂账进料
-    assert _recall(d)(Q1) == ""  # KnowledgeError→failed 入账（形制见 ledger 路）
+    tp = tmp_path / "t.jsonl"
+    tracer = TraceLogger(tp, run_id="r")
+    assert _recall(d, tracer=tracer)(Q1) == ""
+    row = _kb_rows(tp)[0]
+    assert row["outcome"] == "failed" and "挂账" in row["reason"]
+
+
+def test_degradation_ledger_rows_all_paths(tmp_path):
+    """缺料入账可见（产物即开关的账目半边）：空池/缺 embedder 两 skipped/failed 行
+    ＋闸后真撞端点（档与 embedder 模型名相合，BoomEmbedder.model 同名过闸）＋
+    维度不合不外抛——各路皆""＝不注入、reason 点名（值链 test_broken_stale_boom 先例形制）。"""
+    import yaml
+    d = tmp_path / "kb4"
+    d.mkdir()
+    src = tmp_path / "m.md"
+    src.write_text(REL, encoding="utf-8")
+    feed_knowledge(d, src, FakeEmbedder(VECS))
+    tp = tmp_path / "t.jsonl"
+    tr = TraceLogger(tp, run_id="r")
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    (empty / KNOWLEDGE_FILENAME).write_text("", encoding="utf-8")
+    assert _recall(empty, tracer=tr)(Q1) == ""      # 空池
+    assert _kb_rows(tp)[-1]["outcome"] == "skipped" and "空档" in _kb_rows(tp)[-1]["reason"]
+    assert build_knowledge_recall(d, None, tracer=tr)(Q1) == ""  # 缺 embedder
+    assert _kb_rows(tp)[-1]["outcome"] == "failed" and "未配置" in _kb_rows(tp)[-1]["reason"]
+    boom_dir = tmp_path / "kb-boom"
+    boom_dir.mkdir()
+    (boom_dir / KNOWLEDGE_FILENAME).write_text(yaml.safe_dump(  # 同名过闸＝真撞端点
+        {"manifest": {"model_id": "boom-embed"},
+         "entries": [{"text": REL, "vec": [1.0, 0.0]}]},
+        allow_unicode=True), encoding="utf-8")
+    emb = BoomEmbedder()
+    assert build_knowledge_recall(boom_dir, emb, tracer=tr)(Q1) == ""
+    row = _kb_rows(tp)[-1]
+    assert row["outcome"] == "failed" and "向量化调用失败" in row["reason"]
+    assert emb.calls == 1  # 过期闸放行＝这一发真发到端点才炸
+    dim = tmp_path / "kb-dim"
+    dim.mkdir()
+    (dim / KNOWLEDGE_FILENAME).write_text(yaml.safe_dump(  # 模型名合、维度不合＝打分炸不拦答题
+        {"manifest": {"model_id": "fake-embed"},
+         "entries": [{"text": REL, "vec": [1.0, 0.0, 0.0]}]},
+        allow_unicode=True), encoding="utf-8")
+    assert _recall(dim, tracer=tr)(Q1) == ""
+    assert _kb_rows(tp)[-1]["outcome"] == "failed" and "维度不合" in _kb_rows(tp)[-1]["reason"]
+    assert all("input_tokens" not in r for r in _kb_rows(tp))  # 全族不烧生成调用数
 
 
 # ── ② 账本形制＋memo＋过期闸 ───────────────────────────────────────────

@@ -288,7 +288,8 @@ def _cut_knowledge(sections: list[Section]) -> str | None:
     **之前**——判据：字典档恒在智能体目录、逐问重召回＝免费管理动作外零花费
     （与值纸条同属"撤了随时拿得回"）；参考例题系人签稀缺资产（signed_by 进料闸），
     本波最可再生序让位给前两者。KNOWLEDGE_HEADER 定位（节头单源共读，
-    VALUE_STICKER_HEADER 先例；惰性 import 防环）。"""
+    VALUE_STICKER_HEADER 先例；惰性 import＝装配骨架顶层依赖不收检索域、淘汰位才
+    现读字面——本对无环可防，姿势从 _cut_value_stickers）。"""
     from qadata.retrieval.knowledge import KNOWLEDGE_HEADER
     for i, s in enumerate(sections):
         if s.zone is Zone.EVIDENCE and KNOWLEDGE_HEADER in s.text:
