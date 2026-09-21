@@ -84,6 +84,15 @@ def test_gates_blacklist_affinity_long(value_db):
     # 黑名单在类型闸之后独立生效（ext_id/web_url/open_date 全为 TEXT 声明）：见上＝未入料
 
 
+def test_include_whitelist_eats_no_budget(value_db):
+    """include＝表名白名单先滤后进预算（票 07 夹具驱动用）：异域料不吃考题料的额度。
+    同 total_chars 下无白名单＝branch 先入账 ksym 照进；白名单只给 ksym＝branch 出局、
+    预算不为其垫付（first-fit 只数白名单内的列）。"""
+    cols, dropped = collect_value_candidates(value_db, include={"ksym"})
+    assert [(t, c) for t, c, _ in cols] == [("ksym", "symbol")]
+    assert dropped == 0
+
+
 def test_budget_whole_column_first_fit(tmp_path, ix):
     """封顶＝整列进出；first-fit＝胖子列（表序在前）出局、后面的窄列照进（不全局停）。"""
     p = tmp_path / "fit.sqlite"

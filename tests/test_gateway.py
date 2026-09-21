@@ -93,6 +93,43 @@ def test_backoff_without_limiter_unchanged():
     assert out.content == "ok" and llm.calls == 1
 
 
+def test_embedder_chunks_at_batch_max(monkeypatch):
+    """切批钉（票 07 端点实拍 ≤20/请求）：25 条→20+5 两批、顺序拼接、限速逐批领、
+    空料零请求。「一次向量化调用＝档面本体」是逻辑记法，HTTP 批数是实现细节。"""
+    from qadata.llm.gateway import EmbeddingsClient
+
+    batches = []
+
+    class FakeResp:
+        def __init__(self, n):
+            self.data = [type("D", (), {"embedding": [float(i)]}) for i in range(n)]
+
+    class FakeAPI:
+        @staticmethod
+        def create(model, input):
+            batches.append(list(input))
+            return FakeResp(len(input))
+
+    class FakeLimiter:
+        def __init__(self):
+            self.n = 0
+
+        def acquire(self):
+            self.n += 1
+
+    s = Settings(api_key="k", base_url="b", model="m", embed_model="e")
+    c = EmbeddingsClient(s)
+    c._client = type("C", (), {"embeddings": FakeAPI})()
+    lim = FakeLimiter()
+    c._limiter = lim
+    vecs = c.embed([f"t{i}" for i in range(25)])
+    assert [len(b) for b in batches] == [20, 5]
+    assert batches[0][0] == "t0" and batches[1][0] == "t20"  # 保序
+    assert vecs[0] == [0.0] and vecs[21] == [1.0]  # 跨批拼接＝各批内序复原
+    assert lim.n == 2  # 逐 HTTP 请求领限速
+    assert c.embed([]) == [] and len(batches) == 2  # 空料零请求
+
+
 def test_build_llm_precise_mode_uses_precise_temperature(monkeypatch):
     """精准模式（候选>1）温度切换 precise_temperature；默认关闭时仍 0。"""
     captured = {}

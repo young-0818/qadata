@@ -10,6 +10,9 @@ from qadata.config import Settings, load_settings
 
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}  # 限流与服务端抖动；401/403 不重试
 
+_EMBED_BATCH_MAX = 20  # /v1/embeddings 单请求条数上限（百炼实拍 400「should not be
+                       # larger than 20」，M10 票 07 合成库建卡撞出；换端点若更高改此数）
+
 
 class ReasoningChatOpenAI(ChatOpenAI):
     """把百炼兼容端流式 delta 里的 `reasoning_content` 提进 chunk.additional_kwargs。
@@ -62,10 +65,17 @@ class EmbeddingsClient:
                                      timeout=settings.llm_timeout_s)
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        if self._limiter is not None:
-            self._limiter.acquire()
-        resp = self._client.embeddings.create(model=self.model, input=list(texts))
-        return [d.embedding for d in resp.data]
+        # 端点批上限 ≤20（百炼 qwen3.7-text-embedding 实拍 400，票 07 合成库建卡撞出）
+        # ——切批在唯一协议面收口，调用方「一次向量化调用＝档面本体」记法不变
+        # （HTTP 批数是实现细节，账本入的是逻辑调用）。限速逐 HTTP 请求照领。
+        out: list[list[float]] = []
+        for i in range(0, len(texts), _EMBED_BATCH_MAX):
+            if self._limiter is not None:
+                self._limiter.acquire()
+            resp = self._client.embeddings.create(model=self.model,
+                                                  input=texts[i:i + _EMBED_BATCH_MAX])
+            out.extend(d.embedding for d in resp.data)
+        return out
 
 
 def build_embedder(settings: Settings | None = None) -> EmbeddingsClient:

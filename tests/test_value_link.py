@@ -116,27 +116,27 @@ def test_exact_hit_floor_and_first(tmp_path, ix):
 
 
 def test_relative_margin_and_absolute_floor(tmp_path, ix):
-    """margin 线切高过绝对闸但离列冠远者（0.6/0.52＜0.9×0.9）；整列最高分＜绝对
-    阈＝全列不贴（第二道闸兜"列冠本身就不像"）。"""
+    """margin 线切高过绝对闸但离列冠远者（0.6/0.52＜0.85×0.9）；整列最高分＜绝对
+    阈＝全列不贴（第二道闸兜"列冠本身就不像"）。数值＝票 07 定标后（k5/m0.85/s0.35）。"""
     db = _db(tmp_path)
-    vec = {"hi": _unit(0.9), "mid": _unit(0.6), "n052": _unit(0.52), "weak": _unit(0.4)}
+    vec = {"hi": _unit(0.9), "mid": _unit(0.6), "n052": _unit(0.52), "weak": _unit(0.3)}
     write_values(db, "fake-embed", [("c", "v", ["hi", "mid", "n052"]),
                                     ("d", "v", ["weak"])], vec, root=ix)
     emb = FakeEmbedder({"kw": [1.0, 0.0]})
     block = build_value_link(db, emb, root=ix)("kw", {"filters": ["kw"]}, ["c", "d"])
     assert "'hi'" in block and "'mid'" not in block and "'n052'" not in block
-    assert "d.v" not in block  # 列冠 0.4＜0.5 绝对闸＝整列出局（相对边际无参照不贴）
+    assert "d.v" not in block  # 列冠 0.3＜0.35 绝对闸＝整列出局（相对边际无参照不贴）
 
 
 def test_top_k_per_column(tmp_path, ix):
-    """逐列 top-K 截尾：同列四条全过线也只贴前三（分数降序）。"""
+    """逐列 top-K 截尾：同列六条全过线也只贴前五（分数降序；K＝票 07 定标值 5）。"""
     db = _db(tmp_path)
-    vals = {"v95": 0.95, "v94": 0.94, "v93": 0.93, "v92": 0.92}
+    vals = {"v95": 0.95, "v94": 0.94, "v93": 0.93, "v92": 0.92, "v91": 0.91, "v90": 0.90}
     write_values(db, "fake-embed", [("t", "c", list(vals))],
                  {k: _unit(c) for k, c in vals.items()}, root=ix)
     emb = FakeEmbedder({"kw": [1.0, 0.0]})
     block = build_value_link(db, emb, root=ix)("kw", {"filters": ["kw"]}, ["t"])
-    assert "'v95'" in block and "'v93'" in block and "'v92'" not in block
+    assert "'v95'" in block and "'v91'" in block and "'v90'" not in block
     assert block.index("v95") < block.index("v94") < block.index("v93")
 
 
@@ -329,17 +329,18 @@ def test_extract_keywords_cjk_flag():
 
 
 def test_constants_pinned():
-    assert VALUE_LINK_TOP_K == 3
-    assert VALUE_LINK_MARGIN == 0.9     # CHESS ≥0.9×max 先例（待票 07 定标）
-    assert VALUE_LINK_MIN_SCORE == 0.5  # 绝对二道闸（探针正解 0.578 下方，待票 07 定标）
+    assert VALUE_LINK_TOP_K == 5
+    assert VALUE_LINK_MARGIN == 0.85   # 票 07 定标（免费网格：0.9 把列内正解切掉，实拍）
+    assert VALUE_LINK_MIN_SCORE == 0.35  # 绝对二道闸——票 07 定标（0.5 整段误杀跨文带）
     assert VALUE_STICKER_HEADER.startswith("值纸条")
 
 
 def test_calibration_note_registered_in_source():
-    """CJK 边际线保守值＋「待票 07 定标」注释在册（票面验收第四条的机制钉）。"""
+    """CJK 边际线已定标＋定标注记在册（票面验收第四条「定标后旋钮值回写为测钉」的机制钉）。"""
     import qadata.retrieval.values as v
     src = inspect.getsource(v)
-    assert src.count("待票 07 定标") >= 2
+    assert src.count("票 07 定标") >= 2
+    assert "票 07 已定标" in src  # 判读锚（保守值不达线→定标值的证据链在注释里）
 
 
 def test_run_question_tail_param_value_link():

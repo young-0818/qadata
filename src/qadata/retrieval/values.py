@@ -89,14 +89,19 @@ def collect_value_candidates(db_path: str | Path, *,
                              total_chars: int = VALUE_INDEX_TOTAL_CHARS,
                              scan_window: int = VALUE_SCAN_WINDOW,
                              budget_s: float = VALUE_QUERY_TIMEOUT_S,
+                             include: set[str] | None = None,
                              ) -> tuple[list[tuple[str, str, list[str]]], int]:
     """采集候选（确定性＝表序[list_tables 字典序]×PRAGMA 列序×ORDER BY 1，双跑同档）：
     文本亲和→黑名单→有界 DISTINCT→整列进出吃字符预算。返回 ([(表,列,[值])], 放弃列数)。
-    只读连接唯一入口（沙箱①层）；库侧失败静默跳列（值采样同纪律）。"""
+    include＝表名白名单（None＝全库）：先滤后进预算——异域混库形态下让目标表族先入账
+    （票 07 合成库夹具驱动用）。只读连接唯一入口（沙箱①层）；库侧失败静默跳列
+    （值采样同纪律）。"""
     conn = open_readonly(str(db_path))
     try:
         out, dropped, used = [], 0, 0
         for t in list_tables(conn):
+            if include is not None and t not in include:
+                continue
             try:
                 info = conn.execute(f'PRAGMA table_info("{t}")').fetchall()
             except sqlite3.Error:
@@ -170,12 +175,15 @@ def extract_keywords(text: str, *, cjk: bool = False) -> set[str]:
     return out
 
 
-# CJK 边际线＝本波唯一校准旋钮（业界无先例照抄——英文考面没这病灶，spec §二 Q5）：
-# 两值皆保守起步、**待票 07 定标**（探针实测正误 margin 仅 0.043，绝对阈值不可靠，
-# 只作第二道闸；相对边际 ≥0.9×max 照 CHESS 先例）。
-VALUE_LINK_TOP_K = 3        # 逐列贴值上限（精确命中先、向量分降序截尾）
-VALUE_LINK_MARGIN = 0.9     # 相对边际系数（≥系数×列内最高分才贴）——待票 07 定标
-VALUE_LINK_MIN_SCORE = 0.5  # 绝对阈值第二道闸（探针正解 0.578 下方保守取）——待票 07 定标
+# CJK 边际线＝本波唯一校准旋钮（业界无先例照抄——英文考面没这病灶，spec §二 Q5）。
+# **票 07 已定标（2026-09-21，免费网格扫描 runs/m10-round3-rates.json，50 题全科）**：
+# 保守起步值（k3/m0.9/s0.5）值料入条率只有 66.7%，不达 ≥90% 设计线；
+# 定标值＝k5/m0.85/s0.35 → 90.5%（42 料入 38，样本薄、±1 料＝±2.4pp 注记在册）。
+# 主杠杆是绝对二道闸 0.5→0.35（0.5 把跨文正解带整段切掉——探针正解 0.578 本就贴边）；
+# 相对边际 0.9→0.85 补列内压制（正确值偶被列内噪声值以 >0.9× 比压低）。
+VALUE_LINK_TOP_K = 5        # 逐列贴值上限（精确命中先、向量分降序截尾）——票 07 定标
+VALUE_LINK_MARGIN = 0.85    # 相对边际系数（≥系数×列内最高分才贴）——票 07 定标
+VALUE_LINK_MIN_SCORE = 0.35  # 绝对阈值第二道闸——票 07 定标（0.5 在跨文带整段误杀，实拍）
 
 # 纸条节头＝渲染（本模块）与保险丝淘汰（gssc._cut_value_stickers）共读的单源字面
 # （VALUE_SAMPLE_HEADER／EXAMPLES_HEADER 先例）。块贴 schema 上下文**最末**（值采样

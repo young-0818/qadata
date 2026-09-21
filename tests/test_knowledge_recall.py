@@ -11,7 +11,8 @@
 ④ 账本 knowledge_recall 行形制（hits/pool/model/latency，无 token 标记＝不烧
   生成调用数）＋题面 memo 重试环不翻倍＋过期显式闸（票 04 移交在册：字典路无
   关键词保底，同维跨模型向量不自提示）＋挂账档读侧显形；
-⑤ 条数/阈值保守值数值钉＋「待票 07 定标」注释钉＋节头单源钉；select 第四格
+⑤ 条数/阈值定标值数值钉＋「票 07 定标/已定标」注记钉（票 07 后语义＝定标注记在册）
+  ＋节头单源钉；select 第四格
   恒等钉；挂接面＝eval 通道在册（两义分家钉生效）、CLI ask 不挂（裁决同族）。
 隔离纪律：全程 tmp_path（真实 data/agents 零染指）。进料侧钉在 test_knowledge_intake。
 """
@@ -295,11 +296,12 @@ def test_threshold_filters_orthogonal_noise(tmp_path):
 
 
 def test_constants_and_calibration_note():
-    assert KNOWLEDGE_TOP_K == 3
-    assert KNOWLEDGE_MIN_SCORE == 0.35  # 保守低档——待票 07 定标（注释在册）
+    assert KNOWLEDGE_TOP_K == 5      # 票 07 定标（k3→k5 召回 7/10→8/10，免费网格在册）
+    assert KNOWLEDGE_MIN_SCORE == 0.45  # 票 07 定标（0.35-0.55 召回不敏感→取中挡噪）
     assert KNOWLEDGE_HEADER.startswith("## 口径字典片段")
     src = inspect.getsource(knowledge_mod)
-    assert src.count("待票 07 定标") >= 2  # 值链同族：两个旋钮皆标注释（票面计数钉）
+    assert src.count("票 07 定标") >= 2  # 两旋钮定标注释皆在册（票面计数钉，值链同族）
+    assert "票 07 已定标" in src  # 防漂移锚（值链姊妹钉同法：子串计数会被「待」字旧形态蒙过）
 
 
 def test_eval_wired_cli_ask_not():

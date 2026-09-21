@@ -28,7 +28,7 @@ manifest＝(model_id, built_at)（智能体域无库可对账——库域四件�
 查询面（票 05，build_knowledge_recall）＝消解后题面**一次 embed**（题面 memo＝
 重试环不翻倍，值链/例题先例账形）→ numpy 全扫余弦 → 条数/阈值保守值截尾
 （KNOWLEDGE_TOP_K／KNOWLEDGE_MIN_SCORE，绝对阈不可靠系票 00 教训在本线的沿用、
-**待票 07 定标**）→ 口径字典块（节头单源字面，措辞自带 ADR-0006 优先级语义＝
+**票 07 已定标**）→ 口径字典块（节头单源字面，措辞自带 ADR-0006 优先级语义＝
 片段给整段压阵）。读侧**显式闸 stored.model_id**（票 04 移交在册——同维跨模型
 向量不自提示、字典路没有关键词保底可兜）。缺档/空池/缺 embedder/过期/端点挂/
 打分炸＝不注入＋knowledge_recall 行入账（hits/pool/model/latency 形制，不烧
@@ -209,11 +209,12 @@ def feed_knowledge(agent_dir: str | Path, source: str | Path,
 
 # ── 票 05 查询面：消解后题面 embed → numpy 全扫 → 保守截尾 → 字典块 ──────
 
-# 条数/阈值＝保守起步值（spec §二 Q8「条数/阈值保守值」）：top-K 封顶防灌爆
-# prompt；绝对阈只滤明显噪声——票 00 教训「绝对阈值不可靠」（探针实测正误 margin
-# 仅 0.043）在字典线同样成立，本值取低档宁漏杀不误杀，**待票 07 定标**。
-KNOWLEDGE_TOP_K = 3     # 注入条目上限——待票 07 定标
-KNOWLEDGE_MIN_SCORE = 0.35  # 绝对二道闸（同文短串对常见 0.6+，此值只挡正交噪声）——待票 07 定标
+# 条数/阈值＝**票 07 已定标（2026-09-21，免费网格 runs/m10-round4-dict.json，轮 4 池
+# 10 题全科）**：起步值 k3 召回 7/10 → k5 召回 8/10（+1 题、块长上界 5 条仍受控）；
+# 绝对阈 0.35→0.55 召回零变化＝本区间不 binding → 上调至 0.45 挡正交噪声（票 00
+# 「绝对阈不可靠」教训的定标兑现：阈值只在召回侧不 binding 时取高档防噪）。
+KNOWLEDGE_TOP_K = 5     # 注入条目上限——票 07 定标（k3→k5 召回 7/10→8/10）
+KNOWLEDGE_MIN_SCORE = 0.45  # 绝对二道闸——票 07 定标（0.35-0.55 区间召回不敏感，取中挡噪）
 
 # 节头＝渲染（本模块）与保险丝淘汰（gssc._cut_knowledge）共读的单源字面
 # （VALUE_STICKER_HEADER／EXAMPLES_HEADER 先例）。措辞自带 ADR-0006 优先级语义：

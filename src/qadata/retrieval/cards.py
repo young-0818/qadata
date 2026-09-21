@@ -38,7 +38,11 @@ from qadata.retrieval.store import (
 from qadata.tools.db import open_readonly
 from qadata.tools.schema import list_tables, load_description
 
-COARSE_TOP_K = 10  # 宽进阈值（spec §二 Q6：top-10；松紧＝票 07 定标旋钮，不设分数下限）
+COARSE_TOP_K = 120  # 宽进阈值——**票 07 已定标（2026-09-21）**：spec 起步值 top-10 在 391 表
+# 合成大库（runs/m10-round3-rates.json 免费全科）正确表逐表入率仅 63.2%（族口径 68.8%）——
+# 跨域近义词表＋同名族分数带整体压过高弱族基表，10 个格位装不全一道题的 2-4 张必需表。
+# 定标＝逐表族口径 ≥95% 线取最小 K：120（逐表 96.0%/族 96%，全题齐 47/50＝94%，残余 3 题
+# 为弱名多族题＝结构上限，分层召回升级判据在册 spec §五）。不设分数下限（保守向）。
 
 
 class IndexBuild(NamedTuple):

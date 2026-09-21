@@ -140,7 +140,8 @@ def test_coarse_narrow_fk_e2e(big_db, tmp_path, ix):
     tracer = TraceLogger(tmp_path / "traces.jsonl", run_id="r1")
     emb = _emb(big_db, "改写")
     build_index(big_db, emb, root=ix)
-    recall = build_table_recall(big_db, emb, tracer=tracer, root=ix)
+    # top_k=10 显式＝机制验证用小规模截断，不随出货默认值（票 07 定标＝120，常量另有数值钉）
+    recall = build_table_recall(big_db, emb, tracer=tracer, root=ix, top_k=10)
     llm = ScriptedLLM(["改写", "branch", "SELECT nm FROM branch", "BJ Branch"])
     ans = run_question(big_db, "branch 名字", llm=llm, settings=_S, tracer=tracer,
                        table_recall=recall)
@@ -157,7 +158,7 @@ def test_coarse_narrow_fk_e2e(big_db, tmp_path, ix):
     for noise in ("noise_00", "noise_07"):
         assert f"CREATE TABLE {noise}" not in gen
     rows = [x for x in _rows(tmp_path / "traces.jsonl") if x["node"] == "table_recall"]
-    assert len(rows) == 1 and rows[0]["outcome"] == "ok" and rows[0]["cands"] == COARSE_TOP_K
+    assert len(rows) == 1 and rows[0]["outcome"] == "ok" and rows[0]["cands"] == 10  # ＝显式 top_k
     assert "input_tokens" not in rows[0]  # 不烧生成调用数（recall 行同形）
     assert tracer.usage_for("-")["llm_calls"] == 4  # 4 次真调用，检索行不掺账
 
@@ -312,5 +313,5 @@ def test_wiring_tail_params_and_no_state_key():
                                "knowledge_recall"], fn.__name__
     for name in ("table_recall", "value_link", "knowledge_recall"):
         assert name not in AgentState.__annotations__  # 不进状态键（可调用沿参）
-    assert COARSE_TOP_K == 10
+    assert COARSE_TOP_K == 120  # 票 07 定标（391 表族粒度每表 96% 过线，注记在源码）
     assert FULL_SCHEMA_LIMIT == 8000  # 大库闸阈值＝表卡路的入口条件（现状家法同源）
