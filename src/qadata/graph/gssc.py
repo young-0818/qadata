@@ -5,7 +5,7 @@
 
 Gather 收齐候选（gather_*＝读状态、格式化素材，节点侧不再伸手拿料）
 → Select 挑选（M9 票 06 上岗：generate 场景经 recall 回调做一次 embedding 召回
-  ＋关键词保底（hybrid），料池＝人签例题库，装配在 web/examples——本模块只认
+  ＋关键词保底（hybrid），料池＝人签例题库，装配在 retrieval/examples——本模块只认
   「question→注入块」的回调形状；其余场景与未挂接＝恒等通过，不演不撒谎）
 → Structure 分区落位（六分区＝装配器内部分类法、非统一字节顺序——各场景按现状
   字节序落位，ADR-0002 在案；分区骨架重排已被否，勿回锅）
@@ -137,7 +137,7 @@ def gather_schema_pick(tables: list[str], question: str) -> dict[str, str]:
 def select(scenario: str, slots: dict[str, str], *, recall=None,
            knowledge_recall=None) -> dict[str, str]:
     """挑选阶段（M9 票 06 上岗）：generate 场景经 recall 回调（question→注入块，
-    例题库 embedding top-K＋关键词保底，web/examples 装配）把召回块放进 "examples" 槽；
+    例题库 embedding top-K＋关键词保底，retrieval/examples 装配）把召回块放进 "examples" 槽；
     M10 票 05 第四格＝knowledge_recall 回调（同形，口径字典检索块，retrieval/knowledge
     装配）进 "knowledge" 槽。回调空串＝本无料或降级，槽不加。两回调缺省 None／非
     generate 场景＝恒等通过（原对象返回——默认关与空池＝逐字节现状，金标准测网共守；

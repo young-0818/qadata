@@ -51,6 +51,7 @@ from qadata.graph.build import resume_question, run_question
 from qadata.graph.prompts import compose_supplement
 from qadata.obs import obs_for
 from qadata.retrieval.cards import build_table_recall
+from qadata.retrieval.examples import ExampleError, build_recall, load_examples
 from qadata.retrieval.knowledge import (
     PENDING_EMBED_NOTE,
     build_knowledge_recall,
@@ -67,7 +68,6 @@ from qadata.web.agents import (
     AgentStoreError,
 )
 from qadata.web.charts import decide_chart
-from qadata.web.examples import ExampleError, build_recall, load_examples
 from qadata.web.feedback import FeedbackError, append_vote, latest_votes
 from qadata.web.sessions import (
     Session,

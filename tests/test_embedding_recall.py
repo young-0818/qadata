@@ -1,5 +1,8 @@
 """M9 票 06 专测：例题库（人签）＋ hybrid embedding 召回（Select 格上岗，离线零联网）。
 
+M10 票 06 归位：机制整体自 web/examples 平移进 retrieval 域——专测跟迁、仅改 import
+路径即原样绿（搬家不动货，重铸禁忌）。
+
 钉票面验收全表：
 ① FakeEmbedder 离线钉：调用计数（批量签库＝一次、每问一发、题面 memo 重试不翻倍）、
   top-K 形状、**升序注入**（最像的贴问题最近）、hybrid 关键词精确保底命中；
@@ -27,10 +30,7 @@ from qadata.graph.prompts import (
     sql_prompt,
 )
 from qadata.llm.tracing import TraceLogger
-from qadata.tools.schema import VALUE_SAMPLE_HEADER
-from qadata.web.agents import AgentStore
-from qadata.web.app import create_app
-from qadata.web.examples import (
+from qadata.retrieval.examples import (
     RECALL_TOP_K,
     Example,
     ExampleError,
@@ -38,6 +38,9 @@ from qadata.web.examples import (
     load_examples,
     sign_examples,
 )
+from qadata.tools.schema import VALUE_SAMPLE_HEADER
+from qadata.web.agents import AgentStore
+from qadata.web.app import create_app
 from tests.fakes import BoomEmbedder, FakeEmbedder, ScriptedLLM
 from tests.test_web_api import _HAPPY_SCRIPT, _S, _agent_with_datasource
 
@@ -164,10 +167,12 @@ def test_sign_refuses_orphan_dir(tmp_path):
 def test_auto_absorption_mechanically_refused():
     """写入口零触扫描：ask 链路/会话/反馈/图侧源码出现 sign_examples 进料即红；
     CLI 的 examples-sign（唯一进料口）之外，问数调用面零挂 recall、eval 零触例题面。
-    （M10 票 01 两义分家：本钉守的是**人签知识不进自动评测**（防自动吸收病灶）——
-    eval 面禁词从泛指 recall/embed 收窄为例题专名 build_recall/examples；库派生物
-    （表卡/值索引）的验收必须经 eval（ADR-0004／spec §五「扩用被否」），CLI ask 面
-    依旧零挂（"recall" 整词钉不动——表卡粗召回属 serve/eval 面，ask 现状路径）。）"""
+    （M10 票 01 两义分家、票 06 归位后语义注记定稿：本钉自此是**人签知识专属**
+    （守「人签知识不进自动评测」＝防自动吸收病灶）——eval 面禁词从泛指 recall/
+    embed 收窄为例题专名 build_recall/examples；库派生物（表卡/值索引）与口径字典
+    （人进料但非人签题对）不受此钉约束、其验收必须经 eval（ADR-0004 Consequences
+    在册／spec §五「扩用被否」），CLI ask 面依旧零挂（"recall" 整词钉不动——表卡
+    粗召回属 serve/eval 面，ask 现状路径）。）"""
     import qadata.cli.main as cli_main
     import qadata.eval.bird as eval_bird
     import qadata.graph.build as build_mod

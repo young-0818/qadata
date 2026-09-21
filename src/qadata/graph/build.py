@@ -147,7 +147,7 @@ def run_question(db_path: str, question: str, evidence: str = "", llm=None,
     直达 END（CLI/eval/无会话单轮形态，与本参数存在前逐行为一致）。
     obs（M9 票 01，qadata.obs.Obs）：帧流→OTel span 镜像器，缺省 None＝调用面零挂接
     （默认关逐字节照旧）；调用方不带＝出口开着时按问自造一条（CLI ask 形态，串联键 run_id）。
-    recall（M9 票 06）：例题库召回回调（web/examples.build_recall 装配，question→注入块），
+    recall（M9 票 06）：例题库召回回调（retrieval/examples.build_recall 装配，question→注入块），
     经 build_graph 闭包进 generate 的 Select 格——**不进状态键**（可调用对象×checkpointer
     序列化不相宜；session_context 显式载荷纪律在此不适用）；缺省 None＝逐字节现状
     （CLI/eval 零挂接）。

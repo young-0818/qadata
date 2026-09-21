@@ -109,7 +109,7 @@ OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic <base64(pk:sk)>,x-langfuse-inges
 
 | 判据 | 触发条件 | 做法 | 代码锚点 |
 |---|---|---|---|
-| 例题库索引 | 条目破 ~5 万或多进程共享 | 本地 ANN（usearch，**仍是文件，不上服务**） | `src/qadata/web/examples.py` 模块头 |
+| 例题库索引 | 条目破 ~5 万或多进程共享 | 本地 ANN（usearch，**仍是文件，不上服务**） | `src/qadata/retrieval/examples.py` 模块头 |
 | 大库召回 | 几万表规模 | 真瓶颈在**分层召回＋选表预算**（RASL 形状），非索引 | 同上 |
 | LangSmith | 想调试 graph 内部 state 时 | 不给主干地位（数据出境/离线纪律冲突）——临时给 provider 挂一个指其 OTLP collector 的 span processor 即可，不立配置面 | `src/qadata/obs.py` 模块头 |
 

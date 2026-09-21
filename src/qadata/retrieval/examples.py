@@ -1,5 +1,8 @@
 """M9 票 06 例题库与 embedding 召回——GSSC Select 格的上岗料池（spec §二 Q6／ADR-0002）。
 
+M10 票 06 归位：自 web/examples 整体平移进检索域（只搬家不重铸——签名/行为/扫描钉
+原样，双域归属自此在代码结构上成立：检索代码一家住，档面仍跟智能体走）。
+
 例题库＝人签题对（问题→已验证 SQL），住智能体目录 `examples.yaml`（文件即数据库，
 AgentStore/sessions 同款；删智能体连带清）。**唯一进料口＝`qadata examples-sign` 人签**
 ——每条必带 signed_by，装载时无签条目整档拒收；会话成功轮永不自动吸收（spec §五
@@ -34,6 +37,8 @@ import yaml
 
 from qadata.graph.prompts import format_examples_block
 from qadata.retrieval.values import extract_keywords
+
+# atomic_write 唯一原子写入口复用（store/knowledge 同门：跨层 import 好过三份字面漂移）
 from qadata.web._fs import atomic_write
 
 EXAMPLES_FILENAME = "examples.yaml"  # 智能体目录内唯一档名（写入口单源＝sign_examples）

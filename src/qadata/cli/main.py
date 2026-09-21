@@ -191,10 +191,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "examples-sign":
         from qadata.config import load_settings
         from qadata.llm.gateway import build_embedder  # 唯一生产位向量化通道
-        from qadata.web.agents import AgentStore
-        from qadata.web.examples import (
+        from qadata.retrieval.examples import (
             sign_examples,  # 逻辑全在包内，CLI 薄壳；唯一进料口
         )
+        from qadata.web.agents import AgentStore
 
         settings = load_settings()
         if not settings.embed_model:
