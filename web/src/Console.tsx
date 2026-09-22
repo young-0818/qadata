@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import { AskResponse, ProgressEvent, isThinkingEvent, isToolEvent } from "./api";
 
 // M8 票 06 任务控制台：把票 03 既有进度帧喂厚的纯展示面——架构不动（固定状态机
@@ -79,7 +79,7 @@ export function buildSteps(trail: ProgressEvent[]): Step[] {
   return steps;
 }
 
-function Card({ label, value, sub }: { label: string; value: string; sub?: string }) {
+function Card({ label, value, sub }: { label: string; value: ReactNode; sub?: string }) {
   return (
     <div className="c-card">
       <span className="c-card-label">{label}</span>
@@ -152,9 +152,14 @@ export function Console({
               sub={resp && !resp.failed && !resp.clarification && resp.rows ? "显示上限内" : undefined}
             />
             <Card
-              label="token 输入 / 输出"
-              value={`输入 ${tokensIn.toLocaleString("en-US")}`}
-              sub={`输出 ${tokensOut.toLocaleString("en-US")}`}
+              label="Token 消耗"
+              value={
+                <>
+                  输入 {tokensIn.toLocaleString("en-US")}
+                  <br />
+                  输出 {tokensOut.toLocaleString("en-US")}
+                </>
+              }
             />
           </div>
           <div className="c-steps">
