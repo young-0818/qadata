@@ -47,12 +47,19 @@ export interface DatasourceInfo {
   error: string | null; // 库打不开如实上报，不装正常
 }
 
+export interface KnowledgeInfo {
+  has_entries: boolean;
+  entry_count: number;
+  error: string | null; // 挂账（有内容未向量化）/坏档如实上报，不装已生效
+}
+
 export interface AgentDetail {
   id: string;
   name: string;
   description: string;
   preset_questions: string[];
   datasource: DatasourceInfo;
+  knowledge: KnowledgeInfo;
 }
 
 // 非 2xx 时把后端诚实的 detail 文案取出来展示（永不编造错误说明）

@@ -503,6 +503,15 @@ function AgentPage({
           进料认 md/txt/csv：一条口径一个空行块（csv 一行一条）；重复导入＝合并去重、
           只增不删——字典是累积资产，清库＝删智能体
         </p>
+        <p className="sub">
+          {agent.knowledge.has_entries && agent.knowledge.error
+            ? `已导入 ${agent.knowledge.entry_count} 条，但未生效：${agent.knowledge.error}`
+            : agent.knowledge.has_entries
+              ? `已配置 · ${agent.knowledge.entry_count} 条（按题面检索注入）`
+              : agent.knowledge.error
+                ? `字典异常：${agent.knowledge.error}`
+                : "未配置——用下方导入 md/txt/csv"}
+        </p>
         <div className="row">
           <input
             key={kbKey}

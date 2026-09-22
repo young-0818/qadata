@@ -160,6 +160,22 @@ def load_knowledge(agent_dir: str | Path) -> StoredKnowledge | None:
     return StoredKnowledge(model_id=model_id, entries=tuple(entries))
 
 
+def knowledge_status(agent_dir: str | Path) -> tuple[int, str | None]:
+    """详情页「已配置 · N 条」状态读数（区别于 load_knowledge 的全闸装载）。
+    只数条、不逐向量校验——展示面不该因校验细节把面板搞炸。缺档＝(0, None)＝未配置；
+    坏档＝(0, 真话)（如实上报不装正常，datasource 摘要同纪律）；挂账档（有内容无向量）
+    ＝(条数, PENDING_EMBED_NOTE)——条数照实给、note 说清"喂了但没向量化、问数不生效"。"""
+    try:
+        body = _read_body(agent_dir)
+    except KnowledgeError as e:
+        return 0, str(e)
+    if body is None:
+        return 0, None
+    model_id, entries = body
+    note = PENDING_EMBED_NOTE if (entries and not model_id) else None
+    return len(entries), note
+
+
 def feed_knowledge(agent_dir: str | Path, source: str | Path,
                    embedder: Any | None) -> KnowledgeFeed:
     """进料（唯一写入口，CLI 管理动作专供）：读 md/txt/csv→条目级切块→与旧档

@@ -302,6 +302,27 @@ def test_web_intake_pending_note(tmp_path):
     assert "PENDING_EMBED_NOTE" in inspect.getsource(cli_main)  # CLI 共读在册
 
 
+def test_detail_knowledge_status(tmp_path):
+    """GET 智能体详情回知识面板状态读数（对齐 datasource 的 has/count/error 形）：
+    缺档未配置、喂料后已配置条数、挂账档如实带 note（"喂了但未生效"不能装已配置）。"""
+    _store, meta, client = _web_client(tmp_path, _emb())
+    assert client.get(f"/api/agents/{meta.id}").json()["knowledge"] == {
+        "has_entries": False, "entry_count": 0, "error": None}  # 缺档＝未配置
+    client.post(f"/api/agents/{meta.id}/knowledge", params={"name": "d.md"},
+                content=MD_TEXT.encode("utf-8"))
+    assert client.get(f"/api/agents/{meta.id}").json()["knowledge"] == {
+        "has_entries": True, "entry_count": 2, "error": None}  # 喂 2 条即显 2 条
+
+
+def test_detail_knowledge_status_pending(tmp_path):
+    """挂账档（缺 embedder 喂料）：条数照给、error 带挂账真话——面板不能显示"已生效"。"""
+    _store, meta, client = _web_client(tmp_path, None)
+    client.post(f"/api/agents/{meta.id}/knowledge", params={"name": "d.md"},
+                content=MD_TEXT.encode("utf-8"))
+    k = client.get(f"/api/agents/{meta.id}").json()["knowledge"]
+    assert k["has_entries"] is True and k["entry_count"] == 2 and k["error"] == PENDING_EMBED_NOTE
+
+
 def test_constants():
     assert KNOWLEDGE_FILENAME == "knowledge.yaml"
     assert INTAKE_SUFFIXES == frozenset({".md", ".txt", ".csv"})

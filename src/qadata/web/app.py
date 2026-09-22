@@ -56,6 +56,7 @@ from qadata.retrieval.knowledge import (
     PENDING_EMBED_NOTE,
     build_knowledge_recall,
     feed_knowledge,
+    knowledge_status,
 )
 from qadata.retrieval.values import build_value_link
 from qadata.tools.db import open_readonly
@@ -212,11 +213,17 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
             # （含 sqlite3 系异常——web 包 import 纪律不引 sqlite3，捕获面在此宽为有意为之）
             return {"has_file": True, "table_count": None, "error": str(e)}
 
+    def _knowledge_info(meta: AgentMeta) -> dict[str, Any]:
+        # 面板状态读数（只数条、不校验向量全貌）：has_entries/entry_count/error
+        count, note = knowledge_status(store.agent_dir(meta.id))
+        return {"has_entries": count > 0, "entry_count": count, "error": note}
+
     def _detail(meta: AgentMeta) -> dict[str, Any]:
         # evidence/business_knowledge 展示键已随 ADR-0008 撤（口径管理面＝口径字典面板）
         return {"id": meta.id, "name": meta.name, "description": meta.description,
                 "preset_questions": list(meta.preset_questions),
-                "datasource": _datasource_info(meta)}
+                "datasource": _datasource_info(meta),
+                "knowledge": _knowledge_info(meta)}
 
     # ── 模型配置：只读卡（可写化＝后手裁决；.env 是模型唯一真源）──────
 
