@@ -53,6 +53,19 @@ export interface KnowledgeInfo {
   error: string | null; // 挂账（有内容未向量化）/坏档如实上报，不装已生效
 }
 
+export interface IndexJob {
+  state: string; // running | ok | partial | failed
+  note: string; // 回执真话（后端单源，前端只贴）
+  started: string;
+}
+
+export interface IndexInfo {
+  embed_configured: boolean;
+  cards: string; // missing | broken | stale | ok（现读降级闸同源）
+  values: string;
+  job: IndexJob | null; // 无＝从未点过建索引
+}
+
 export interface AgentDetail {
   id: string;
   name: string;
@@ -60,6 +73,7 @@ export interface AgentDetail {
   preset_questions: string[];
   datasource: DatasourceInfo;
   knowledge: KnowledgeInfo;
+  index: IndexInfo;
 }
 
 // 非 2xx 时把后端诚实的 detail 文案取出来展示（永不编造错误说明）
@@ -151,9 +165,18 @@ export async function uploadKnowledge(id: string, file: File): Promise<Knowledge
   return (await res.json()) as KnowledgeFeedResult;
 }
 
+// M11 票 02：建索引 web 门（ADR-0005：显式管理动作，点击才触发一次后台构建；
+// 200＝已受理，进度经详情面 index.job 轮询现读，不开第二通道）
+export async function startIndexBuild(id: string): Promise<void> {
+  const res = await fetch(`/api/agents/${id}/index-build`, { method: "POST" });
+  if (!res.ok) throw new Error(await errorText(res, "索引构建未启动"));
+}
+
 // 票 03：进度流帧三型（M8 票 06 喂厚，文案后端单源，前端只贴标签）：
 // start 帧三字段不动；结果帧加 ok/duration_ms/tokens_in/tokens_out（chart 可选字段
 // 先例——旧消费者忽略即得）；tool 子事件帧无 attempt/status，kind:"tool" 判别。
+// 实时工具链追加 tool start 活口帧（第四型）：kind:"tool" 且 status:"start"＝工具开跑、
+// 尚无 ok/耗时——前端当场成行转圈，收口帧原位配对翻终态（同 node 同 tool 最近未收口行）。
 // 联合类型＝编译器即帧型钉：忘判 kind 直接取 status 过不了 tsc。
 export interface StepEvent {
   kind?: undefined; // 判别位（tool 帧专属 "tool"，此处显式 undefined 供联合收窄）
@@ -169,10 +192,20 @@ export interface StepEvent {
 export interface ToolEvent {
   node: string; // 归属步骤（explore/execute/respond）
   kind: "tool";
+  status?: undefined; // 判别位：收口帧无 status（start 活口帧专属 "start"）
   tool: string; // list_tables/get_schema/select_tables/value_samples/execute_sql…
   ok: boolean; // 绿点成功/红点失败（owner 截图语义）
   duration_ms: number;
   detail?: string; // 可选尾字段（chart 同族）：值链「实际取值」命中明细（列→库内实际值）
+}
+
+// tool start 活口帧：工具开跑即发（无 ok/耗时——还没跑完，如实半开）。
+// budget_fuse 等即时入账帧无计时区间＝不发此型（发射侧裁决）。
+export interface ToolStartEvent {
+  node: string;
+  kind: "tool";
+  status: "start";
+  tool: string;
 }
 
 // M8 票 08 思考流：understand/generate 流式旁路的 reasoning_content 增量帧（后端逐
@@ -184,10 +217,15 @@ export interface ThinkingEvent {
   text: string; // 该 chunk 的思考文本增量（前端拼接）
 }
 
-export type ProgressEvent = StepEvent | ToolEvent | ThinkingEvent;
+export type ProgressEvent = StepEvent | ToolEvent | ToolStartEvent | ThinkingEvent;
 
+// 判别拆两半（帧型钉延续）：收口帧 ok/duration_ms 必在场、start 活口帧必无——
+// 忘判 status 直接取 ok 过不了 tsc
 export const isToolEvent = (ev: ProgressEvent): ev is ToolEvent =>
-  ev.kind === "tool";
+  ev.kind === "tool" && ev.status !== "start";
+
+export const isToolStartEvent = (ev: ProgressEvent): ev is ToolStartEvent =>
+  ev.kind === "tool" && ev.status === "start";
 
 export const isThinkingEvent = (ev: ProgressEvent): ev is ThinkingEvent =>
   ev.kind === "thinking";

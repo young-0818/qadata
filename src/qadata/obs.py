@@ -140,6 +140,8 @@ class Obs:
         if kind == "thinking":
             return  # Q9：不入 span
         if kind == "tool":
+            if f.get("status") == "start":
+                return  # start 活口帧不建 span（span 一次成型现状零动；Langfuse 里不留半开 span）
             end = time.time_ns()
             attrs = {"node": node, "ok": f["ok"], "duration_ms": f["duration_ms"]}
             span = self._child(self._open.get(node) or self._root, f["tool"], attrs,

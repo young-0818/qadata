@@ -5,6 +5,9 @@ ok/duration_ms/tokens_in/tokens_out（chart 可选字段先例——消费者可
 末帧 answer 契约零动）；tool 子事件帧＝node/kind/tool/ok/duration_ms
 （explore 内 list_tables/get_schema/[select_tables]/[value_samples]/[value_link]、
 execute 内 execute_sql，on_event 沿参透传 tools 层）。
+tool start 帧（实时工具链）＝tool 收口帧的开跑对偶：{node,kind,tool,status:"start"}
+四字段、无 ok/duration_ms——慢操作当场出活口，收口帧原位配对翻终态；
+budget_fuse 即时入账帧无计时区间＝不发 start。
 钉四件事：①缺省 None 时与现状逐行为一致（CLI/eval 调用面零改动——调用面源码
 出现 on_event 即红，tools 层不传即零发）；②帧形状三型钉死；③假模型下自纠错
 全编——失败→重试→成功、失败红点子事件、提取失败→转重试、预算耗尽→如实报失败
@@ -22,6 +25,7 @@ _S = Settings(api_key="", base_url="", model="test-model", retry_budget=3)
 _START_KEYS = {"node", "attempt", "status"}
 _RESULT_KEYS = _START_KEYS | {"ok", "duration_ms", "tokens_in", "tokens_out"}
 _TOOL_KEYS = {"node", "kind", "tool", "ok", "duration_ms"}
+_TOOL_START_KEYS = {"node", "kind", "tool", "status"}
 
 _GOOD = "SELECT name FROM students WHERE id = 2"
 _BAD = "SELECT nope FROM students"
@@ -46,6 +50,11 @@ def _fr(node: str, attempt: int, status: str, *, ok: bool = True) -> dict:
 
 def _tool(node: str, tool: str, *, ok: bool = True) -> dict:
     return {"node": node, "kind": "tool", "tool": tool, "ok": ok}
+
+
+def _tool_open(node: str, tool: str) -> dict:
+    """tool start 帧（开跑活口）——收口帧（_tool）之前先发此帧，前端当场成行转圈。"""
+    return {"node": node, "kind": "tool", "tool": tool, "status": "start"}
 
 
 def _strip(frames: list[dict]) -> list[dict]:
@@ -116,6 +125,9 @@ def test_frame_shape_three_kinds(fixture_db):
         assert f["node"] in nodes
         if f.get("kind") == "tool":
             saw_tool = True
+            if f.get("status") == "start":
+                assert set(f) == _TOOL_START_KEYS, f  # start 活口帧四字段钉死（无 ok/耗时）
+                continue
             assert _TOOL_KEYS <= set(f) <= _TOOL_KEYS | {"detail"}, f  # detail 可选尾字段（值链命中明细，chart 同族）
             assert isinstance(f["ok"], bool)
         elif f["status"] == "start":
@@ -142,17 +154,21 @@ def test_fail_retry_success_full_sequence(fixture_db):
         {"node": "understand", "attempt": 0, "status": "start"},
         _fr("understand", 0, "解析失败，按原问题作答"),
         {"node": "explore", "attempt": 0, "status": "start"},
+        _tool_open("explore", "list_tables"),
         _tool("explore", "list_tables"),
+        _tool_open("explore", "get_schema"),
         _tool("explore", "get_schema"),
         _fr("explore", 0, "取到 Schema"),
         {"node": "generate", "attempt": 0, "status": "start"},
         _fr("generate", 0, "生成 SQL"),
         {"node": "execute", "attempt": 0, "status": "start"},
+        _tool_open("execute", "execute_sql"),
         _tool("execute", "execute_sql", ok=False),  # 失败红点（截图语义）
         _fr("execute", 1, _FAIL_HINT, ok=False),
         {"node": "generate", "attempt": 1, "status": "start"},
         _fr("generate", 1, "生成 SQL"),
         {"node": "execute", "attempt": 1, "status": "start"},
+        _tool_open("execute", "execute_sql"),
         _tool("execute", "execute_sql"),
         _fr("execute", 2, "执行成功：1 行"),
         {"node": "verify", "attempt": 2, "status": "start"},
@@ -171,7 +187,8 @@ def test_value_link_emits_explore_tool_frame(fixture_db):
     sticker = format_value_sticker([("district", "A3", ["east Bohemia", "Prague"])])
     frames, _, _ = _collect(fixture_db, _RETRY_SCRIPT,
                             value_link=lambda q, intent, names: sticker)
-    vl = next((f for f in frames if f.get("kind") == "tool" and f["tool"] == "value_link"), None)
+    vl = next((f for f in frames if f.get("kind") == "tool" and f["tool"] == "value_link"
+               and "ok" in f), None)  # 收口帧（start 活口帧无 ok）
     assert vl is not None, "wired 命中应发胶囊"
     assert vl["ok"] is True
     assert "east Bohemia" in vl["detail"] and vl["detail"].startswith("district.A3→")
@@ -182,7 +199,8 @@ def test_value_link_miss_not_green(fixture_db):
     """跑过但没贴任何值（返回空块）→ 胶囊仍在，但 ok＝False（不再假绿）、无 detail。"""
     frames, _, _ = _collect(fixture_db, _RETRY_SCRIPT,
                             value_link=lambda q, intent, names: "")
-    vl = next(f for f in frames if f.get("kind") == "tool" and f["tool"] == "value_link")
+    vl = next(f for f in frames if f.get("kind") == "tool" and f["tool"] == "value_link"
+              and "ok" in f)
     assert vl["ok"] is False and "detail" not in vl
 
 
@@ -208,7 +226,9 @@ def test_extract_failure_then_retry_frames(fixture_db):
     assert ("generate", "提取失败：回复中未找到合法 SQL：'我答不上来'", False) in statuses
     assert ("execute", "无可执行 SQL，转重试", False) in statuses
     # 提取失败没走到执行——两回合合计只有 list_tables/get_schema 与一次成功的 execute_sql
-    tools = [(f["node"], f["tool"], f["ok"]) for f in frames if f.get("kind") == "tool"]
+    # （"ok" in f 过滤＝只看收口帧，start 活口帧不计）
+    tools = [(f["node"], f["tool"], f["ok"]) for f in frames
+             if f.get("kind") == "tool" and "ok" in f]
     assert tools.count(("execute", "execute_sql", True)) == 1
     assert ("execute", "execute_sql", False) not in tools
     assert statuses[-1] == ("respond", "作答完成", True)
@@ -225,7 +245,7 @@ def test_budget_exhausted_ends_honest_failure(fixture_db):
     assert sum(1 for f in frames if f.get("status") == _FAIL_HINT) == 3
     assert sum(1 for f in frames
                if f.get("kind") == "tool" and f["tool"] == "execute_sql"
-               and f["ok"] is False) == 3  # 三次执行全败＝三枚红点
+               and "ok" in f and f["ok"] is False) == 3  # 三次执行全败＝三枚红点
     assert not any(f["node"] == "verify" for f in frames)  # 执行全败→路由不进校验（帧面同证）
     assert answer.failed is True
 

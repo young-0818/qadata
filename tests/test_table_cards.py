@@ -234,7 +234,8 @@ def test_dim_mismatch_degrades_and_parse_fail_pins(big_db, ix):
         out_plain = build_schema_context(conn, "Q", llm=plain_llm, max_chars=100)
         assert out_fail == out_plain  # 逐字节现状（回全量）
         assert any(f.get("kind") == "tool" and f["tool"] == "select_tables"
-                   and f["ok"] is False for f in frames)  # 降级入账＝红胶囊（票 04 双出口形制）
+                   and "ok" in f and f["ok"] is False  # 收口帧（start 活口帧无 ok）
+                   for f in frames)  # 降级入账＝红胶囊（票 04 双出口形制）
     finally:
         conn.close()
 

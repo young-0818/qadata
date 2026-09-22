@@ -238,13 +238,23 @@ def build_schema_context(
     相反，**小库大库都触发**（值域病灶全在小库考面，spec §一）；块贴 schema 上下文
     最末（值采样块之后＝保险丝 split 切尾不连累前料），账本与降级在闭包内自持
     （retrieval/values.build_value_link），本层零知情；缺位 None＝逐字节现状。"""
-    from qadata.llm.tracing import tool_frame  # 帧形单源（timed_invoke 同款惰性路）
+    from qadata.llm.tracing import (  # 帧形单源（timed_invoke 同款惰性路）
+        tool_frame,
+        tool_start_frame,
+    )
 
     def _tool(name: str, t0: float, ok: bool = True, detail: str | None = None) -> None:
         if on_event is not None:
             on_event(tool_frame("explore", name, t0, ok, detail))
 
+    def _tool_start(name: str) -> None:
+        """tool start 帧（实时工具链）：真开跑的操作当场发活口；收口帧形状零动。
+        快工具照发（start→收口同刻到达、spinner 一闪即灭＝无害）——特判名单会腐烂。"""
+        if on_event is not None:
+            on_event(tool_start_frame("explore", name))
+
     def _ctx(names: list[str]) -> str:
+        _tool_start("get_schema")
         t0 = time.perf_counter()
         parts = [get_schema(conn, t) for t in names]
         parts += [load_description(db_path, t) for t in names]
@@ -253,12 +263,14 @@ def build_schema_context(
 
     def _final(ctx: str, names: list[str]) -> str:
         if sample_values:
+            _tool_start("value_samples")
             t0 = time.perf_counter()
             block = column_value_samples(conn, names)
             _tool("value_samples", t0)
             if block:
                 ctx = f"{ctx}\n\n{block}"
         if value_link is not None:
+            _tool_start("value_link")  # 网络 embed 数秒级——start 帧正是这段的活口
             t0 = time.perf_counter()
             block = value_link(names)  # 纸条块贴最末（淘汰序「撤值纸条」在「砍值采样」前，切尾各不连累）
             # 控制台「实际取值」胶囊：绿＝真贴上了值、灰＝跑过但没命中（缺索引/无关键词，降级真值在账本 value_link 行）；
@@ -268,6 +280,7 @@ def build_schema_context(
                 ctx = f"{ctx}\n\n{block}"
         return ctx
 
+    _tool_start("list_tables")
     t0 = time.perf_counter()
     tables = list_tables(conn)
     _tool("list_tables", t0)
@@ -278,20 +291,21 @@ def build_schema_context(
         # 大库宽进窄出（M10 票 01）：粗召 top-K 防漏表 → 精选防错用 → 外键补漏。
         # 窄出解析失败＝回全量现状（与旧路同形：宁可多给不可编造，检索不添新的失败形态）
         picked = _pick_tables_with_llm(llm, cands, question, tracer, limiter,
-                                       on_tool=_tool, sink=sink)
+                                       on_tool=_tool, on_start=_tool_start, sink=sink)
         if picked is None:
             return _final(full, tables)
         wide = foreign_key_closure(conn, picked)
         return _final(_ctx(wide), wide)
     picked = _pick_tables_with_llm(llm, tables, question, tracer, limiter,
-                                   on_tool=_tool, sink=sink)
+                                   on_tool=_tool, on_start=_tool_start, sink=sink)
     if picked is None:  # LLM 输出解析失败 → 回退全量（宁可多给不可编造）
         return _final(full, tables)
     return _final(_ctx(picked), picked)
 
 
 def _pick_tables_with_llm(llm, tables: list[str], question: str, tracer=None,
-                          limiter=None, on_tool=None, sink=None) -> list[str] | None:
+                          limiter=None, on_tool=None, on_start=None,
+                          sink=None) -> list[str] | None:
     # 走 timed_invoke：选表调用也进 tracing（M1 观测盲区修复）
     # M9 票 03：选表 prompt 经 GSSC 唯一出口装配（explore 场景收编，逐字节同旧路；
     # gssc→prompts→precise→executor→本模块成环，惰性 import 同 timed_invoke 先例）
@@ -305,6 +319,8 @@ def _pick_tables_with_llm(llm, tables: list[str], question: str, tracer=None,
         if on_tool is not None:
             on_tool("budget_fuse", time.perf_counter())
 
+    if on_start is not None:
+        on_start("select_tables")  # 选表＝真 LLM 调用（数秒级），start 活口
     t0 = time.perf_counter()
     content = timed_invoke(
         llm, assemble("explore", gather_schema_pick(tables, question),

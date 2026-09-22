@@ -325,4 +325,7 @@ def test_all_sites_wired_to_fuse_sink():
     assert len(re.findall(r"on_compress=_fuse\(", nsrc)) == 3, "graph 三场景挂点（metric_match 随 ADR-0007 退役）"
     assert "on_compress=_on_compress" in ssrc and '"budget_fuse"' in ssrc, "explore 挂点"
     console = Path("web/src/Console.tsx").read_text(encoding="utf-8")
-    assert 'budget_fuse: "预算保险丝"' in console, "前端胶囊标签在册（label 承载语义）"
+    # 2026-09-22 两判改形：Q8 机器名直显（清单行 t.tool 原样，不译）＋左栏分家
+    # （TOOL_LABELS 贴签层整族退役）——胶囊可见性的现代表达＝行渲机器名、无翻译层回锅
+    assert "const label = t.tool;" in console and "TOOL_LABELS" not in console, \
+        "工具名机器名直显、贴签层已删（回锅即红）"

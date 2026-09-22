@@ -90,12 +90,13 @@ def test_stream_carries_thinking_frames(store, fixture_db):
 
 
 def _strip_ms(frames):
-    """剥 duration_ms（计时量防抖），并断言其只在结果/tool 帧上在场。"""
+    """剥 duration_ms（计时量防抖），并断言其只在收口帧（步骤结果帧＋tool 收口帧）上在场——
+    两类 start 帧（步骤开跑／tool 活口）都带 status:"start"、都无计时量（对称钉）。"""
     out = []
     for f in frames:
         g = dict(f)
         has = g.pop("duration_ms", None) is not None
-        assert has == (g.get("kind") == "tool" or g["status"] != "start"), f
+        assert has == (g.get("status") != "start"), f
         out.append(g)
     return out
 
@@ -123,18 +124,25 @@ def test_stream_happy_frames_and_answer_contract(store, fixture_db):
     def tf(node, tool, ok=True):
         return {"node": node, "kind": "tool", "tool": tool, "ok": ok}
 
+    def tf_open(node, tool):
+        return {"node": node, "kind": "tool", "tool": tool, "status": "start"}
+
     assert _strip_ms(_progress(frames)) == [
         {"node": "understand", "attempt": 0, "status": "start"},
         rf("understand", 0, "解析失败，按原问题作答"),
         {"node": "explore", "attempt": 0, "status": "start"},
+        tf_open("explore", "list_tables"),
         tf("explore", "list_tables"),
+        tf_open("explore", "get_schema"),
         tf("explore", "get_schema"),
         # M10「实际取值」胶囊：web 路径 value_link 恒 wired＝产物即开关；本夹具无值索引→跑过但没贴值→ok=False
+        tf_open("explore", "value_link"),
         tf("explore", "value_link", ok=False),
         rf("explore", 0, "取到 Schema"),
         {"node": "generate", "attempt": 0, "status": "start"},
         rf("generate", 0, "生成 SQL"),
         {"node": "execute", "attempt": 0, "status": "start"},
+        tf_open("execute", "execute_sql"),
         tf("execute", "execute_sql"),
         rf("execute", 1, "执行成功：1 行"),
         {"node": "verify", "attempt": 1, "status": "start"},
@@ -163,7 +171,7 @@ def test_stream_shows_self_correction_story(store, fixture_db):
     assert [f["attempt"] for f in prog][-2:] == [2, 2]  # 重试环上 attempt 单调推进
     # 票 06 红点胶囊在流里可见：一次 execute_sql 失败帧＋一次成功帧（各归其 execute 步）
     chips = [f for f in _progress(parsed) if f.get("kind") == "tool"
-             and f["tool"] == "execute_sql"]
+             and f["tool"] == "execute_sql" and "ok" in f]  # 只看收口帧（start 活口帧无 ok）
     assert [c["ok"] for c in chips] == [False, True]
 
 

@@ -9,7 +9,6 @@ import {
   Vote,
   askStream,
   isThinkingEvent,
-  isToolEvent,
   createAgent,
   deleteAgent,
   getAgent,
@@ -20,15 +19,16 @@ import {
   patchAgent,
   postFeedback,
   uploadDatasource,
+  startIndexBuild,
   uploadKnowledge,
 } from "./api";
 import { ResultChart } from "./Chart";
 // M8 票 07 答案报告化：【结论】＝自由成文的 markdown 小报告，走子集安全渲染器
 // （纯文本插值、零 raw HTML——纪律钉 tests/test_web_markdown.py）。
 import { Markdown } from "./Markdown";
-// M8 票 06：帧词汇表（NODE/TOOL 标签）与任务控制台同单一源（Console.tsx），
-// 聊天气泡里的「工作过程」折叠与控制台读同一份帧、贴同一套签——两处字面漂移即违宪。
-import { Console, NODE_LABELS, TOOL_LABELS } from "./Console";
+// M8 票 06：帧词汇表（NODE 标签）与任务控制台同单一源（Console.tsx）——
+// 两处字面漂移即违宪（左栏分家后只贴步签，工具名归控制台机器名直显）。
+import { Console, NODE_LABELS } from "./Console";
 
 // 渲染纪律（spec）：一律 React 文本插值（＝textContent），全文件禁 dangerouslySetInnerHTML。
 // M7-rev2 票 02.5：三视图状态路由（首页/智能体详情/对话页），不引 router 依赖。
@@ -53,12 +53,12 @@ type Msg =
   | { role: "agent"; resp: AskResponse; trail: ProgressEvent[]; ts: string | null }
   | { role: "error"; text: string; trail: ProgressEvent[] };
 
-// 票 03 进度行＋M8 票 06 喂厚：tool 子事件渲染成缩进胶囊（绿/红点＝owner 截图语义），
-// 结果行带耗时与红绿标记。status 文案后端单源，未知节点/工具名直显不硬翻译
-// （永不编造纪律的展示面）。
+// 票 03 进度行；左栏分家（2026-09-22 owner 裁）：气泡只讲「思考＋走到哪步」，
+// 链路（步骤红绿耗时/工具/徽标/脊柱）归右栏控制台独家供给——一处事实一个家。
+// status 文案后端单源，未知节点直显不硬翻译（永不编造纪律的展示面）。
 function ProgressRow({ ev }: { ev: ProgressEvent }) {
   // M8 票 08 思考流：合并后的思考块（同节点相邻 thinking 已在 onProgress 并成一块）
-  // 渲成 muted 折行文本——治那 12~30s 死寂转圈「看着它想」，不参与步骤计数。
+  // 渲成 muted 折行文本——治那 12~30s 死寂转圈「看着它想」。
   if (ev.kind === "thinking") {
     return (
       <div className="progress-row thinking">
@@ -67,15 +67,9 @@ function ProgressRow({ ev }: { ev: ProgressEvent }) {
       </div>
     );
   }
-  if (ev.kind === "tool") {
-    return (
-      <div className="progress-row tool">
-        <span className={ev.ok ? "dot dot-ok" : "dot dot-bad"} />
-        <span>{TOOL_LABELS[ev.tool] ?? ev.tool}</span>
-        <i>{ev.duration_ms}ms</i>
-      </div>
-    );
-  }
+  // tool 帧（start 活口与收口）整族不在左栏留行——转圈与红绿耗时都在控制台清单行，
+  // 气泡留一份就是第二份编年史（「自纠错过程」与控制台重复的病根，删）
+  if (ev.kind === "tool") return null;
   const running = ev.status === "start";
   return (
     <div className="progress-row">
@@ -89,12 +83,6 @@ function ProgressRow({ ev }: { ev: ProgressEvent }) {
   );
 }
 
-// 票 06 后 trail 含 tool 子事件——「N 步」只数步帧（start＋结果成对，ceil 容断流半对），
-// 混计会稀释"步"语义（双轴评审 (c)1）
-// 票 08 thinking 帧同 tool 帧：不是「步」，计入会稀释步语义（思考块与重试步无关）。
-const stepCount = (trail: ProgressEvent[]) =>
-  Math.ceil(trail.filter((e) => !isToolEvent(e) && !isThinkingEvent(e)).length / 2);
-
 interface Section {
   title: string;
   body: string;
@@ -105,6 +93,14 @@ interface Section {
 // （单源一致钉见 tests/test_web_markdown.py）：模型违令在报告里模仿【】或写
 // 【已完成】式叙事，也不再被误切成节（机制闸不靠指令，M5 ⑨闸教训同款）。
 const SECTION_RE = /^【(结论|数据依据|口径说明|校验标注)】(.*)$/;
+
+// 检索索引状态的人话（后端状态词单源，前端只贴翻译；stale/broken＝可修态）
+const IDX_STATE: Record<string, string> = {
+  ok: "就绪",
+  stale: "过期（换 embedding 模型后点重建）",
+  missing: "未建",
+  broken: "坏档（点重建覆盖）",
+};
 
 // 票 04 分节折叠：结论与校验标注常开（诚实信息不打折），数据依据/口径说明可折
 // （支撑细节收起来让答案可读）。M8 票 07 白名单收紧后「未知节头」一径已不存在——
@@ -162,6 +158,7 @@ function AnswerBubble({
   onFeedback?: (v: Vote) => void; // 缺省＝不可投（无 ts 锚点：单轮/澄清暂停/回查失败）
 }) {
   const sections = parseSections(resp.conclusion);
+  const thinking = trail.filter(isThinkingEvent); // 思考块的唯一家（右栏分家裁决）
   // 单一守卫：图型判定存在且行列在场才画（answer_to_payload 失败态三者同 null，
   // 此处只兜形状完整性，不做第二处复测）
   const viz =
@@ -253,11 +250,12 @@ function AnswerBubble({
           </button>
         </div>
       )}
-      {/* 票 03：当场看过的自纠错不随答案落地而蒸发——收成折叠留档 */}
-      {trail.length > 0 && (
+      {/* 分家后完成气泡只留「思考过程」折叠（链路归控制台独家）；零思考＝空壳不摆。
+          思考不入档（trail_entry 拒收，M9 票 02 既有裁决）→ 回放天然无此折叠，与今天一致 */}
+      {thinking.length > 0 && (
         <details className="trail">
-          <summary>自纠错过程（{stepCount(trail)} 步）</summary>
-          {trail.map((ev, i) => (
+          <summary>思考过程（{thinking.length} 块）</summary>
+          {thinking.map((ev, i) => (
             <ProgressRow key={i} ev={ev} />
           ))}
         </details>
@@ -400,6 +398,12 @@ function AgentPage({
     reload();
     // 依赖只认 id：换智能体重载，reload 闭包引用是稳定的
   }, [id]);
+  useEffect(() => {
+    // 索引构建在途＝2.5s 轮询详情读数（到终态自停——job/note 走现读，不引 SSE 第二通道）
+    if (agent?.index?.job?.state !== "running") return undefined;
+    const t = setTimeout(reload, 2500);
+    return () => clearTimeout(t);
+  }, [agent]);
 
   async function run(fn: () => Promise<unknown>) {
     setErr("");
@@ -542,6 +546,37 @@ function AgentPage({
         {kbMsg && <p className="sub">{kbMsg}</p>}
       </section>
 
+      {agent.index && (
+      <section className="panel">
+        <h3>检索索引（表卡＋值索引——显式管理动作，问数路径永不建）</h3>
+        <p className="sub">
+          表卡：{IDX_STATE[agent.index.cards] ?? agent.index.cards}；值索引：
+          {IDX_STATE[agent.index.values] ?? agent.index.values}；向量化通道：
+          {agent.index.embed_configured ? "就绪" : "未配置（.env QADATA_EMBED_MODEL）"}
+        </p>
+        {agent.index.job && (
+          <p className="sub">
+            {agent.index.job.state === "running"
+              ? `构建中…（${agent.index.job.started} 起）`
+              : `上次构建（${agent.index.job.state}）：${agent.index.job.note}`}
+          </p>
+        )}
+        <div className="row">
+          <button
+            type="button"
+            disabled={
+              !agent.index.embed_configured ||
+              !agent.datasource.has_file ||
+              agent.index.job?.state === "running"
+            }
+            onClick={() => run(() => startIndexBuild(id))}
+          >
+            {agent.index.job?.state === "running" ? "构建中…" : "建索引"}
+          </button>
+        </div>
+      </section>
+      )}
+
       <section className="panel">
         <h3>预设问题（≤10 条，对话页点击即发送）</h3>
         <ul className="preset-list">
@@ -630,7 +665,7 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
   const [err, setErr] = useState("");
   // 票 09.5（Q14 改判 Q12）：空态默认收起（回放/还没跑过＝白墙不撞脸），
   // 提问自动展开；折叠钮保留手动否决权，状态不跨会话记忆
-  const [consoleOpen, setConsoleOpen] = useState(false);
+  const [consoleOpen, setConsoleOpen] = useState(true); // 实时工具链后默认开（owner 裁 2026-09-22），手动收起照旧记忆于本次会话内
   const tailRef = useRef<HTMLDivElement>(null);
   // M8 票 03 改判（owner 裁 2026-09-16）：无状态前端合成退役——澄清暂停态住服务端
   // checkpoint，下一条消息**原样**发回即自动续答（服务端合成归档）；本状态只是 UI
@@ -835,15 +870,8 @@ function ChatPage({ id, onHome }: { id: string; onHome: () => void }) {
               ) : m.role === "error" ? (
                 <div className="bubble agent failed" key={i}>
                   请求失败：{m.text}
-                  {/* 断流前的半截进度不蒸发（与 catch 注释同真：治黑盒的反面是装干净） */}
-                  {m.trail.length > 0 && (
-                    <details className="trail">
-                      <summary>中断前的进度（{stepCount(m.trail)} 步）</summary>
-                      {m.trail.map((ev, j) => (
-                        <ProgressRow key={j} ev={ev} />
-                      ))}
-                    </details>
-                  )}
+                  {/* 断流前的半截链不蒸发——但它的家是右栏控制台（consoleSource 吃 error
+                      消息的 trail，半截步如实半开）；气泡装错误文案本体，不留第二份编年史 */}
                 </div>
               ) : (
                 <AnswerBubble

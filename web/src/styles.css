@@ -865,7 +865,7 @@ button:disabled {
 /* ── M8 票 06 任务控制台（右侧抽屉＝概览四卡＋追踪时间线；纯排版零新依赖）──── */
 .console-drawer {
   position: relative; /* 票 09.5：折叠钮钉在抽屉头右上角 */
-  width: 18rem;
+  width: 22rem; /* 实时工具链后清单行/徽标/脊柱吃宽（owner 裁 2026-09-22 加宽） */
   flex-shrink: 0;
   background: #fff;
   border-left: 1px solid #e3e3e8;
@@ -1004,48 +1004,93 @@ button:disabled {
   animation: pulse 1.4s ease-in-out infinite;
 }
 
-.c-tools {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem;
-  margin-top: 0.3rem;
-  padding-left: 0.9rem;
+/* 脊柱线＋空心环节点（实时工具链形制，2026-09-22 owner 裁）：链＝步串成一条线，
+   环色＝步态（绿通过/红失败/蓝呼吸进行中）——颜色不单独承载语义，状态文案同屏在侧 */
+.c-step {
+  position: relative;
+  padding-left: 1.15rem;
+}
+.c-step::before {
+  content: "";
+  position: absolute;
+  left: 0.31rem;
+  top: 1.05rem;
+  bottom: -0.62rem;
+  width: 2px;
+  background: #e0e0e7;
+}
+.c-step:last-child::before {
+  display: none;
+}
+.c-step-head .dot {
+  position: absolute;
+  left: 0.09rem;
+  top: 0.16rem;
+  width: 0.42rem;
+  height: 0.42rem;
+  box-sizing: border-box;
+  background: #fff;
+}
+.c-step-head .dot-ok {
+  border: 2px solid #34c759;
+}
+.c-step-head .dot-bad {
+  border: 2px solid #ff3b30;
+}
+.c-step-head .dot-run {
+  border: 2px solid #2f6feb;
 }
 
-.c-tools-count {
-  width: 100%;
-  color: #86868b;
-  font-size: 0.66rem;
-}
-
-.c-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
+/* 「N 个工具」徽标：终态步折叠清单的开关（0 工具步不挂＝死把手不造；running 步自动展开不挂） */
+.c-badge {
+  margin-left: auto;
   border: 1px solid #e3e3e8;
   border-radius: 999px;
-  padding: 0.1rem 0.5rem;
+  padding: 0.05rem 0.5rem;
+  font-size: 0.66rem;
+  color: #6b6b72;
+  cursor: pointer;
+  user-select: none;
   background: #f5f5f7;
-  font-size: 0.68rem;
+  flex-shrink: 0;
+}
+.c-badge:hover {
+  border-color: #c7c7cf;
 }
 
-.c-chip .dot {
+/* 工具清单行（一行一发调用）：状态点＋工具名＋右对齐耗时；蓝行＝tool start 活口（进行中…） */
+.c-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+  margin-top: 0.3rem;
+}
+.c-trow {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.68rem;
+  color: #48484e;
+}
+.c-trow .dot {
   width: 0.38rem;
   height: 0.38rem;
 }
-
-.c-chip.bad {
-  border-color: #f2c7c7;
-  background: #fdf3f3;
+.c-trow .dur {
+  margin-left: auto;
+  color: #86868b;
+  font-size: 0.66rem;
 }
-
-/* 带明细的胶囊（值链「实际取值」）可点展开 */
-.c-chip-click {
+.c-trow.live,
+.c-trow.live .dur {
+  color: #2f6feb;
+}
+/* 带明细的行（值链「实际取值」）可点展开 */
+.c-trow-click {
   cursor: pointer;
-  user-select: none;
 }
-.c-chip-click:hover {
-  border-color: #c7c7cf;
+.c-trow-click:hover {
+  color: #1c1c1e;
 }
 .c-caret {
   color: #9a9aa2;
@@ -1053,9 +1098,8 @@ button:disabled {
   margin-left: 0.1rem;
 }
 
-/* 值链命中明细：点胶囊展开/收起（max-height＋opacity 过渡），独占一行别塞进 999px 药丸撑爆 */
+/* 值链命中明细：点行展开/收起（max-height＋opacity 过渡），行下独占一块 */
 .c-tools-detail {
-  flex-basis: 100%;
   font-size: 0.68rem;
   color: #6b6b72;
   line-height: 1.35;
@@ -1079,16 +1123,7 @@ button:disabled {
   }
 }
 
-/* 聊天气泡「工作过程」折叠同步：tool 子事件缩进胶囊＋失败步红字 */
-.progress-row.tool {
-  padding-left: 1rem;
-}
-
-.progress-row.tool .dot {
-  width: 0.4rem;
-  height: 0.4rem;
-}
-
+/* 左栏进度行失败步红字（「工作过程」tool 行随分家退役——链路独家归控制台） */
 .progress-row .row-bad {
   color: #d70015;
 }

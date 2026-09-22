@@ -31,6 +31,14 @@ def now_beijing() -> str:
     return datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def tool_start_frame(node: str, name: str) -> dict:
+    """tool start 帧（实时工具链）：慢操作开跑的活口标记——胶囊当场出现转圈，
+    收口帧（tool_frame）形状一字不动、原位翻终态。配对规则＝前端按「同 node
+    同 tool 最近一个未收口行」缝合，不引入 call-id（单请求内帧流有序串行）。
+    仅对有计时区间的调用发；budget_fuse 类即时入账帧（无"跑"的区间）不发。"""
+    return {"node": node, "kind": "tool", "tool": name, "status": "start"}
+
+
 def tool_frame(node: str, name: str, t0: float, ok: bool = True,
                detail: str | None = None) -> dict:
     """M8 票 06 tool 子事件帧形状唯一源（必需 {node,kind,tool,ok,duration_ms}）。
@@ -112,7 +120,7 @@ def timed_invoke(llm, prompt: str, node: str, tracer: TraceLogger | None, limite
     return resp.content
 
 
-_MAX_STREAM_RETRIES = 3  # 与 invoke_with_backoff 同额度（重试次数不是配置面，别处不变）
+_MAX_STREAM_RETRIES = 1  # 与 invoke_with_backoff 同额度（重试次数不是配置面，别处不变）
 
 
 def timed_stream(llm, prompt: str, node: str, tracer: TraceLogger | None, limiter=None,
