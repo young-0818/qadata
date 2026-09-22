@@ -1,3 +1,4 @@
+import { Fragment, useState } from "react";
 import { AskResponse, ProgressEvent, isThinkingEvent, isToolEvent } from "./api";
 
 // M8 票 06 任务控制台：把票 03 既有进度帧喂厚的纯展示面——架构不动（固定状态机
@@ -103,6 +104,15 @@ export function Console({
   replay: boolean; // 空 trail 的两种成因分开说：新会话（还没跑过）≠ 历史回放（旧档未入留痕）
 }) {
   const steps = buildSteps(trail);
+  // 「实际取值」命中明细默认收起、点胶囊展开（key＝步序号:工具序号）
+  const [openTools, setOpenTools] = useState<Set<string>>(new Set());
+  const toggleTool = (key: string) =>
+    setOpenTools((prev) => {
+      const n = new Set(prev);
+      if (n.has(key)) n.delete(key);
+      else n.add(key);
+      return n;
+    });
   const done = steps.filter((s) => !s.running);
   const passed = done.filter((s) => s.ok).length;
   const tokens = steps.reduce((n, s) => n + s.tokens, 0);
@@ -160,20 +170,41 @@ export function Console({
                 {s.tools.length > 0 && (
                   <div className="c-tools">
                     <span className="c-tools-count">{s.tools.length} 个工具</span>
-                    {s.tools.map((t, j) => (
-                      <span className={`c-chip${t.ok ? "" : " bad"}`} key={j}>
-                        <span className={dot(t.ok, false)} />
-                        {TOOL_LABELS[t.tool] ?? t.tool} {t.ms}ms
-                      </span>
-                    ))}
-                    {s.tools
-                      .filter((t) => t.detail)
-                      .map((t, j) => (
-                        // 值链「实际取值」命中明细单独成行摊开（胶囊是 999px 药丸、塞长文会撑爆）
-                        <div className="c-tools-detail" key={`d${j}`}>
-                          {TOOL_LABELS[t.tool] ?? t.tool}：{t.detail}
-                        </div>
-                      ))}
+                    {s.tools.map((t, j) => {
+                      const label = TOOL_LABELS[t.tool] ?? t.tool;
+                      const clickable = !!t.detail; // 只有带明细的胶囊（值链）可点展开
+                      const open = openTools.has(`${i}:${j}`);
+                      return (
+                        <Fragment key={j}>
+                          <span
+                            className={`c-chip${t.ok ? "" : " bad"}${clickable ? " c-chip-click" : ""}`}
+                            role={clickable ? "button" : undefined}
+                            tabIndex={clickable ? 0 : undefined}
+                            aria-expanded={clickable ? open : undefined}
+                            onClick={clickable ? () => toggleTool(`${i}:${j}`) : undefined}
+                            onKeyDown={
+                              clickable
+                                ? (e) => {
+                                    if (e.key === "Enter" || e.key === " ") {
+                                      e.preventDefault();
+                                      toggleTool(`${i}:${j}`);
+                                    }
+                                  }
+                                : undefined
+                            }
+                          >
+                            <span className={dot(t.ok, false)} />
+                            {label} {t.ms}ms
+                            {clickable ? <span className="c-caret">{open ? "▾" : "▸"}</span> : null}
+                          </span>
+                          {clickable && open && (
+                            <div className="c-tools-detail">
+                              {label}：{t.detail}
+                            </div>
+                          )}
+                        </Fragment>
+                      );
+                    })}
                   </div>
                 )}
               </div>

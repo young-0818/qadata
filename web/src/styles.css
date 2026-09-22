@@ -1039,7 +1039,21 @@ button:disabled {
   background: #fdf3f3;
 }
 
-/* 值链「实际取值」命中明细：独占一行摊开（列→库内实际值），别塞进 999px 药丸撑爆 */
+/* 带明细的胶囊（值链「实际取值」）可点展开 */
+.c-chip-click {
+  cursor: pointer;
+  user-select: none;
+}
+.c-chip-click:hover {
+  border-color: #c7c7cf;
+}
+.c-caret {
+  color: #9a9aa2;
+  font-size: 0.62rem;
+  margin-left: 0.1rem;
+}
+
+/* 值链「实际取值」命中明细：点开后独占一行摊开（列→库内实际值），别塞进 999px 药丸撑爆 */
 .c-tools-detail {
   flex-basis: 100%;
   font-size: 0.68rem;
