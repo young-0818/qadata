@@ -129,6 +129,7 @@ def test_stream_happy_frames_and_answer_contract(store, fixture_db):
         {"node": "explore", "attempt": 0, "status": "start"},
         tf("explore", "list_tables"),
         tf("explore", "get_schema"),
+        tf("explore", "value_link"),  # M10「实际取值」胶囊（web 路径 value_link 恒 wired＝产物即开关，跑过即发帧）
         rf("explore", 0, "取到 Schema"),
         {"node": "generate", "attempt": 0, "status": "start"},
         rf("generate", 0, "生成 SQL"),

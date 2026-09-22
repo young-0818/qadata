@@ -25,6 +25,7 @@ export const TOOL_LABELS: Record<string, string> = {
   get_schema: "取表结构",
   select_tables: "挑选相关表",
   value_samples: "值采样",
+  value_link: "实际取值",
   execute_sql: "执行查询",
   execute_sql_batch: "票决批量",
   budget_fuse: "预算保险丝",

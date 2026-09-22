@@ -3,7 +3,7 @@
 帧三型（票 06）：start 帧＝node/attempt/status 三字段不动；结果帧追加
 ok/duration_ms/tokens_in/tokens_out（chart 可选字段先例——消费者可忽略，
 末帧 answer 契约零动）；tool 子事件帧＝node/kind/tool/ok/duration_ms
-（explore 内 list_tables/get_schema/[select_tables]/[value_samples]、
+（explore 内 list_tables/get_schema/[select_tables]/[value_samples]/[value_link]、
 execute 内 execute_sql，on_event 沿参透传 tools 层）。
 钉四件事：①缺省 None 时与现状逐行为一致（CLI/eval 调用面零改动——调用面源码
 出现 on_event 即红，tools 层不传即零发）；②帧形状三型钉死；③假模型下自纠错
@@ -161,6 +161,26 @@ def test_fail_retry_success_full_sequence(fixture_db):
         _fr("respond", 2, "作答完成"),
     ]
     assert answer.failed is False and llm.calls == 4
+
+
+def test_value_link_emits_explore_tool_frame(fixture_db):
+    """M10 控制台「实际取值」胶囊：wired value_link 时 explore 段多一颗 value_link 工具帧
+    （前端 TOOL_LABELS 渲成"实际取值"）；关态（value_link 缺省 None）不发此帧——
+    该形态由 test_fail_retry_success_full_sequence 的精确序列钉隐式覆盖（其内无 value_link）。"""
+    frames, _, _ = _collect(fixture_db, _RETRY_SCRIPT,
+                            value_link=lambda q, intent, names: "值纸条：district.A3 —— 库里实际这么存：'east Bohemia'")
+    tools = [f["tool"] for f in frames if f.get("kind") == "tool" and f["node"] == "explore"]
+    assert "value_link" in tools, tools
+    # 值链帧形仍守三型钉（node/kind/tool/ok/duration_ms）
+    vl_frame = next(f for f in frames if f.get("kind") == "tool" and f["tool"] == "value_link")
+    assert set(vl_frame) == _TOOL_KEYS and vl_frame["ok"] is True
+
+
+def test_value_link_absent_in_off_state(fixture_db):
+    """关态钉：不传 value_link → explore 工具帧里不得有 value_link（缺位＝逐字节现状，零发）。"""
+    frames, _, _ = _collect(fixture_db, _RETRY_SCRIPT)
+    tools = [f["tool"] for f in frames if f.get("kind") == "tool" and f["node"] == "explore"]
+    assert "value_link" not in tools, tools
 
 
 def test_understand_success_branch(fixture_db):

@@ -244,7 +244,9 @@ def build_schema_context(
             if block:
                 ctx = f"{ctx}\n\n{block}"
         if value_link is not None:
+            t0 = time.perf_counter()
             block = value_link(names)  # 纸条块贴最末（淘汰序「撤值纸条」在「砍值采样」前，切尾各不连累）
+            _tool("value_link", t0)  # 控制台「实际取值」胶囊（与 value_samples 同族：跑过就发，命中真值在账本 value_link 行）
             if block:
                 ctx = f"{ctx}\n\n{block}"
         return ctx
