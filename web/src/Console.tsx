@@ -26,7 +26,7 @@ export const TOOL_LABELS: Record<string, string> = {
   get_schema: "取表结构",
   select_tables: "挑选相关表",
   value_samples: "值采样",
-  value_link: "实际取值",
+  value_link: "值链",
   execute_sql: "执行查询",
   execute_sql_batch: "票决批量",
   budget_fuse: "预算保险丝",
@@ -197,8 +197,8 @@ export function Console({
                             {label} {t.ms}ms
                             {clickable ? <span className="c-caret">{open ? "▾" : "▸"}</span> : null}
                           </span>
-                          {clickable && open && (
-                            <div className="c-tools-detail">
+                          {clickable && (
+                            <div className={`c-tools-detail${open ? " open" : ""}`}>
                               {label}：{t.detail}
                             </div>
                           )}
