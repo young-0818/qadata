@@ -376,3 +376,18 @@ def test_serve_announcement_reads_value_index(tmp_path, fixture_db, ix):
     assert "值索引坏档" in "\n".join(index_announcements(store, "fake-embed", root=ix))
     write_values(p, "old-model", [("t", "c", ["x"])], {"x": [1.0]}, root=ix)
     assert "值索引过期" in "\n".join(index_announcements(store, "fake-embed", root=ix))
+
+
+def test_sticker_detail_tracks_sticker_format():
+    """_sticker_detail（控制台明细）与 format_value_sticker（纸条本体）文案强耦合——
+    schema._sticker_detail 靠解析纸条行抽"列→值"，此处钉死：纸条渲染一改、解析随动即红。"""
+    from qadata.retrieval.values import format_value_sticker
+    from qadata.tools.schema import _sticker_detail
+
+    block = format_value_sticker([("district", "A3", ["east Bohemia", "Prague"]),
+                                  ("card", "type", ["gold"])])
+    assert _sticker_detail(block) == "district.A3→'east Bohemia'、'Prague'；card.type→'gold'"
+    # 超 160 字截断（防灌 DOM／撑会话档 trail）
+    long_block = format_value_sticker([("t", "c", [f"v{i}" for i in range(80)])])
+    d = _sticker_detail(long_block)
+    assert len(d) <= 160 and d.endswith("…")

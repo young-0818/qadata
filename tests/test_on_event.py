@@ -116,7 +116,7 @@ def test_frame_shape_three_kinds(fixture_db):
         assert f["node"] in nodes
         if f.get("kind") == "tool":
             saw_tool = True
-            assert set(f) == _TOOL_KEYS, f
+            assert _TOOL_KEYS <= set(f) <= _TOOL_KEYS | {"detail"}, f  # detail 可选尾字段（值链命中明细，chart 同族）
             assert isinstance(f["ok"], bool)
         elif f["status"] == "start":
             assert isinstance(f["status"], str) and f["status"]
@@ -164,16 +164,26 @@ def test_fail_retry_success_full_sequence(fixture_db):
 
 
 def test_value_link_emits_explore_tool_frame(fixture_db):
-    """M10 控制台「实际取值」胶囊：wired value_link 时 explore 段多一颗 value_link 工具帧
-    （前端 TOOL_LABELS 渲成"实际取值"）；关态（value_link 缺省 None）不发此帧——
-    该形态由 test_fail_retry_success_full_sequence 的精确序列钉隐式覆盖（其内无 value_link）。"""
+    """M10 控制台「实际取值」胶囊：wired 且真贴了值 → explore 发 value_link 帧，ok＝命中、
+    detail 摊开"列→库内实际值"（选项②：让人看见揪出了什么，而非只剩一个耗时）。"""
+    from qadata.retrieval.values import format_value_sticker
+
+    sticker = format_value_sticker([("district", "A3", ["east Bohemia", "Prague"])])
     frames, _, _ = _collect(fixture_db, _RETRY_SCRIPT,
-                            value_link=lambda q, intent, names: "值纸条：district.A3 —— 库里实际这么存：'east Bohemia'")
-    tools = [f["tool"] for f in frames if f.get("kind") == "tool" and f["node"] == "explore"]
-    assert "value_link" in tools, tools
-    # 值链帧形仍守三型钉（node/kind/tool/ok/duration_ms）
-    vl_frame = next(f for f in frames if f.get("kind") == "tool" and f["tool"] == "value_link")
-    assert set(vl_frame) == _TOOL_KEYS and vl_frame["ok"] is True
+                            value_link=lambda q, intent, names: sticker)
+    vl = next((f for f in frames if f.get("kind") == "tool" and f["tool"] == "value_link"), None)
+    assert vl is not None, "wired 命中应发胶囊"
+    assert vl["ok"] is True
+    assert "east Bohemia" in vl["detail"] and vl["detail"].startswith("district.A3→")
+    assert _TOOL_KEYS <= set(vl) <= _TOOL_KEYS | {"detail"}
+
+
+def test_value_link_miss_not_green(fixture_db):
+    """跑过但没贴任何值（返回空块）→ 胶囊仍在，但 ok＝False（不再假绿）、无 detail。"""
+    frames, _, _ = _collect(fixture_db, _RETRY_SCRIPT,
+                            value_link=lambda q, intent, names: "")
+    vl = next(f for f in frames if f.get("kind") == "tool" and f["tool"] == "value_link")
+    assert vl["ok"] is False and "detail" not in vl
 
 
 def test_value_link_absent_in_off_state(fixture_db):

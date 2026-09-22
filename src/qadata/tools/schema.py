@@ -203,6 +203,21 @@ def foreign_key_closure(conn: sqlite3.Connection, tables: list[str]) -> list[str
     return [t for t in all_tables if t in rel]
 
 
+def _sticker_detail(block: str) -> str:
+    """把值纸条块压成一行命中明细供控制台胶囊显示（如 `district.A3→'east Bohemia'、card.type→'gold'`）。
+    格式单源＝retrieval.values.format_value_sticker（逐行 `- 表.列 —— 库里实际这么存：值｜值`）——
+    文案若改此处随动，有 test_sticker_detail_tracks_sticker_format 钉死防漂移。截 ≤160 字防灌 DOM／撑会话档 trail。"""
+    segs = []
+    for ln in block.splitlines():
+        if not ln.startswith("- "):
+            continue
+        col, _, rest = ln[2:].partition(" —— ")
+        val = rest.split("库里实际这么存：", 1)[-1] if "库里实际这么存：" in rest else rest
+        segs.append(f"{col}→{val.replace('｜', '、')}")
+    out = "；".join(segs)
+    return out[:157] + "…" if len(out) > 160 else out
+
+
 def build_schema_context(
     conn: sqlite3.Connection, question: str, llm=None, max_chars: int = FULL_SCHEMA_LIMIT,
     tracer=None, db_path: str | None = None, limiter=None, sample_values: bool = False,
@@ -225,9 +240,9 @@ def build_schema_context(
     （retrieval/values.build_value_link），本层零知情；缺位 None＝逐字节现状。"""
     from qadata.llm.tracing import tool_frame  # 帧形单源（timed_invoke 同款惰性路）
 
-    def _tool(name: str, t0: float, ok: bool = True) -> None:
+    def _tool(name: str, t0: float, ok: bool = True, detail: str | None = None) -> None:
         if on_event is not None:
-            on_event(tool_frame("explore", name, t0, ok))
+            on_event(tool_frame("explore", name, t0, ok, detail))
 
     def _ctx(names: list[str]) -> str:
         t0 = time.perf_counter()
@@ -246,7 +261,9 @@ def build_schema_context(
         if value_link is not None:
             t0 = time.perf_counter()
             block = value_link(names)  # 纸条块贴最末（淘汰序「撤值纸条」在「砍值采样」前，切尾各不连累）
-            _tool("value_link", t0)  # 控制台「实际取值」胶囊（与 value_samples 同族：跑过就发，命中真值在账本 value_link 行）
+            # 控制台「实际取值」胶囊：绿＝真贴上了值、灰＝跑过但没命中（缺索引/无关键词，降级真值在账本 value_link 行）；
+            # detail 把命中明细摊开（列→库内实际存储值），让胶囊说清"揪出了什么"而非只剩一个耗时。
+            _tool("value_link", t0, ok=bool(block), detail=_sticker_detail(block) if block else None)
             if block:
                 ctx = f"{ctx}\n\n{block}"
         return ctx

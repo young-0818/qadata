@@ -31,13 +31,19 @@ def now_beijing() -> str:
     return datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def tool_frame(node: str, name: str, t0: float, ok: bool = True) -> dict:
-    """M8 票 06 tool 子事件帧形状唯一源（{node,kind,tool,ok,duration_ms}）。
+def tool_frame(node: str, name: str, t0: float, ok: bool = True,
+               detail: str | None = None) -> dict:
+    """M8 票 06 tool 子事件帧形状唯一源（必需 {node,kind,tool,ok,duration_ms}）。
     帧形是契约面——graph（execute/respond）与 tools（explore 子步骤）两处发、
     前端联合类型按此收窄，形状绝不许漂移，故收敛于此（compose_supplement 单源先例）。
-    t0 为 time.perf_counter() 起点，duration_ms 就地算。"""
-    return {"node": node, "kind": "tool", "tool": name, "ok": ok,
-            "duration_ms": round((time.perf_counter() - t0) * 1000)}
+    t0 为 time.perf_counter() 起点，duration_ms 就地算。
+    detail＝可选尾字段（chart 可选字段同族，旧消费者忽略即得）：值链「实际取值」用它带
+    命中明细（列→实际存储值），让胶囊显示"揪出了什么"而非只有一个耗时。"""
+    frame = {"node": node, "kind": "tool", "tool": name, "ok": ok,
+             "duration_ms": round((time.perf_counter() - t0) * 1000)}
+    if detail:
+        frame["detail"] = detail
+    return frame
 
 
 class TraceLogger:

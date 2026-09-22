@@ -35,6 +35,7 @@ interface ToolChip {
   tool: string;
   ok: boolean;
   ms: number;
+  detail?: string; // 值链「实际取值」命中明细（列→库内实际值），有则摊开显示
 }
 
 interface Step {
@@ -55,7 +56,7 @@ export function buildSteps(trail: ProgressEvent[]): Step[] {
     if (isToolEvent(ev)) {
       // 归属认帧自带 node（开步中同 node 者）——不靠到达序赌时序（双轴评审 (c)2）
       const target = [...steps].reverse().find((s) => s.running && s.node === ev.node);
-      target?.tools.push({ tool: ev.tool, ok: ev.ok, ms: ev.duration_ms });
+      target?.tools.push({ tool: ev.tool, ok: ev.ok, ms: ev.duration_ms, detail: ev.detail });
       continue;
     }
     if (ev.status === "start") {
@@ -165,6 +166,14 @@ export function Console({
                         {TOOL_LABELS[t.tool] ?? t.tool} {t.ms}ms
                       </span>
                     ))}
+                    {s.tools
+                      .filter((t) => t.detail)
+                      .map((t, j) => (
+                        // 值链「实际取值」命中明细单独成行摊开（胶囊是 999px 药丸、塞长文会撑爆）
+                        <div className="c-tools-detail" key={`d${j}`}>
+                          {TOOL_LABELS[t.tool] ?? t.tool}：{t.detail}
+                        </div>
+                      ))}
                   </div>
                 )}
               </div>

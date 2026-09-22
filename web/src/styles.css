@@ -1039,6 +1039,16 @@ button:disabled {
   background: #fdf3f3;
 }
 
+/* 值链「实际取值」命中明细：独占一行摊开（列→库内实际值），别塞进 999px 药丸撑爆 */
+.c-tools-detail {
+  flex-basis: 100%;
+  font-size: 0.68rem;
+  color: #6b6b72;
+  margin-top: 0.15rem;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
 /* 聊天气泡「工作过程」折叠同步：tool 子事件缩进胶囊＋失败步红字 */
 .progress-row.tool {
   padding-left: 1rem;

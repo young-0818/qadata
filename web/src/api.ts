@@ -172,6 +172,7 @@ export interface ToolEvent {
   tool: string; // list_tables/get_schema/select_tables/value_samples/execute_sql…
   ok: boolean; // 绿点成功/红点失败（owner 截图语义）
   duration_ms: number;
+  detail?: string; // 可选尾字段（chart 同族）：值链「实际取值」命中明细（列→库内实际值）
 }
 
 // M8 票 08 思考流：understand/generate 流式旁路的 reasoning_content 增量帧（后端逐
