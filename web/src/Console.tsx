@@ -3,13 +3,11 @@ import { AskResponse, ProgressEvent, isThinkingEvent, isToolEvent } from "./api"
 
 // M8 票 06 任务控制台：把票 03 既有进度帧喂厚的纯展示面——架构不动（固定状态机
 // 不是 tool loop），本组件只把帧流摆成 owner 截图形态：概览四卡＋追踪时间线。
-// 边界（owner 裁 2026-09-15）：token/费用只活在控制台，答案报告内容里不出现。
+// 边界（owner 裁 2026-09-15）：token 只活在控制台，答案报告内容里不出现。
 // M9 票 02：回放态复形——档案轮尾键 trail（步骤＋tool 帧、thinking 不入档）与直播
 // 帧同形同源，buildSteps 原样消费；旧档（无尾键）照实显示空态。零新依赖。
-
-// 影子折算锚价（与 CLAUDE.md 账本口径同款 ~¥3.9/M）：真链路走 coding plan 订阅，
-// 逐行无现金实付——卡面如实标「影子折算」，不装真实账单（数字诚实纪律）。
-const SHADOW_YUAN_PER_M_TOKENS = 3.9;
+// 2026-09-22 owner 裁：删「影子折算」费用估算（coding plan 无现金逐行可计、锚价估算
+// 无实际决策价值），token 卡改列输入/输出两行——真金白银的成本账在 runs 成本账本人审，不在演示壳里估。
 
 // 帧词汇的展示映射（后端单源文案的贴签层；未知一律直显原文，不硬翻译）
 export const NODE_LABELS: Record<string, string> = {
@@ -45,7 +43,8 @@ interface Step {
   running: boolean; // start 未收口（HITL 暂停/断流也停在此形——如实半开，不假完成）
   ok: boolean | null;
   ms: number | null;
-  tokens: number;
+  tokensIn: number;
+  tokensOut: number;
   tools: ToolChip[];
 }
 
@@ -63,7 +62,7 @@ export function buildSteps(trail: ProgressEvent[]): Step[] {
     if (ev.status === "start") {
       steps.push({
         node: ev.node, status: "start", running: true,
-        ok: null, ms: null, tokens: 0, tools: [],
+        ok: null, ms: null, tokensIn: 0, tokensOut: 0, tools: [],
       });
       continue;
     }
@@ -73,7 +72,8 @@ export function buildSteps(trail: ProgressEvent[]): Step[] {
       step.status = ev.status;
       step.ok = ev.ok ?? true;
       step.ms = ev.duration_ms ?? null;
-      step.tokens = (ev.tokens_in ?? 0) + (ev.tokens_out ?? 0);
+      step.tokensIn = ev.tokens_in ?? 0;
+      step.tokensOut = ev.tokens_out ?? 0;
     }
   }
   return steps;
@@ -115,7 +115,8 @@ export function Console({
     });
   const done = steps.filter((s) => !s.running);
   const passed = done.filter((s) => s.ok).length;
-  const tokens = steps.reduce((n, s) => n + s.tokens, 0);
+  const tokensIn = steps.reduce((n, s) => n + s.tokensIn, 0);
+  const tokensOut = steps.reduce((n, s) => n + s.tokensOut, 0);
   const output = resp
     ? resp.clarification
       ? "待你补充" // 澄清暂停行（14 字段契约的暂停面，不是答案也不是失败）
@@ -151,9 +152,9 @@ export function Console({
               sub={resp && !resp.failed && !resp.clarification && resp.rows ? "显示上限内" : undefined}
             />
             <Card
-              label="token · 费用"
-              value={`${tokens.toLocaleString("en-US")} tok`}
-              sub={`≈¥${((tokens / 1e6) * SHADOW_YUAN_PER_M_TOKENS).toFixed(4)} 影子折算`}
+              label="token 输入 / 输出"
+              value={`输入 ${tokensIn.toLocaleString("en-US")}`}
+              sub={`输出 ${tokensOut.toLocaleString("en-US")}`}
             />
           </div>
           <div className="c-steps">
