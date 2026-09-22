@@ -104,7 +104,7 @@ def backoff_delay(attempt: int, base: float = 1.0) -> float:
     return base * (2 ** attempt) * (0.5 + random.random() / 2)
 
 
-def invoke_with_backoff(llm, prompt: str, *, max_retries: int = 3,
+def invoke_with_backoff(llm, prompt: str, *, max_retries: int = 1,
                         base_delay: float = 1.0, sleep=time.sleep, limiter=None):
     """指数退避＋抖动（backoff_delay）；不可重试或耗尽即上抛。
     limiter：可选 RateLimiter——每次真实调用（含重试）前 acquire（并发评测限速）。"""

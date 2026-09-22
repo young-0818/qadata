@@ -21,10 +21,16 @@ def _route_after_understand(state: dict, clarification: bool = False) -> str:
     return "explore"
 
 
-def _route_after_execute(state: dict, budget: int) -> str:
-    """条件边①：失败且预算未尽 → 重试；失败且耗尽 → 兜底；成功 → 校验。"""
+def _route_after_execute(state: dict, budget: int, decompose: bool = False) -> str:
+    """条件边①：失败且预算未尽 → 重试；失败且耗尽 → 兜底；成功 → 校验。
+    M11 票 03 分治插边（开关闸）：成功但 plan 未走完 → 回 generate 做下一步——
+    中间步不消费 verify（可疑规则只对最终答案有意义）；关态/无 plan 与今日逐分支一致。"""
     if state.get("result") is None:
         return "generate" if len(state.get("attempts", [])) < budget else "respond"
+    plan = state.get("plan")
+    if decompose and plan and plan.get("steps") \
+            and plan.get("i", 0) + 1 < len(plan["steps"]):
+        return "generate"
     return "verify"
 
 
@@ -62,7 +68,7 @@ def build_graph(llm, tracer=None, settings: Settings | None = None, limiter=None
     g.add_edge("generate", "execute")
     g.add_conditional_edges(
         "execute",
-        lambda st: _route_after_execute(st, s.retry_budget),
+        lambda st: _route_after_execute(st, s.retry_budget, s.decompose),
         {"generate": "generate", "verify": "verify", "respond": "respond"},
     )
     g.add_conditional_edges(

@@ -310,39 +310,3 @@ def test_respond_long_report_not_truncated():
     assert ans.conclusion.endswith("【数据依据】共取到 1 行（全部列示）；所用表：students")
     assert "- 第 499 条发现：数值 499" in ans.conclusion  # 末行在场＝没被砍
     assert len(ans.conclusion) > len(long_report)
-
-
-def test_last_good_sql_derived_from_attempts():
-    from qadata.graph.nodes import _last_good_sql
-    from qadata.types import SqlAttempt
-
-    attempts = [
-        SqlAttempt(sql="", error="回复中未找到合法 SQL"),   # 提取失败：跳过
-        SqlAttempt(sql="SELECT a", row_count=1),            # 成功
-        SqlAttempt(sql="SELECT b", error="no such column"),  # 执行失败：跳过
-        SqlAttempt(sql="", error="仍未提取到"),              # 提取失败：跳过
-    ]
-    assert _last_good_sql(attempts) == "SELECT a"
-    assert _last_good_sql([SqlAttempt(sql="SELECT x", error="boom")]) is None
-    assert _last_good_sql([]) is None
-
-
-def test_respond_fallback_reexec_failure_degrades(fixture_db, monkeypatch):
-    """回退是锦上添花：重执行失败必须降级为原诚实失败汇报，不连累本体。"""
-    from qadata.graph.nodes import make_nodes
-    from qadata.types import SqlAttempt
-    from tests.fakes import ScriptedLLM
-
-    def boom(*a, **k):
-        raise RuntimeError("boom")
-
-    monkeypatch.setattr("qadata.graph.nodes.execute_sql", boom)
-    nodes = make_nodes(ScriptedLLM([]))
-    state = {
-        "db_path": fixture_db, "question": "q", "current_sql": None, "result": None,
-        "attempts": [SqlAttempt(sql="SELECT name FROM students", row_count=1),
-                     SqlAttempt(sql="SELECT bad", error="no such column: bad")],
-    }
-    out = nodes["respond"](state)
-    assert out["answer"].failed is True
-    assert "共尝试 2 次" in out["answer"].conclusion

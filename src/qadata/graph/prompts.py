@@ -55,6 +55,38 @@ _CLARIFY_TAIL = """
 输出形态或精度未明示（选合理形态作答）、时间范围未给出（按题面处理）。
 能改写、能给出合理 SQL 就不要问。"""
 
+# M11 票 03 分治尾段（默认关不加＝understand prompt 逐字节现状；gssc 共读单源，_CLARIFY_TAIL 先例）
+_DECOMPOSE_TAIL = """
+分治例外（少数题形才用）：仅当问题天然是「先算出一个中间量、再以它为条件继续查」
+（如「高于平均值的那些里的最高者」「先圈定某群体再统计其占比」）或一次问了两件事时，
+在上述 JSON 中额外追加字段 "steps": ["子问题1", "子问题2"]——2~3 条，每条一句自包含
+可独立执行 SQL 的中文问题；后条可写明引用前条结果。单条 SQL 能答的题一律不写该字段。
+拆的只是计算步骤，不发明口径——每条子问题仍须只用原题面已给的信息。"""
+
+
+def brief_head(result) -> str:
+    """结果头部摘要（分治上步回执行用）：标量→值；否则前 3 行；空→0 行。
+    ponytail: 与 web/sessions.result_head 同形第二家——合并须下沉到叶子层，探针期不值当，
+    漂移由措辞判卷时人工对（两处用途不同：那边是记忆，这边是步间桥）。"""
+    if result is None or not result.rows:
+        return "0 行（未查询到数据）"
+    if len(result.rows) == 1 and len(result.columns) == 1:
+        return str(result.rows[0][0])
+    return "\n".join(" | ".join(str(v) for v in r) for r in result.rows[:3])
+
+
+def format_step_context(plan) -> str:
+    """分治「已完成步骤」段（M11 票 03）：generate 第 2+ 步读上步回执——中间量以字面
+    进题、**最终 SQL 自包含**（评测端重执行最终 SQL 的判分语义零破坏，此为本票命根子）。
+    首步/关态（无 prev）＝空串＝逐字节现状。"""
+    prev = (plan or {}).get("prev")
+    if not isinstance(prev, dict):
+        return ""
+    return ("## 已完成步骤（本步为其下一步）\n"
+            f"上一步问题：{prev.get('q', '')}\n"
+            f"上一步 SQL：{prev.get('sql') or '（未留存）'}\n"
+            f"上一步结果（本步请以此为字面量，勿再嵌套查询）：{prev.get('head', '')}")
+
 # explore 选表 prompt（M9 票 03 自 tools/schema.py 迁入——四场景模板字面在此统一当家
 # （M5 指标层退役见 ADR-0007，metric_review 模板随删）；
 # gssc split 派生装配，此处保留原样作双跑 oracle）。

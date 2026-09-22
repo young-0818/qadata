@@ -88,12 +88,28 @@ def _manifest_body(db_path: str | os.PathLike, model_id: str) -> dict:
             "built_at": now_beijing(), "db": os.path.normcase(str(Path(db_path).resolve()))}
 
 
+# 装载缓存（M11 票 02 提速）：key＝(档路径, mtime_ns, size)——档面一变键即失效，
+# 重建/换库天然重载；值＝冻结 dataclass，跨请求共享安全。问数面此前逐问全量重解析
+# （值档 MB 级＝逐问 +15s 的隐性税在此报销）；详情读数/serve 播报另走表头窥探。
+# ponytail: 键随档数增长、进程亡即清——单进程托管几十库再上 LRU。
+_LOAD_CACHE: dict[tuple[str, int, int], object] = {}
+
+
+def _cache_key(f: Path) -> tuple[str, int, int]:
+    st = f.stat()
+    return str(f), st.st_mtime_ns, st.st_size
+
+
 def load_cards(db_path: str | os.PathLike, *,
                root: str | os.PathLike = DEFAULT_INDEX_DIR) -> StoredCards | None:
-    """装载＋形状校验（缺档＝None＝默认关；坏档如实炸，调用方降级入账——examples 同纪律）。"""
+    """装载＋形状校验（缺档＝None＝默认关；坏档如实炸，调用方降级入账——examples 同纪律）。
+    命中 mtime+size 缓存＝同对象直返；校验失败不缓存（如实炸的纪律不因提速打折）。"""
     f = index_dir_for(db_path, root) / CARDS_FILENAME
     if not f.is_file():
         return None
+    key = _cache_key(f)
+    if key in _LOAD_CACHE:
+        return _LOAD_CACHE[key]  # type: ignore[return-value]
     try:
         data = yaml.safe_load(f.read_text(encoding="utf-8"))
     except (yaml.YAMLError, UnicodeDecodeError) as e:
@@ -101,8 +117,10 @@ def load_cards(db_path: str | os.PathLike, *,
     m = _validated_manifest(data, "表卡档")
     if not isinstance(data.get("cards"), list):
         raise RetrievalError("表卡档形状不正（cards 须列表）")
-    return StoredCards(model_id=str(m["model_id"]), content_hash=str(m["content_hash"]),
-                       cards=tuple(_validated_card(c, i) for i, c in enumerate(data["cards"])))
+    out = StoredCards(model_id=str(m["model_id"]), content_hash=str(m["content_hash"]),
+                      cards=tuple(_validated_card(c, i) for i, c in enumerate(data["cards"])))
+    _LOAD_CACHE[key] = out
+    return out
 
 
 def write_cards(db_path: str | os.PathLike, model_id: str,
@@ -153,6 +171,9 @@ def load_values(db_path: str | os.PathLike, *,
     f = index_dir_for(db_path, root) / VALUE_FILENAME
     if not f.is_file():
         return None
+    key = _cache_key(f)
+    if key in _LOAD_CACHE:
+        return _LOAD_CACHE[key]  # type: ignore[return-value]
     try:
         data = yaml.safe_load(f.read_text(encoding="utf-8"))
     except (yaml.YAMLError, UnicodeDecodeError) as e:
@@ -176,8 +197,10 @@ def load_values(db_path: str | os.PathLike, *,
         missing = [v for v in c["values"] if v not in vecs]
         if missing:  # 值有列无向量＝档自相矛盾，宁炸不带病（换模型残留走 model_id 判定，不走这里）
             raise RetrievalError(f"值向量缺失：{c['table']}.{c['column']} 的 {missing[0]!r}")
-    return StoredValues(model_id=str(m["model_id"]), content_hash=str(m["content_hash"]),
-                        columns=tuple(columns), vecs=vecs)
+    out = StoredValues(model_id=str(m["model_id"]), content_hash=str(m["content_hash"]),
+                       columns=tuple(columns), vecs=vecs)
+    _LOAD_CACHE[key] = out
+    return out
 
 
 def write_values(db_path: str | os.PathLike, model_id: str,
@@ -194,29 +217,47 @@ def write_values(db_path: str | os.PathLike, model_id: str,
     return d
 
 
+def _peek_model_id(f: Path) -> str:
+    """manifest 表头窥探（不整档解析——值档 MB 级，safe_load 全文＝15s 级的读数税）。
+    自有写者 safe_dump 的 manifest 恒在最前、后续键顶格：逐行读到下一个顶格键即止。
+    判读收窄＝只 surface 顶层 yaml 烂/manifest 缺 model_id 的 broken；entries 内
+    形状烂留给问数面 load 如实炸＋降级入账（那是它本职，详情读数不该为此全解析）。"""
+    with f.open(encoding="utf-8") as fh:
+        head: list[str] = []
+        for line in fh:
+            if head and line[:1] not in (" ", "\t", "\n", "#") and not line.startswith("manifest:"):
+                break
+            head.append(line)
+    data = yaml.safe_load("".join(head)) or {}
+    m = data.get("manifest") if isinstance(data, dict) else None
+    if not isinstance(m, dict) or not str(m.get("model_id") or "").strip():
+        raise RetrievalError("manifest 缺 model_id")
+    return str(m["model_id"])
+
+
+def _status_for(filename: str, db_path: str | os.PathLike, embed_model: str,
+                root: str | os.PathLike) -> str:
+    """missing（无档）｜broken（档面表头读不动/缺 model_id）｜stale（建档模型≠当前）
+    ｜ok。永不抛（serve 播报与详情读数同纪律：状态面不连累本体）。"""
+    f = index_dir_for(db_path, root) / filename
+    if not f.is_file():
+        return "missing"
+    try:
+        model = _peek_model_id(f)
+    except (RetrievalError, OSError, UnicodeDecodeError, yaml.YAMLError):
+        return "broken"
+    return "ok" if model == embed_model else "stale"
+
+
 def index_status(db_path: str | os.PathLike, embed_model: str, *,
                  root: str | os.PathLike = DEFAULT_INDEX_DIR) -> str:
-    """serve 启动播报/验收用的一眼态：missing（缺档/空池）｜broken（坏档）｜
-    stale（model_id 与当前向量化模型不合）｜ok。永不抛（播报面不连累起服）。"""
-    try:
-        stored = load_cards(db_path, root=root)
-    except RetrievalError:
-        return "broken"
-    if stored is None or not stored.cards:
-        return "missing"
-    return "ok" if stored.model_id == embed_model else "stale"
+    """serve 启动播报/详情读数用的一眼态：missing｜broken｜stale｜ok（表头窥探，
+    空池不再判 missing——档在＝建过＝ok；池空与否由问数入账说话）。永不抛。"""
+    return _status_for(CARDS_FILENAME, db_path, embed_model, root)
 
 
 def value_index_status(db_path: str | os.PathLike, embed_model: str, *,
                        root: str | os.PathLike = DEFAULT_INDEX_DIR) -> str:
-    """值档一眼态（票 02 遗留「播报接读」在票 03 兑现）：missing｜broken｜stale｜ok。
-    空档（建过但全库无可采列＝columns 空）＝ok——非管理可修态，播报不嚷；
-    缺档也静（值链缺料在问数面逐问入账 value_link 行，启动播报只点名**坏了能修**的）。
-    永不抛（index_status 同纪律）。"""
-    try:
-        stored = load_values(db_path, root=root)
-    except RetrievalError:
-        return "broken"
-    if stored is None:
-        return "missing"
-    return "ok" if stored.model_id == embed_model else "stale"
+    """值档一眼态（同窥探口径）：missing｜broken｜stale｜ok。空档（建过但全库无可采
+    列）＝ok——非管理可修态，播报不嚷。永不抛。"""
+    return _status_for(VALUE_FILENAME, db_path, embed_model, root)

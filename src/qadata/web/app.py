@@ -49,6 +49,7 @@ from pydantic import BaseModel, Field
 from qadata.config import Settings
 from qadata.graph.build import resume_question, run_question
 from qadata.graph.prompts import compose_supplement
+from qadata.llm.tracing import now_beijing
 from qadata.obs import obs_for
 from qadata.retrieval.cards import build_table_recall
 from qadata.retrieval.examples import ExampleError, build_recall, load_examples
@@ -58,6 +59,7 @@ from qadata.retrieval.knowledge import (
     feed_knowledge,
     knowledge_status,
 )
+from qadata.retrieval.store import DEFAULT_INDEX_DIR, index_status, value_index_status
 from qadata.retrieval.values import build_value_link
 from qadata.tools.db import open_readonly
 from qadata.tools.schema import list_tables
@@ -70,6 +72,7 @@ from qadata.web.agents import (
 )
 from qadata.web.charts import decide_chart
 from qadata.web.feedback import FeedbackError, append_vote, latest_votes
+from qadata.web.index_build import run_index_build
 from qadata.web.sessions import (
     Session,
     SessionNotFound,
@@ -162,7 +165,8 @@ def answer_to_payload(answer: Answer, session_id: str | None = None) -> dict[str
 
 def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
                static_dir: str | Path | None = None,
-               tracer=None, embedder=None) -> FastAPI:
+               tracer=None, embedder=None,
+               index_root: str | Path = DEFAULT_INDEX_DIR) -> FastAPI:
     """应用工厂：agents（AgentStore）必填、llm/settings/static_dir/tracer 注入——
     契约测试注 tmp 存储＋假模型，工厂不摸文件系统做装配（评审收紧：删 None 兜底，
     不给"自己造真目录 store"留后路）。
@@ -193,6 +197,11 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
 
     _pending: dict[str, _PendingAsk] = {}  # 读写均发生在在途锁内（单进程约定）
 
+    # M11 票 02 建索引 web 门：构建 job 态住进程内（pending 同款在册上限——重启丢
+    # 在途记录，档面本身住 data/indexes/ 不受影响；前端轮询详情读数即可，不开进度流）。
+    _index_jobs: dict[str, dict[str, Any]] = {}
+    _index_lock = threading.Lock()
+
     def _bad(e: AgentStoreError | SessionStoreError) -> HTTPException:
         if isinstance(e, (AgentNotFound, SessionNotFound)):
             return HTTPException(status_code=404, detail=str(e))
@@ -218,12 +227,27 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
         count, note = knowledge_status(store.agent_dir(meta.id))
         return {"has_entries": count > 0, "entry_count": count, "error": note}
 
+    def _index_info(meta: AgentMeta) -> dict[str, Any]:
+        # 检索索引状态读数（M11 票 02）：cards/values＝store.*_status 现读（永不抛，
+        # serve 播报同源同词）；job＝在途/上次构建（无＝None）。embedder 面 model 与
+        # 档面 model_id 对账＝过期闸同款语义。
+        path = store.datasource_path(meta)
+        model = str(getattr(embedder, "model", "")
+                    or (settings.embed_model if settings else ""))
+        with _index_lock:
+            job = dict(_index_jobs.get(meta.id) or {}) or None
+        return {"embed_configured": embedder is not None,
+                "cards": index_status(str(path), model, root=index_root) if path is not None else "missing",
+                "values": value_index_status(str(path), model, root=index_root) if path is not None else "missing",
+                "job": job}
+
     def _detail(meta: AgentMeta) -> dict[str, Any]:
         # evidence/business_knowledge 展示键已随 ADR-0008 撤（口径管理面＝口径字典面板）
         return {"id": meta.id, "name": meta.name, "description": meta.description,
                 "preset_questions": list(meta.preset_questions),
                 "datasource": _datasource_info(meta),
-                "knowledge": _knowledge_info(meta)}
+                "knowledge": _knowledge_info(meta),
+                "index": _index_info(meta)}
 
     # ── 模型配置：只读卡（可写化＝后手裁决；.env 是模型唯一真源）──────
 
@@ -312,6 +336,40 @@ def create_app(agents: AgentStore, llm=None, settings: Settings | None = None,
             Path(tmp_name).unlink(missing_ok=True)
         return {"total": res.total, "added": res.added, "embedded": res.embedded,
                 "note": PENDING_EMBED_NOTE if res.embedded == 0 and res.total else ""}
+
+    @app.post("/api/agents/{agent_id}/index-build")
+    def start_index_build(agent_id: str) -> dict[str, bool]:
+        # M11 票 02（owner 批 2026-09-22：建索引 web 门，web 化前提兑现）：CLI
+        # index-build 同逻辑同目录（ADR-0004 库派生料跟库走）。ADR-0005 不动摇——
+        # 只有本端点（＝详情面按钮点击）触发构建，问数路径永不建；构建在后台线程
+        # 烧向量（几百发封顶、离线管理动作），回执逐段落 job 真话。
+        try:
+            meta = store.get(agent_id)
+        except AgentStoreError as e:
+            raise _bad(e) from None
+        if embedder is None:
+            raise HTTPException(status_code=400,
+                                detail="向量化通道未配置（.env QADATA_EMBED_MODEL）——表卡/值索引无从建起")
+        path = store.datasource_path(meta)
+        if path is None:
+            raise HTTPException(status_code=400, detail="未上传数据源——先在详情面上传库文件，再建索引")
+        started = now_beijing()
+        with _index_lock:
+            running = _index_jobs.get(meta.id)
+            if running and running.get("state") == "running":
+                raise HTTPException(status_code=409,
+                                    detail=f"本智能体已有索引构建在途（{running.get('started', '?')} 起）")
+            _index_jobs[meta.id] = {"state": "running", "note": "", "started": started}
+
+        def _run(db: str) -> None:
+            # 执行体住 web/index_build.py（管理门自有模块，web 运行面零触钉原样存活）；
+            # 本闭包只簿记 job 态（进程内＝重启丢在途记录，pending 同款在册上限）。
+            out = run_index_build(db, embedder, index_root)
+            with _index_lock:
+                _index_jobs[meta.id] = {**out, "started": started}
+
+        threading.Thread(target=_run, args=(str(path),), daemon=True).start()
+        return {"ok": True}
 
     # ── 票 05：会话面（侧栏列表／重开回放）──────────────────────────────
     # 会话懒建档＝首问落盘才建文件；回放＝问答本体（answer 即契约 payload）

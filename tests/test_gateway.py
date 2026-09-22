@@ -45,7 +45,7 @@ def _auth_error():
 def test_backoff_retries_rate_limit_then_succeeds():
     sleeps = []
     llm = FlakyLLM(fail_times=2, exc=_rate_limit_error())
-    out = invoke_with_backoff(llm, "p", base_delay=1.0, sleep=sleeps.append)
+    out = invoke_with_backoff(llm, "p", max_retries=2, base_delay=1.0, sleep=sleeps.append)
     assert out.content == "ok" and llm.calls == 3
     assert len(sleeps) == 2
     assert 0.5 <= sleeps[0] <= 1.0   # 1×2^0×[0.5,1.0)

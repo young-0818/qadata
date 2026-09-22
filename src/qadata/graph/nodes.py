@@ -20,12 +20,13 @@ from qadata.graph.intent import parse_understand_response
 from qadata.graph.precise import NO_MAJORITY_ERROR, run_precise_batch
 from qadata.graph.prompts import (
     SUPPLEMENT_MARK,
+    brief_head,
     compose_conclusion,
     compose_supplement,
     strip_conclusion_prefix,
 )
 from qadata.graph.verify import verify_result
-from qadata.llm.tracing import timed_invoke, timed_stream, tool_frame
+from qadata.llm.tracing import timed_invoke, timed_stream, tool_frame, tool_start_frame
 from qadata.tools.db import open_readonly
 from qadata.tools.executor import execute_sql
 from qadata.tools.schema import build_schema_context
@@ -47,14 +48,6 @@ def extract_sql(text: str) -> str:
     # 多语句串（如 "SELECT 1; DROP x"）此处不拆分：最终防线在执行器的 sqlite3
     # 单语句 execute + mode=ro 只读连接双重闸（M1 分层设计，有意为之）。
     return sql
-
-
-def _last_good_sql(attempts: list[SqlAttempt]) -> str | None:
-    """最近一次执行成功的 SQL（答案稳定性回退候选；不新增状态键，从 attempts 派生）。"""
-    for a in reversed(attempts):
-        if a.sql and a.error is None:
-            return a.sql
-    return None
 
 
 def _exec_fail_status(msg: str) -> str:
@@ -159,6 +152,12 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         if on_event is not None:
             on_event(tool_frame(node, name, t0, ok))
 
+    def _tool_start(node: str, name: str) -> None:
+        """tool start 帧（实时工具链）：慢操作开跑即发活口，前端当场成行转圈——
+        execute_sql 撞 5s 超时线的等待期不再是页面装死。收口帧形状零动。"""
+        if on_event is not None:
+            on_event(tool_start_frame(node, name))
+
     def _wrap(name: str, fn):
         """start 帧统一由包装层发（少一处节点内样板）＋步盒重置；关态直接返回原函数。"""
         if on_event is None:
@@ -202,10 +201,11 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         # 票 03（M8，默认关）：同一改写调用兼产澄清问（三元组，宁空勿造）——保险丝出口，
         # 关态与今日逐字节一致（prompt 不追加指令段、本节点不写 answer、路由 map 不含 END）。
         text = _llm(assemble("understand",
-                             gather_understand(state, clarify=s.clarification),
+                             gather_understand(state, clarify=s.clarification,
+                                               decompose=s.decompose),
                              on_compress=_fuse("understand")),
                     "understand")
-        question, intent, clarification = parse_understand_response(text)
+        question, intent, clarification, steps = parse_understand_response(text)
         attempt = len(state.get("attempts", []))
         if (s.clarification and clarification
                 and SUPPLEMENT_MARK not in state["question"]):
@@ -228,6 +228,13 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
             return {"original_question": state["question"], "question": question,
                     "intent": intent,
                     "answer": Answer(conclusion=clarification, clarification=clarification)}
+        if s.decompose and steps:
+            # 分治消费闸（M11 票 03，clarification 同款双闸结构、且在其后——澄清是保险丝
+            # 优先于拆分）：开关开且形状过关才拆，首步即题面、plan 记全步与进度；
+            # 关态模型违令产出 steps 也绝不消费（姊妹钉）。
+            _emit("understand", attempt, f"理解完成（分 {len(steps)} 步）")
+            return {"original_question": state["question"], "question": steps[0],
+                    "intent": intent, "plan": {"steps": steps, "i": 0}}
         if intent is None:
             _emit("understand", attempt, "解析失败，按原问题作答")
         else:
@@ -239,10 +246,14 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         # 票 03：纸条调在本节点绑定搭车料（question＋intent），build_schema_context
         # 只见「入选表→块」的窄形——扫描在 retrieval 闭包内按题面 memo，重试环/
         # 精准模式不翻倍向量调用。
+        # M11 票 03：分治轮选表看**原全题**（后续步可能引用别的表，首步题面选窄＝漏料）；
+        # 关态无 plan 键＝表达式与今日逐字节一致。
+        explore_q = ((state.get("original_question") or state["question"])
+                     if state.get("plan") else state["question"])
         vl = ((lambda names: value_link(state["question"], state.get("intent"), names))
               if value_link is not None else None)
         try:
-            ctx = build_schema_context(conn, state["question"], llm=llm, tracer=tracer,
+            ctx = build_schema_context(conn, explore_q, llm=llm, tracer=tracer,
                                        db_path=state["db_path"], limiter=limiter,
                                        sample_values=s.value_sampling,
                                        on_event=on_event, sink=sink,
@@ -256,6 +267,20 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         # 票 05：L1 上轮 SQL 草稿进尾部（增量改写参考）——仅素材不进路由，
         # 沙箱/校验/账本三层零改动，草稿写法照走完整 execute＋verify
         # M9 票 03：失败历史（状态）＋草稿（记忆）等素材收编进 GSSC 出口，逐字节同旧路
+        # M11 票 03 步序推进：上一步跑成（result 在场）且还有后续步 → 摘新步题面＋把上步
+        # 回执（问题/SQL/结果头）冻结进 plan.prev（execute 失败清 result 也不丢桥——重试
+        # 看得见上步）。判据可靠：中间步成功从不进 verify，verify 可疑重试时 plan 已尽
+        # （i+1==len）不触发推进；提取失败重试 result 恒 None 同样不误进。
+        plan = state.get("plan")
+        advanced: dict = {}
+        if plan and plan.get("steps") and state.get("result") is not None \
+                and plan["i"] + 1 < len(plan["steps"]):
+            prev = {"q": plan["steps"][plan["i"]],
+                    "sql": state.get("current_sql"),
+                    "head": brief_head(state["result"])}
+            plan = {**plan, "i": plan["i"] + 1, "prev": prev}
+            advanced = {"plan": plan, "question": plan["steps"][plan["i"]]}
+            state = {**state, "plan": plan, "question": plan["steps"][plan["i"]]}
         prompt = assemble("generate", gather_generate(state), on_compress=_fuse("generate"),
                           recall=recall, knowledge_recall=knowledge_recall)
         if s.precise_candidates > 1:
@@ -276,9 +301,10 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
                 attempts.append(SqlAttempt(sql="", error=err))
                 _emit("generate", len(attempts), f"提取失败：{err}", ok=False)
                 return {"current_sql": None, "last_error": err, "attempts": attempts,
-                        "precise_candidates": None}
+                        "precise_candidates": None, **advanced}
             _emit("generate", len(state.get("attempts", [])), "生成 SQL")
-            return {"current_sql": sqls[0], "last_error": None, "precise_candidates": sqls}
+            return {"current_sql": sqls[0], "last_error": None,
+                    "precise_candidates": sqls, **advanced}
         text = _llm(prompt, "generate")
         try:
             sql = extract_sql(str(text))
@@ -286,14 +312,16 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
             attempts = list(state.get("attempts", []))
             attempts.append(SqlAttempt(sql="", error=str(e)))
             _emit("generate", len(attempts), f"提取失败：{str(e).splitlines()[0]}", ok=False)
-            return {"current_sql": None, "last_error": str(e), "attempts": attempts}
+            return {"current_sql": None, "last_error": str(e), "attempts": attempts,
+                    **advanced}
         _emit("generate", len(state.get("attempts", [])), "生成 SQL")
-        return {"current_sql": sql, "last_error": None}
+        return {"current_sql": sql, "last_error": None, **advanced}
 
     def execute(state: dict) -> dict:
         candidates = state.get("precise_candidates")
         if candidates and len(candidates) > 1:
             # 票决轮（M4-C）：批量=一轮账本，attempts 只记一条；用完显式清载荷键
+            _tool_start("execute", "execute_sql_batch")
             t0 = time.perf_counter()
             outcome = run_precise_batch(state["db_path"], candidates,
                                         max_rows=s.max_rows, timeout_s=s.sql_timeout_s,
@@ -328,6 +356,7 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
             _emit("execute", len(state.get("attempts", [])), "无可执行 SQL，转重试", ok=False)
             return {"result": None}
         attempts = list(state.get("attempts", []))
+        _tool_start("execute", "execute_sql")
         t0 = time.perf_counter()
         try:
             res = execute_sql(
@@ -368,21 +397,8 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
         res = state.get("result")
         sql = state.get("current_sql")
         attempts = state.get("attempts", [])
-        fallback_note = None
-        if res is None and attempts and attempts[-1].sql and attempts[-1].error:
-            # 执行失败耗尽（非提取失败耗尽，后者必须诚实失败——M2 钉死回归）：
-            # 回退重执行最近成功候选，答案不丢失；重执行失败则维持原诚实失败路径
-            good_sql = _last_good_sql(attempts)
-            if good_sql:
-                t0 = time.perf_counter()
-                try:
-                    res = execute_sql(state["db_path"], good_sql,
-                                      max_rows=s.max_rows, timeout_s=s.sql_timeout_s)
-                    sql = good_sql
-                    fallback_note = "最终尝试失败，以下为最近一次成功执行的查询结果"
-                except Exception:  # noqa: BLE001, S110 回退是锦上添花：炸了不得连累原诚实失败路径
-                    pass
-                _tool("respond", "execute_sql", t0, ok=res is not None)
+        # 执行失败耗尽＝判死（owner 裁 2026-09-22）：最后一版跑不通就诚实失败，
+        # 不回滚旧答案救场——原「答案稳定性回退」整层撤除（M3 立、活了六个里程碑）
         if res is None:
             # 永不编造：失败路径不调 LLM；汇报全部尝试（比 M1 单错误版信息量更高）
             # 票 07：仍按三节组装——数据依据如实记无结果集，模板降级原因进校验节
@@ -435,8 +451,6 @@ def make_nodes(llm, tracer=None, settings: Settings | None = None, limiter=None,
             # 不重复数据依据节的行数（评审收紧：同一事实两处表述会漂移）——
             # 本条只陈述数据依据给不了的事实：结论实际只看了预览行
             notes.append(f"结果已截断：结论仅基于前 {len(preview)} 行预览生成")
-        if fallback_note:  # 回退作答：数据真实，如实标注来源
-            notes.append(fallback_note)
         _emit("respond", len(attempts), "作答完成")
         return {"answer": Answer(
             conclusion=compose_conclusion(conclusion, _basis_line(res, sql), caliber, notes),

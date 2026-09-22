@@ -34,4 +34,9 @@ class AgentState(TypedDict, total=False):
     # understand/generate prompt 与现状逐字节一致；无 digest_lines 键＝票 04 现状逐字节一致。
     # L3 全史归档永不进 prompt（预算窗口、摘要欠账与草稿资格在 web 层 build_session_context/
     # catch_up_digest 切好再装填）。
+    # M11 票 03 分治载荷键（precise_candidates 同款纪律：显式键、整值覆盖、缺键＝关态零染指）：
+    # {"steps": [子问题…2~3 条], "i": 当前步下标, "prev": 上一步回执 {q/sql/head}（首步无）}。
+    # 消费者＝generate（步序推进与上步上下文素材）与 explore（有 plan 时选表看原全题）；
+    # 预算语义不分家：len(attempts) 全题共享（owner 裁 2026-09-22）。
+    plan: dict | None
     answer: Answer | None

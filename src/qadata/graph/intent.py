@@ -17,6 +17,9 @@ metric_match 填槽消费者已随指标层退役（ADR-0007）；evidence_terms
 M8 票 03：返回值扩为三元组（＋clarification），默认关的保险丝——仅当口径缺失到
 「任何 SQL 都是猜」时模型才产澄清问，宁空勿造；消费闸在节点侧（flag＋防循环标记），
 本解析层只负责「收不收」的形状判定。
+
+M11 票 03：再扩为四元组（＋steps）——分治子问题列表（2~3 条全非空字符串才采信），
+同样「解析层只收形状、消费闸在节点侧」（decompose flag）；关态模型违令产出也不消费。
 """
 import json
 import re
@@ -54,8 +57,17 @@ def _clean_list(value):
     return items or None
 
 
+def _clean_steps(value):
+    """M11 票 03 steps 清洗（宁空勿造在解析层的形态）：仅当 2~3 条**全为非空字符串**
+    列表才采信——1 条/4 条/含空白/非标量一律 None（半坏契约不采信，clarification 先例）。"""
+    if not isinstance(value, list) or not 2 <= len(value) <= 3:
+        return None
+    cleaned = [_clean_str(v) for v in value]
+    return cleaned if all(cleaned) else None
+
+
 def parse_understand_response(text):
-    """understand 回复 → (改写问题, 四字段意图 dict 或 None, 澄清问句或 None)。
+    """understand 回复 → (改写问题, 四字段意图 dict 或 None, 澄清问句或 None, 子问题列表或 None)。
 
     成功判定：能提取出带非空 question 的 JSON 对象。意图契约坏掉（intent 缺失/非 dict）
     但改写拿到了时四字段全 null——回退成 JSON 原文反而污染题面，不如留空；
@@ -84,6 +96,6 @@ def parse_understand_response(text):
                         else _clean_str(src.get(f)))
                     for f in INTENT_FIELDS
                 }
-                return question, intent, clarification
-            return raw, None, clarification
-    return raw, None, None
+                return question, intent, clarification, _clean_steps(data.get("steps"))
+            return raw, None, clarification, None
+    return raw, None, None, None

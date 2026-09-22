@@ -23,6 +23,7 @@ def _isolate_env(monkeypatch):
     monkeypatch.delenv("QADATA_PRECISE_TEMPERATURE", raising=False)
     monkeypatch.delenv("QADATA_VALUE_SAMPLING", raising=False)
     monkeypatch.delenv("QADATA_CLARIFICATION", raising=False)
+    monkeypatch.delenv("QADATA_DECOMPOSE", raising=False)
     monkeypatch.delenv("QADATA_OTEL_ENABLED", raising=False)
     monkeypatch.delenv("QADATA_OTEL_ENDPOINT", raising=False)
     monkeypatch.delenv("QADATA_EMBED_MODEL", raising=False)
@@ -46,7 +47,7 @@ def test_load_settings_missing_key():
 def test_load_settings_new_defaults(monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
     s = load_settings()
-    assert s.retry_budget == 3 and s.sql_timeout_s == 5.0 and s.max_rows == 50
+    assert s.retry_budget == 2 and s.sql_timeout_s == 5.0 and s.max_rows == 50
 
 
 def test_bad_max_rows_readable_error(monkeypatch):

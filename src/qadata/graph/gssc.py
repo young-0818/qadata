@@ -24,6 +24,7 @@ from typing import NamedTuple
 
 from qadata.graph.prompts import (
     _CLARIFY_TAIL,
+    _DECOMPOSE_TAIL,
     _PICK_PROMPT,
     _RESPOND_TMPL,
     _UNDERSTAND_TMPL,
@@ -38,6 +39,7 @@ from qadata.graph.prompts import (
     format_failure_history,
     format_session_draft,
     format_session_history,
+    format_step_context,
 )
 
 
@@ -75,8 +77,9 @@ _P1, _P2 = _p1.split("{question}", 1)
 # ── Gather：读状态、格式化素材 → 槽位字典 ──────────────────────────────
 
 
-def gather_understand(state: dict, *, clarify: bool) -> dict[str, str]:
-    """understand 候选：L2 会话历史段（指代消解）＋题面＋澄清尾段（口径段已撤 ADR-0008）。
+def gather_understand(state: dict, *, clarify: bool, decompose: bool = False) -> dict[str, str]:
+    """understand 候选：L2 会话历史段（指代消解）＋题面＋澄清尾段（口径段已撤 ADR-0008）
+    ＋分治尾段（M11 票 03，开关开才加、无防循环标记需求——拆步不产生追问）。
     澄清尾段闸＝开关开且题面不含「补充说明：」标记（防循环指令侧——与节点侧
     消费复闸同源条件，understand_prompt 旧路同款）。"""
     question = state["question"]
@@ -85,17 +88,20 @@ def gather_understand(state: dict, *, clarify: bool) -> dict[str, str]:
         "question": question,
         "clarify_tail": _CLARIFY_TAIL
         if clarify and SUPPLEMENT_MARK not in question else "",
+        "decompose_tail": _DECOMPOSE_TAIL if decompose else "",
     }
 
 
 def gather_generate(state: dict) -> dict[str, str]:
-    """generate 候选：schema＋题面＋失败历史（状态）＋L1 草稿（记忆）（口径段撤后由字典块走 Select 格，ADR-0008）。"""
+    """generate 候选：schema＋题面＋失败历史（状态）＋L1 草稿（记忆）（口径段撤后由字典块走 Select 格，ADR-0008）
+    ＋分治上步回执（M11 票 03：plan.prev 在场才有——首步/关态空串逐字节现状）。"""
     return {
         "schema": state.get("db_schema", ""),
         "question": state["question"],
         "failure_history": format_failure_history(
             state.get("attempts", []), state.get("verify_note")),
         "draft": format_session_draft(state.get("session_context")),
+        "step_ctx": format_step_context(state.get("plan")),
     }
 
 
@@ -360,7 +366,7 @@ def _structure_understand(p: dict[str, str]) -> list[Section]:
         Section(Zone.TASK, _U_HEAD),
         Section(Zone.MEMORY, block + "\n" if block else ""),
         Section(Zone.TASK, _U_Q + p["question"] + _U_QTAIL),
-        Section(Zone.OUTPUT, p["clarify_tail"]),
+        Section(Zone.OUTPUT, p["clarify_tail"] + p.get("decompose_tail", "")),
     ]
 
 
@@ -379,6 +385,9 @@ def _structure_generate(p: dict[str, str]) -> list[Section]:
     if examples:
         # 贴「## 用户问题」最近落位（块内已升序、最像的在块尾——DB-GPT 论文形态）
         sections.append(Section(Zone.EVIDENCE, "\n\n" + examples + "\n"))
+    step_ctx = p.get("step_ctx") or ""  # M11 票 03：上步回执贴题面最近处（字面量桥的落点）
+    if step_ctx:
+        sections.append(Section(Zone.EVIDENCE, "\n\n" + step_ctx + "\n"))
     sections += [
         Section(Zone.TASK, "\n\n## 用户问题\n" + p["question"] + "\n"),
         # 空节省略＝整段连前导换行一起不进（sql_prompt 的 h 组装逐字节同款）
