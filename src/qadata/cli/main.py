@@ -45,14 +45,14 @@ def main(argv: list[str] | None = None) -> int:
     p_ask.add_argument("db_path")
     p_ask.add_argument("question")
 
-    p_eval = sub.add_parser("eval", help="BIRD 评测（Task 10 接通）")
+    p_eval = sub.add_parser("eval", help="BIRD 评测")
     p_eval.add_argument("--questions", required=True)
     p_eval.add_argument("--db-dir", required=True)
     p_eval.add_argument("--sample", type=int, default=None)
     p_eval.add_argument("--ids", default=None, help="题号 JSON 文件（固定题集：冒烟/对比）")
     p_eval.add_argument("--out", default="runs/eval-last.jsonl", help="输出 JSONL 路径")
     p_eval.add_argument("--resume", action="store_true", help="断点续跑：跳过已完成题号")
-    p_eval.add_argument("--variants", default=None, help="变体矩阵 YAML（M3 工具链，实验 M4 跑）")
+    p_eval.add_argument("--variants", default=None, help="变体矩阵 YAML（同题多变体对比跑分）")
     p_eval.add_argument("--concurrency", type=int, default=5,
                         help="并发路数（默认 5，5-8；1=串行，兼容旧语义）")
     p_eval.add_argument("--qps", type=float, default=None,
@@ -64,9 +64,9 @@ def main(argv: list[str] | None = None) -> int:
                              "估算成本与累计两列留待填由人折算），如 runs/m5-budget.md")
     p_eval.add_argument("--knowledge", default=None,
                         help="口径字典档目录（含 knowledge.yaml，knowledge-feed 落盘处）——"
-                             "M10 票 05 字典验收经 eval 的通道；缺省＝字典不挂＝逐字节历史现状")
+                             "字典检索的评测通道；缺省＝字典不挂＝逐字节历史现状")
 
-    p_serve = sub.add_parser("serve", help="本地起问数 web demo（M7 票 02.5）：API＋前端同源＋智能体管理")
+    p_serve = sub.add_parser("serve", help="本地起问数 web demo：API＋前端同源＋智能体管理")
     p_serve.add_argument("--host", default="127.0.0.1")
     p_serve.add_argument("--port", type=int, default=8000)
     from qadata.web.agents import (
@@ -77,15 +77,15 @@ def main(argv: list[str] | None = None) -> int:
                          help=f"智能体数据目录（每智能体一子目录 meta.yaml＋source.sqlite；默认 {DEFAULT_AGENTS_DIR}）")
 
     p_fb = sub.add_parser("feedback-export",
-                          help="导出反馈票（M8 票 04）：扫旁挂票档×会话档出 JSONL，供人审手工成卷")
+                          help="导出反馈票：扫旁挂票档×会话档出 JSONL，供人审手工成卷")
     p_fb.add_argument("--agents-dir", default=DEFAULT_AGENTS_DIR,
                       help=f"智能体数据目录（默认 {DEFAULT_AGENTS_DIR}）")
     p_fb.add_argument("--out", default=None,
                       help="输出 JSONL（默认 runs/feedback-<YYYYMMDD>.jsonl）")
 
     p_sign = sub.add_parser("examples-sign",
-                            help="人签题对入例题库（M9 票 06 唯一进料口：JSONL 每行 "
-                                 "{q, sql, signed_by}；成功轮永不自动吸收）")
+                            help="人签题对入例题库（唯一进料口）：JSONL 每行 "
+                                 "{q, sql, signed_by}；成功轮永不自动吸收")
     p_sign.add_argument("--agents-dir", default=DEFAULT_AGENTS_DIR,
                         help=f"智能体数据目录（默认 {DEFAULT_AGENTS_DIR}）")
     p_sign.add_argument("--agent", required=True, help="目标智能体 id（hex12）")
@@ -94,8 +94,8 @@ def main(argv: list[str] | None = None) -> int:
                              "{q, sql, signed_by}——question 改名 q、逐行补签名）")
 
     p_kb = sub.add_parser("knowledge-feed",
-                          help="口径字典进料（M10 票 04 唯一进料口：md/txt/csv 条目级切块——"
-                               "一条口径一块、否字数滑窗；进料当场整档向量化入账）")
+                          help="口径字典进料（唯一进料口）：md/txt/csv 条目级切块——"
+                               "一条口径一块、否字数滑窗；进料当场整档向量化入账")
     p_kb.add_argument("--agents-dir", default=DEFAULT_AGENTS_DIR,
                       help=f"智能体数据目录（默认 {DEFAULT_AGENTS_DIR}）")
     p_kb.add_argument("--agent", required=True, help="目标智能体 id（hex12）")
@@ -103,8 +103,8 @@ def main(argv: list[str] | None = None) -> int:
                       help="字典源文件（.md/.txt 空行分块 / .csv 一行一条；Word/PDF 被否在册）")
 
     p_idx = sub.add_parser("index-build",
-                           help="离线建库域检索索引（M10 票 01 表卡＋票 02 值索引；显式管理动作，"
-                                "问数路径永不建——ADR-0005）：qadata index-build <库文件>")
+                           help="离线建库域检索索引（表卡＋值索引；显式管理动作，"
+                                "问数路径永不建）：qadata index-build <库文件>")
     p_idx.add_argument("db_path")
     # 档根不设开关：data/indexes 是仓库根 cwd 约定（TRACE_PATH/DEFAULT_AGENTS_DIR 同款），
     # serve 与 eval 只认这一个根——指错目录的"灵活"＝三面对不上账的坑（评审撤除）
@@ -113,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
     p_report.add_argument("--baseline", required=True)
     p_report.add_argument("--current", required=True)
     p_report.add_argument("--types", default=None,
-                          help="题型标签 JSONL（M4 归因产物，如 runs/m4-attribution.jsonl）")
+                          help="题型标签 JSONL（归因切片用，如 runs/m4-attribution.jsonl）")
     p_report.add_argument("--out", default=None, help="报告 markdown 输出路径（默认打印）")
 
     args = parser.parse_args(argv)
@@ -245,8 +245,8 @@ def main(argv: list[str] | None = None) -> int:
                       f" → {store.agent_dir(meta.id) / KNOWLEDGE_FILENAME}")
         if embedder is None:
             console.print(f"[yellow]{PENDING_EMBED_NOTE}[/yellow]")
-        console.print("提示：进料口唯一——问数路径永不写档（零触钉族）；查询路在票 05 接，"
-                      "本票建了没人读是预期（ADR-0004 人进料域，删智能体连带清）")
+        console.print("提示：进料口唯一——问数路径永不写档；"
+                      "人进料跟智能体走、删智能体连带清（查询＝serve 问数面按题检索注入）")
         return 0
     if args.cmd == "index-build":
         from qadata.config import load_settings
@@ -280,7 +280,7 @@ def main(argv: list[str] | None = None) -> int:
                       + (f"；放弃 {cres.dropped} 列（超字符预算整列如实出局——放宽＝改判据文件）"
                          if cres.dropped else ""))
         console.print("提示：构建＝离线管理动作，逐条 embedding 是索引唯一花钱处；"
-                      "缺档/过期现读降级，问数路径永不建索引（ADR-0005）")
+                      "缺档/过期现读降级，问数路径永不建索引")
         return 0
     if args.cmd == "report":
         from qadata.eval.report import build_report, print_report_summary
