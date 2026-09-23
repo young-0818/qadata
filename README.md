@@ -33,13 +33,13 @@ pip install -e ".[dev]"
 # 配置：填 API Key；QADATA_BASE_URL / QADATA_MODEL 可指向任意 OpenAI 兼容端点
 cp .env.example .env
 
-# 问第一个问题（需要 sqlite 库文件；业务口径走智能体的口径字典，ask 无 --evidence）
+# 问第一个问题（需要 sqlite 库文件）
 qadata ask /path/to/your.sqlite "去年销售额是多少"
 
 # BIRD 评测（数据需自行从 bird-bench 官网下载，不入库）
 qadata eval --questions data/bird/dev/dev.json --db-dir data/bird/dev/dev_databases --sample 100
 
-# 两轮跑分 diff（含题型切片；分路径报告模式已随指标层退役）
+# 两轮跑分 diff（含题型切片）
 qadata report --baseline runs/A.jsonl --current runs/B.jsonl --types runs/attribution.jsonl
 
 # Web 演示：先构建前端，再单进程起 API＋页面（同源）
@@ -58,7 +58,7 @@ flowchart LR
     q([question]) --> u[understand<br/>改写＋四字段意图]
     u --> e[explore]
     e --> g[generate]
-    g --> x
+    g --> x[execute<br/>只读沙箱执行]
     x -->|成功| v[verify<br/>规则校验 · 零 token]
     x -->|失败 · 有预算| g
     x -->|失败 · 预算耗尽| r[respond]
@@ -96,7 +96,7 @@ flowchart LR
 
 **何时建索引**：库派生索引（表卡＋值）＝显式离线管理动作 `qadata index-build <库文件>`（需配 `QADATA_EMBED_MODEL`，四路共用这一把向量化通道），产物住 `data/indexes/<库指纹>/`、serve 与 eval 共用一份、换库＝天然作废。**绝不懒建**——第一个提问者不该替全库付几百次 embedding 的钱；`serve` 启动查档，缺/坏/过期＝播报一行＋现读活库降级。人进料（口径字典/例题）跟智能体走、进料即向量化（`knowledge-feed`／`examples-sign`），与库派生物分属**双域归属**（按料的寿命周期分，不是用途）。
 
-**演示形态**：给某个智能体的 `knowledge.yaml` 喂几行 md 口径（如「『有效卡』＝status 以 gold 开头」），问相关题即见【口径说明】节展示召回条目、答案按字典口径作答。向量化复用正文模型端点（`.env` 配 `QADATA_EMBED_MODEL` 即可，走现成 OpenAI 兼容 `/v1/embeddings`）——**无需独立向量数据库服务**、单进程自托管；未配 embedder 时进料走挂账、装载闸拒读带病档（诚实降级、不带病召回，非"即见"）。
+**演示形态**：给某个智能体的 `knowledge.yaml` 喂几行 md 口径（如「『有效卡』＝status 以 gold 开头」），配好向量化后，问相关题可见【口径说明】节展示召回条目、答案按字典口径作答。向量化复用正文模型端点（`.env` 配 `QADATA_EMBED_MODEL` 即可，走现成 OpenAI 兼容 `/v1/embeddings`）——**无需独立向量数据库服务**、单进程自托管；未配 embedder 时进料走挂账、装载闸拒读带病档（诚实降级、不带病召回）。
 
 ### 多轮会话与三层记忆
 
@@ -171,7 +171,7 @@ data/  runs/      # 评测数据与运行产物（不入库）
 
 ## 评测与结果
 
-判分＝BIRD Execution Accuracy（结果集顺序无关多重集匹配）。每个数字绑实跑模型与时间窗，复现命令随表附注。
+判分＝BIRD Execution Accuracy（结果集顺序无关多重集匹配）。每个数字绑实跑模型与时间窗，复现方式随表附注。
 
 | 考卷 | 结果 | 实跑模型 | 说明 |
 |---|---|---|---|
